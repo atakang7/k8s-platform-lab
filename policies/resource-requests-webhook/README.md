@@ -2,28 +2,30 @@
 
 This component rejects Deployment CREATE/UPDATE requests when any regular container omits either CPU or memory from `resources.requests`.
 
+Canonical design: [Admission policy](../../docs/06-governance-resilience/admission-policy.md).
+
 ## Admission path
 
 ```text
-Deployment request
-      │
-      ▼
+Deployment CREATE / UPDATE
+           │
+           ▼
 Kubernetes API server
-      │ AdmissionReview v1 · HTTPS
-      ▼
-┌────────────────────────────┐
-│ resource-requests-webhook  │
-│ /validate                  │
-└─────────────┬──────────────┘
-              │
-       inspect containers
-              │
-       ┌──────┴──────┐
-       ▼             ▼
- CPU + memory     missing either
-       │             │
-       ▼             ▼
-     ALLOW           DENY
+           │ AdmissionReview v1 · HTTPS
+           ▼
+resource-requests-webhook
+           │ inspect regular containers
+      ┌────┴────┐
+      │         │
+      ▼         ▼
+ CPU + RAM   missing either
+      │         │
+      ▼         ▼
+    allow      deny
+      │         │
+      ▼         ▼
+continue     reject write
+admission
 ```
 
 `failurePolicy: Fail` makes the API fail closed for in-scope Deployments if the webhook cannot answer.
@@ -35,7 +37,7 @@ cd policies/resource-requests-webhook
 go test ./...
 ```
 
-The builder Go version must match `go.mod`. The runtime image is distroless and non-root.
+The builder Go version matches `go.mod`. The runtime image is distroless and non-root.
 
 ## Helm
 
@@ -45,7 +47,7 @@ Chart:
 helm/resource-requests-webhook/
 ```
 
-It creates the Deployment, Service, serving TLS, and `ValidatingWebhookConfiguration`. TLS includes the Kubernetes Service DNS names and the CA is inserted into the webhook configuration.
+It creates the Deployment, ClusterIP Service, serving TLS, and `ValidatingWebhookConfiguration`. The Service exposes `443` and targets the webhook HTTPS listener on `8443`.
 
 The release namespace and Kubernetes system namespaces are excluded to prevent self-installation/system deadlocks.
 
@@ -62,14 +64,11 @@ helm upgrade --install resource-requests-webhook \
 
 ## Verify
 
-Use `kubectl apply --dry-run=server` so the real admission chain executes without persisting test Deployments.
-
-Expected behavior:
+Use `kubectl apply --dry-run=server` so the real API server, Service/TLS path, and admission code execute without persisting test Deployments.
 
 ```text
 CPU + memory present  ──► accepted
 CPU missing           ──► rejected
 memory missing        ──► rejected
+existing app manifest ──► accepted
 ```
-
-Full policy design: [`docs/stage-06-admission-policy.md`](../../docs/stage-06-admission-policy.md).
