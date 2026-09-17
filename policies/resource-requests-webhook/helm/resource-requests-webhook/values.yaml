@@ -1,9 +1,12 @@
 replicaCount: 1
 
 image:
-  repository: lab/resource-requests-webhook
+  repository: docker.io/atakangul/resource-requests-webhook
   pullPolicy: IfNotPresent
   tag: "latest"
+
+imagePullSecrets:
+  - name: dockerhub-registry
 
 nameOverride: ""
 fullnameOverride: ""
