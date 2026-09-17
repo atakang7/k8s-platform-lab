@@ -1,54 +1,132 @@
-# DevOps Engineering Requirements
+# Lab Kubernetes Platform
 
-This repository builds a three-node local Kubernetes cluster, packages the supplied Java 11 application, and adds a controlled host-accessible edge. The application is not deployed to Kubernetes yet.
+This repository is the source of truth for the platform, application runtime, delivery path, and operating procedures.
+
+The reference environment is a three-node Kubernetes cluster on Vagrant/VirtualBox. Cluster state is reconciled from Git. Runtime credentials stay in Vault and are materialized into Kubernetes only for the consumers that need them.
+
+## Architecture
 
 ```text
-Vagrant / VirtualBox
-        ↓
-3 Ubuntu VMs
-        ↓
-Ansible → containerd → kubeadm → Calico → local-path storage
-
-Java source → Maven Wrapper → Docker image → Git SHA tag
-
-Host Vault + BIND9 → edge-only MetalLB VIP → two ingress-nginx replicas
-                       ↑ ExternalDNS + Vault Secrets Operator
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Host                                                                        │
+│                                                                             │
+│  Vault                 BIND9 / RFC2136                 Local CA              │
+│  secrets authority     lab.test                 trusted TLS           │
+│        │                       │                            │                 │
+└────────┼───────────────────────┼────────────────────────────┼─────────────────┘
+         │                       │                            │
+         │              192.168.56.0/24 edge                 │
+         │                       │                            │
+┌────────┴───────────────────────┴────────────────────────────┴─────────────────┐
+│ Kubernetes edge                                                             │
+│                                                                             │
+│  ExternalDNS     Vault Secrets Operator     MetalLB 192.168.56.200           │
+│                                                │                            │
+│                                      ingress-nginx ×2                       │
+│                           ┌────────────────────┼───────────────────┐          │
+│                           │                    │                   │          │
+│                 app.lab.test  jenkins.lab.test  observability │
+└───────────────────────────┼────────────────────┼───────────────────┼──────────┘
+                            │                    │                   │
+┌───────────────────────────┴────────────────────┴───────────────────┴──────────┐
+│ Kubernetes 10.50.0.0/24                                                     │
+│                                                                             │
+│  node-1                    node-2                     node-3                  │
+│  control plane             worker                     worker                  │
+│  10.50.0.10                10.50.0.11                 10.50.0.12             │
+│                            192.168.56.11              192.168.56.12          │
+│                                                                             │
+│  Calico 10.244.0.0/16  ·  Services 10.96.0.0/12  ·  local-path storage     │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Start here
+Application delivery is separate from the Jenkins controller. The controller has zero executors; dedicated CI and CD agents run on `node-3`.
 
-Requirements: Vagrant, VirtualBox, Ansible, Helm, kubectl, Docker, and Make. Docker is needed for container validation. Stage 3 additionally needs host sudo access and an available `192.168.56.0/24` VirtualBox host-only network.
+```text
+GitHub main
+    │
+    │ SCM poll
+    │
+┌───┴──────────────────────────────────────────────┐
+│ CI · lab-build                                │
+│                                                 │
+│ tests · lint · server dry-run · Ansible syntax │
+│ BuildKit image · Trivy report · CycloneDX SBOM │
+└──────────────────────────┬───────────────────────┘
+                           │ immutable image digest
+┌──────────────────────────┴───────────────────────┐
+│ CD · lab-deploy                               │
+│                                                 │
+│ checkout exact commit · Ansible deploy          │
+│ rollout wait · deployed-digest assertion        │
+└──────────────────────────┬───────────────────────┘
+                           │
+                 sample-java-app · 4 replicas
+                 evenly spread across workers
+```
 
-| Command | Result |
-|---|---|
-| `make cluster-up` | Start and provision all three VMs |
-| `make cluster-validate` | Check the running Kubernetes cluster |
-| `make container-validate` | Build and exercise the Java image |
-| `make validate` | Run both validations |
-| `make edge-up` | Configure Vault, BIND, DNS, MetalLB, ingress, ExternalDNS, and VSO |
-| `make edge-smoke` | Check live Stage 3 health, DNS, and trusted HTTPS |
-| `make edge-validate` | Run deep Stage 3 security and integration checks |
-| `make edge-down` | Stop the edge without deleting Vault storage |
-| `make jenkins-up` | Deploy the Stage 4 Jenkins controller |
-| `make observability-up` | Deploy the pinned Stage 5 monitoring and logging stack |
-| `make observability-smoke` | Check Stage 5 workloads, endpoints, and log delivery |
-| `make destroy` | Destroy the local VMs |
+## Bootstrap order
 
-`vagrant up` remains the cluster entry point. Vault initialization and unseal are explicit operator steps; see [operations](docs/operations.md). The container validator needs a Git commit and `origin`, or explicit source metadata.
+Run commands from the repository root.
+
+```bash
+make cluster-up
+make cluster-validate
+
+make edge-up
+VAULT_INIT_OUTPUT=/secure/path/vault-init.json make vault-init
+make vault-unseal
+make edge-up
+
+# Load the operator-held GitHub and Docker Hub credentials into Vault.
+# Exact paths and commands: docs/operations.md
+
+make jenkins-up
+make observability-up
+make observability-smoke
+```
+
+Jenkins creates `lab-build` and `lab-deploy` from JCasC. Application releases go through those pipelines; CD accepts only `repository@sha256:...` image references.
+
+The admission webhook is installed after its image is published. See [`policies/`](policies/README.md).
 
 ## Repository map
 
-| Path | Responsibility |
+| Path | Owns |
 |---|---|
-| `Vagrantfile` | VM lifecycle, networking, and resources |
-| `infra/ansible/` | OS and Kubernetes foundation |
-| `infra/ansible/roles/{bind9,vault,vault_agent,local_ca,resolver}/` | Host edge configuration |
-| `infra/edge/` | Edge entry points, pinned versions, and runtime helpers |
-| `platform/edge/` | Kubernetes edge services |
-| `platform/jenkins/` | Jenkins Helm, JCasC, and Vault secret resources |
-| `platform/observability/` | Pinned charts, Elasticsearch, Fluent Bit, dashboard, alert, and ingress |
-| `app/` | Supplied application and container build |
-| `delivery/`, `policies/` | Reserved for delivery and policy work |
-| `validation/` | Cluster and container outcome checks |
-| `docs/` | [Architecture](docs/architecture.md), [design](docs/design.md), and [operations](docs/operations.md) |
- 
+| [`app/`](app/README.md) | Java application, container, Kubernetes runtime manifests, logging contract |
+| [`infra/`](infra/README.md) | VMs, kubeadm cluster, CNI, storage, host DNS/Vault/CA edge |
+| [`platform/`](platform/README.md) | Kubernetes edge, Jenkins, monitoring, logging |
+| [`delivery/`](delivery/README.md) | CI/CD pipelines, build tooling, deployment automation |
+| [`policies/`](policies/README.md) | Admission control and resource-request enforcement |
+| [`validation/`](validation/README.md) | Outcome-based cluster, container, and edge checks |
+| [`docs/`](docs/README.md) | Architecture, operations, decisions, capacity and release design |
+| `Vagrantfile` | Reference VM topology and host/edge networking |
+| `Makefile` | Stable operator entry points |
+
+## Operating rules
+
+- Git defines desired configuration. Reconcile from Git instead of preserving manual cluster edits.
+- Vault is the authority for credentials. Secret values are not committed.
+- CI produces the artifact; CD deploys the immutable registry digest from that CI run.
+- The application does not schedule on the control plane and is spread across both workers.
+- Jenkins build execution stays off the controller and on the dedicated `node-3` agents.
+- Trivy runs before publish and produces the SBOM. Vulnerability findings are report-only by default unless `TRIVY_EXIT_CODE` is set to a failing value.
+- Stage 9 capacity and canary manifests are design references. They are not part of the normal live deployment.
+
+## Entry points
+
+| Operation | Command |
+|---|---|
+| Create/reconcile cluster | `make cluster-up` |
+| Validate cluster | `make cluster-validate` |
+| Validate container | `make container-validate` |
+| Reconcile edge | `make edge-up` |
+| Edge smoke test | `make edge-smoke` |
+| Full edge validation | `make edge-validate` |
+| Reconcile Jenkins | `make jenkins-up` |
+| Reconcile observability | `make observability-up` |
+| Observability smoke test | `make observability-smoke` |
+| Destroy VMs | `make destroy` |
+
+For first bootstrap, recovery, secrets, and day-two commands, use [`docs/operations.md`](docs/operations.md).
