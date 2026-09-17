@@ -5,27 +5,25 @@ This layer creates the machines and the Kubernetes substrate. Everything above i
 ## Topology
 
 ```text
-                         private cluster network · 10.50.0.0/24
+                  Kubernetes private network · 10.50.0.0/24
 
-        ┌────────────────────┐
-       /                    /│
-      / node-1             / │
-     └────────────────────┘  │
-     │ control plane       │  │
-     │ 10.50.0.10          │  │
-     │ kube-apiserver      │ /
-     └────────────────────┘/
-
-        ┌────────────────────┐          ┌────────────────────┐
-       /                    /│         /                    /│
-      / node-2             / │        / node-3             / │
-     └────────────────────┘  │       └────────────────────┘  │
-     │ worker             │  │       │ worker             │  │
-     │ 10.50.0.11        │  │       │ 10.50.0.12        │  │
-     │ 192.168.56.11     │ /        │ 192.168.56.12     │ /
-     └────────────────────┘/         └────────────────────┘/
-                 │                              │
-                 └──────── worker edge NICs ────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                       │
+│  ┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐   │
+│  │ node-1           │   │ node-2           │   │ node-3           │   │
+│  │ control plane    │   │ worker           │   │ worker           │   │
+│  │ 10.50.0.10       │   │ 10.50.0.11       │   │ 10.50.0.12       │   │
+│  │ kube-apiserver   │   │                  │   │                  │   │
+│  └──────────────────┘   └────────┬─────────┘   └────────┬─────────┘   │
+│                                  │                      │             │
+└──────────────────────────────────┼──────────────────────┼─────────────┘
+                                   │                      │
+                            192.168.56.11          192.168.56.12
+                                   │                      │
+                         ┌─────────┴──────────────────────┴─────────┐
+                         │ host-only edge · 192.168.56.0/24        │
+                         │ vboxnet0 · workers only                 │
+                         └──────────────────────────────────────────┘
 ```
 
 The control plane is not attached to the host-facing edge network. Only workers carry the second `192.168.56.0/24` interface.
@@ -34,19 +32,25 @@ The control plane is not attached to the host-facing edge network. Only workers 
 
 ```text
 Vagrant
-   │ creates 3 Ubuntu VMs
-   ▼
-Ansible · one cluster-wide run from node-3
    │
-   ├─ base OS + kernel settings
-   ├─ containerd
-   ├─ Kubernetes packages
-   ├─ kubeadm control plane
-   ├─ worker joins
-   ├─ Calico
-   └─ local-path provisioner
-   ▼
-3-node Kubernetes cluster
+   ├─ creates node-1
+   ├─ creates node-2
+   └─ creates node-3
+            │
+            │ node-3 owns the single cluster-wide provisioner
+            ▼
+        Ansible
+            │
+            ├─ base OS + kernel settings
+            ├─ containerd
+            ├─ Kubernetes packages
+            ├─ kubeadm control plane
+            ├─ worker joins
+            ├─ Calico
+            └─ local-path provisioner
+            │
+            ▼
+      3-node Kubernetes cluster
 ```
 
 The reference versions and network ranges are declared in [`infra/ansible/group_vars/all.yml`](../../infra/ansible/group_vars/all.yml):
