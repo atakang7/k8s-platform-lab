@@ -6,6 +6,8 @@ metadata:
 spec:
   serviceAccountName: jenkins-agent
   restartPolicy: Never
+  imagePullSecrets:
+    - name: dockerhub-registry
   containers:
     - name: ci-tools
       image: docker.io/atakangul/lab-ci-agent:v1
