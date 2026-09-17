@@ -21,20 +21,13 @@ validating admission webhook
 ```text
 RUNTIME CONTROL
 
-metrics ──► HPA ──► desired replicas
-                     │
-                     ▼
-                  scheduler
-                     │
-         priority / preemption / spread
-                     │
-                     ▼
-               running Pods
-                     │
-                     ▼
-             ingress traffic
-                     │
-             stable / canary split
+metrics ──► HPA ──► Deployment replica target ──► scheduler ──► running Pods
+                                                     │
+                                      priority / preemption / spread
+
+voluntary disruption ──► PDB ──► allow / constrain eviction
+
+client traffic ──► ingress-nginx ──► stable / canary traffic split
 ```
 
 These are different controls. Admission rejects invalid desired state before it is stored. Scheduling, autoscaling, disruption protection, and traffic shifting operate on valid runtime state after admission.
