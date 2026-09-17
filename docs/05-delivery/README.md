@@ -20,16 +20,15 @@ GitHub · main
 │      └── Ansible syntax check ──────┘                       │
 │      │                                                      │
 │      ▼                                                      │
-│ BuildKit solve #1                                           │
+│ same source revision + Docker build context                 │
 │      │                                                      │
-│      ▼                                                      │
-│ app-image.tar ──► Trivy HIGH/CRITICAL report + SBOM        │
+│      ├──► BuildKit solve #1 ─► app-image.tar ─► Trivy/SBOM │
+│      │                                      scan must finish │
 │      │                                                      │
-│      ▼                                                      │
-│ BuildKit solve #2 · same commit/context · warm cache        │
-│      │                                                      │
-│      ▼                                                      │
-│ registry push ──► repository@sha256:<digest>                │
+│      └──► BuildKit solve #2 · warm cache ─► registry push  │
+│                                             │               │
+│                                             ▼               │
+│                               repository@sha256:<digest>     │
 └───────────────────────────┬─────────────────────────────────┘
                             │ async enqueue
                             │ exact commit SHA + image digest
@@ -52,6 +51,8 @@ GitHub · main
 │ read live Deployment ──► assert exact digest                │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+The second BuildKit solve starts only after the scan stage succeeds. It uses the same checked-out source and build context and reuses BuildKit's warm state; the local tar itself is not pushed.
 
 The release identity is the pair:
 
@@ -114,23 +115,25 @@ The Dockerfile itself also separates dependency resolution from source copy, so 
 The first BuildKit solve exports a local Docker archive for scanning. Publication performs a second solve against the same commit and build context, reusing the warm BuildKit cache.
 
 ```text
-BuildKit solve #1
-      │
-      ▼
-app-image.tar
-      │
-      ▼
-Trivy vulnerability scan
-      │
-      └──► CycloneDX SBOM · sbom.json
-
-BuildKit solve #2 · same source revision
-      │
-      ▼
-registry push
-      │
-      ▼
-immutable registry digest
+checked-out commit + app/ context
+             │
+             ├──► BuildKit solve #1
+             │          │
+             │          ▼
+             │     app-image.tar
+             │          │
+             │          ▼
+             │     Trivy scan + CycloneDX SBOM
+             │          │
+             │          │ scan completed
+             │          ▼
+             └──► BuildKit solve #2 · warm cache
+                        │
+                        ▼
+                   registry push
+                        │
+                        ▼
+                immutable registry digest
 ```
 
 Jenkins archives the SBOM.
