@@ -3,20 +3,25 @@
 This layer runs the shared services used to build, deploy, observe, and operate workloads after the cluster edge is available.
 
 ```text
-                              Kubernetes
-                                  │
-                 ┌────────────────┴────────────────┐
-                 │                                 │
-                 ▼                                 ▼
-        ┌───────────────────┐             ┌─────────────────────┐
-       /                   /│            /                     /│
-      / Jenkins           / │           / Observability       / │
-     └───────────────────┘  │          └─────────────────────┘  │
-     │ controller +       │  │          │ Prometheus          │  │
-     │ ephemeral agents   │ /           │ AlertManager        │  │
-     └───────────────────┘/            │ Grafana             │ /
-                                        │ Fluent Bit + ES     │/
-                                        └─────────────────────┘
+┌──────────────────────────── Kubernetes ─────────────────────────────┐
+│                                                                    │
+│  node-2                              node-3                        │
+│  ┌──────────────────────┐            ┌──────────────────────────┐  │
+│  │ Prometheus           │            │ Jenkins controller       │  │
+│  │ local-path PVC       │            │ 0 executors · 8 GiB PVC  │  │
+│  └──────────────────────┘            ├──────────────────────────┤  │
+│                                      │ CI/CD agent Pods          │  │
+│                                      ├──────────────────────────┤  │
+│                                      │ Grafana                   │  │
+│                                      │ AlertManager              │  │
+│                                      │ kube-state-metrics        │  │
+│                                      │ Prometheus Operator       │  │
+│                                      └──────────────────────────┘  │
+│                                                                    │
+│  every node: node-exporter + platform Fluent Bit                  │
+│  observability namespace: Elasticsearch with local-path storage    │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 These services share the same DNS, TLS, storage, secret, and ingress foundations; they do not rebuild those concerns locally.
