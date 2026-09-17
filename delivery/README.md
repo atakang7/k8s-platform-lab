@@ -1,85 +1,84 @@
 # Delivery
 
-`delivery/` owns application build, security reporting, artifact publication, and Kubernetes deployment.
+`delivery/` owns application validation, image construction, security reporting, artifact publication, and Kubernetes deployment.
 
-The release contract is simple: CI produces an immutable image digest for one Git commit. CD checks out that exact commit and deploys that exact digest.
+Canonical delivery design: [05 — Delivery](../docs/05-delivery/README.md).
+
+The release identity is one full Git commit SHA plus one immutable registry digest.
 
 ## Flow
 
 ```text
 GitHub main
+    │ SCM poll
+    ▼
+lab-build · lab-ci-runner
     │
-    │ Jenkins SCM poll · 1 minute
+    ├── parallel validation
+    │    ├─ Maven tests
+    │    ├─ Dockerfile lint
+    │    ├─ Kubernetes server dry-run
+    │    └─ Ansible syntax
     │
-┌───┴────────────────────────────────────────────────────────────┐
-│ lab-build · lab-ci-runner                                │
-│                                                              │
-│ checkout                                                     │
-│   ├─ Maven tests                                             │
-│   ├─ Dockerfile lint                                         │
-│   ├─ Kubernetes server-side dry-run                          │
-│   └─ Ansible syntax check                                    │
-│                                                              │
-│ BuildKit local image                                         │
-│ Trivy HIGH/CRITICAL report + CycloneDX SBOM                  │
-│ BuildKit registry push                                       │
-└──────────────────────────────┬───────────────────────────────┘
-                               │ repository@sha256:...
-                               │ exact commit SHA
-┌──────────────────────────────┴───────────────────────────────┐
-│ lab-deploy · lab-cd-runner                              │
-│                                                             │
-│ validate inputs                                              │
-│ detached checkout of exact commit                           │
-│ Ansible apply                                                │
-│ rollout status                                               │
-│ assert live image == requested digest                       │
-└─────────────────────────────────────────────────────────────┘
+    ▼
+BuildKit solve #1
+    │
+    ▼
+app-image.tar ──► Trivy + CycloneDX SBOM
+    │ scan stage complete
+    ▼
+BuildKit solve #2 · same source/context · warm cache
+    │
+    ▼
+registry push ──► repository@sha256:<digest>
+    │
+    │ async enqueue · exact commit + digest
+    ▼
+lab-deploy · lab-cd-runner
+    │
+    ├─ validate immutable inputs
+    ├─ checkout exact commit
+    ├─ Ansible apply
+    ├─ rollout status
+    └─ assert live image == requested digest
 ```
 
-CI queues CD asynchronously after publication. A slow deployment does not keep the build executor occupied.
+The local tar is scan input only. Publication is a second BuildKit solve against the same source revision and build context, reusing warm BuildKit state.
+
+CI queues CD asynchronously after publication. Deployment duration does not keep the CI executor occupied.
 
 ## CI
 
-`Jenkinsfile.build` runs on the exclusive `lab-ci-runner` agent.
+`Jenkinsfile.build` runs on `lab-ci-runner`.
 
-The validation work is parallelized before the image build. Kubernetes manifests are checked with `--dry-run=server`, so admission and API validation use the live API server without creating test workloads.
+Kubernetes manifests use `--dry-run=server`, so checks pass through the live API server and active admission chain without persisting test workloads.
 
-Image construction uses BuildKit. The warm runner keeps these node-local caches on `node-3`:
+Persistent node-local caches on `node-3`:
 
 - Maven: `/var/lib/lab-ci/m2`
 - Trivy: `/var/lib/lab-ci/trivy`
 - BuildKit: `/var/lib/lab-ci/buildkit`
 
-The final registry reference is written as `repository@sha256:<digest>`. CD does not accept mutable tags as deployment input.
-
-### Security scan
-
-`ci/scan-image.sh` scans the local image before publication and writes a CycloneDX SBOM to `sbom.json`. Jenkins archives that SBOM.
-
-By default, Trivy findings are **report-only** because `TRIVY_EXIT_CODE` defaults to `0`. Set `TRIVY_EXIT_CODE` to a failing value when vulnerability findings should block publication.
+Trivy is report-only by default because `TRIVY_EXIT_CODE` defaults to `0`. The CycloneDX SBOM is still archived before publication.
 
 ## CD
 
-`Jenkinsfile.deploy` runs on the exclusive `lab-cd-runner` agent.
+`Jenkinsfile.deploy` runs on `lab-cd-runner`.
 
-CD rejects an image unless it matches an immutable SHA-256 digest reference and rejects a source revision unless it is a full Git SHA. It checks out that revision detached before deployment.
+CD rejects mutable image references and abbreviated source revisions. It requires:
 
-`ansible/deploy.yml` applies the application ConfigMap, Service, and Ingress, then renders the Deployment with the supplied image digest. The deployment role waits for rollout completion and reads the live Deployment back to verify the requested digest is running.
+```text
+IMAGE_REF  = repository@sha256:<64 hex>
+COMMIT_SHA = <40 hex Git SHA>
+```
 
-The application Deployment uses `maxUnavailable: 0`; the rollout does not intentionally remove an old replica before replacement capacity is ready.
+CD checks out that commit detached, applies the runtime resources through Ansible, waits for the rollout, then reads the live Deployment and verifies the exact digest.
 
 ## Jenkins integration
 
-Jenkins jobs and agent templates are defined in [`platform/jenkins/jcasc/jenkins.yaml`](../platform/jenkins/jcasc/jenkins.yaml). Do not recreate job definitions manually in the Jenkins UI.
+Jobs and agent templates are declared in [`platform/jenkins/jcasc/jenkins.yaml`](../platform/jenkins/jcasc/jenkins.yaml). Do not recreate them manually in the Jenkins UI.
 
-The CI agent image is defined by:
-
-- `jenkins/ci-agent.Dockerfile`
-- `jenkins/build-ci-agent.sh`
-- `jenkins/agent.yaml`
-
-The JCasC image reference is pinned by digest. When the agent image changes, publish the new image first, update the digest in JCasC, then reconcile Jenkins.
+The CI/CD tool image lives under `jenkins/` and is referenced from JCasC by immutable digest.
 
 ## Files
 
@@ -87,15 +86,10 @@ The JCasC image reference is pinned by digest. When the agent image changes, pub
 |---|---|
 | `Jenkinsfile.build` | CI orchestration |
 | `Jenkinsfile.deploy` | CD orchestration |
-| `ci/test.sh` | Application tests |
-| `ci/lint.sh` | Static configuration checks |
-| `ci/build-image.sh` | Build local image artifact with BuildKit |
-| `ci/scan-image.sh` | Trivy report and CycloneDX SBOM |
-| `ci/publish-image.sh` | Registry push and immutable digest capture |
-| `ci/github-status.sh` | Commit status reporting |
+| `ci/` | tests, build, scan, publish, commit status helpers |
 | `ansible/` | Kubernetes release reconciliation |
-| `jenkins/` | Reproducible Jenkins agent image |
+| `jenkins/` | reproducible Jenkins agent image |
 
 ## Operating rule
 
-A release is identified by two values: the full Git commit SHA and the immutable image digest. Keep those together when debugging or rolling back. A manual cluster image change breaks that traceability and should not be treated as a normal release path.
+Keep the commit SHA and image digest together during diagnosis and rollback. A manual cluster image change bypasses that release identity and is not the normal deployment path.
