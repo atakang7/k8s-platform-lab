@@ -12,24 +12,27 @@ GitHub · main
 ┌─────────────────────────────────────────────────────────────┐
 │ lab-build · lab-ci-runner · node-3                    │
 │                                                             │
-│ checkout exact commit                                       │
+│ checkout commit                                             │
 │      │                                                      │
 │      ├── Maven tests ───────────────┐                       │
-│      ├── Dockerfile lint ───────────┤ parallel              │
-│      ├── K8s server dry-run ────────┤                       │
+│      ├── Dockerfile lint ───────────┤                       │
+│      ├── K8s server dry-run ────────┤ parallel validation   │
 │      └── Ansible syntax check ──────┘                       │
 │      │                                                      │
 │      ▼                                                      │
-│ BuildKit local image → Trivy report + CycloneDX SBOM       │
+│ BuildKit solve #1                                           │
 │      │                                                      │
 │      ▼                                                      │
-│ BuildKit registry push                                      │
+│ app-image.tar ──► Trivy HIGH/CRITICAL report + SBOM        │
 │      │                                                      │
 │      ▼                                                      │
-│ repository@sha256:<digest>                                  │
+│ BuildKit solve #2 · same commit/context · warm cache        │
+│      │                                                      │
+│      ▼                                                      │
+│ registry push ──► repository@sha256:<digest>                │
 └───────────────────────────┬─────────────────────────────────┘
                             │ async enqueue
-                            │ commit SHA + image digest
+                            │ exact commit SHA + image digest
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ lab-deploy · lab-cd-runner · node-3                   │
@@ -43,7 +46,10 @@ GitHub · main
 │ Ansible render/apply Deployment with immutable digest       │
 │      │                                                      │
 │      ▼                                                      │
-│ wait rollout → read live Deployment → assert exact digest   │
+│ rollout status                                              │
+│      │                                                      │
+│      ▼                                                      │
+│ read live Deployment ──► assert exact digest                │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -89,11 +95,14 @@ A failed check stops artifact publication.
 BuildKit owns image construction. The CI agent has a dedicated BuildKit container and persistent node-local state.
 
 ```text
-new CI Pod
-   │
-   ├─ Maven cache ────────► /var/lib/lab-ci/m2
-   ├─ Trivy cache ────────► /var/lib/lab-ci/trivy
-   └─ BuildKit state ─────► /var/lib/lab-ci/buildkit
+node-3 host state
+
+/var/lib/lab-ci/m2       ─────► Maven cache
+/var/lib/lab-ci/trivy    ─────► Trivy cache
+/var/lib/lab-ci/buildkit ─────► BuildKit state
+                                            │
+                                            ▼
+                                   lab-ci-runner Pod
 ```
 
 The agent Pod is disposable; expensive dependency, scanner, and layer caches survive on node-3.
@@ -102,16 +111,26 @@ The Dockerfile itself also separates dependency resolution from source copy, so 
 
 ## Security reporting
 
-The locally built image is scanned before publication.
+The first BuildKit solve exports a local Docker archive for scanning. Publication performs a second solve against the same commit and build context, reusing the warm BuildKit cache.
 
 ```text
-local image archive
+BuildKit solve #1
       │
       ▼
-Trivy · HIGH / CRITICAL vulnerability scan
+app-image.tar
       │
-      ├── human-readable pipeline result
-      └── CycloneDX SBOM · sbom.json
+      ▼
+Trivy vulnerability scan
+      │
+      └──► CycloneDX SBOM · sbom.json
+
+BuildKit solve #2 · same source revision
+      │
+      ▼
+registry push
+      │
+      ▼
+immutable registry digest
 ```
 
 Jenkins archives the SBOM.
@@ -129,11 +148,14 @@ CD receives the digest, not the tag used during the push.
 CI enqueues `lab-deploy` with `wait: false` after publication.
 
 ```text
-CI executor
-    │ publishes artifact
-    │
-    ├── marks CI success
-    └── enqueues CD ──► CI executor becomes free
+CI publishes digest
+       │
+       ├── writes GitHub CI success status
+       │
+       └── enqueues lab-deploy · wait: false
+                        │
+                        ▼
+                 CI executor is free
 ```
 
 Deployment duration therefore does not keep the build agent occupied.
@@ -152,22 +174,22 @@ It then checks out that commit in detached HEAD state. Deployment manifests and 
 Ansible applies the runtime ConfigMap, Service, and Ingress, then renders the Deployment locally with the supplied digest and sends that object to Kubernetes.
 
 ```text
-immutable image digest
-        │
-        ▼
+immutable IMAGE_REF
+       │
+       ▼
 kubectl set image --local
-        │ renders Deployment
-        ▼
+       │ renders Deployment YAML only
+       ▼
 kubectl apply
-        │
-        ▼
-rollout status
-        │
-        ▼
-read live image field
-        │
-        ├── matches digest → success
-        └── mismatch       → fail
+       │
+       ▼
+kubectl rollout status
+       │
+       ▼
+read live app container image
+       │
+       ├── equals IMAGE_REF ──► success
+       └── mismatch ──────────► fail
 ```
 
 This final read-back turns "kubectl apply succeeded" into a stronger invariant: the intended immutable artifact is actually the one referenced by the live Deployment.
