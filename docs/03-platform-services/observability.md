@@ -5,38 +5,27 @@ The observability stack owns metrics, alerts, dashboards, and centralized logs. 
 ## Data flow
 
 ```text
-METRICS
+METRICS + ALERTS
 
 node-exporter ───────────────┐
-kube-state-metrics ─────────┼────► Prometheus · node-2 ─────► Grafana · node-3
-other scrape targets ───────┘              │
-                                           │ alert evaluations
-PrometheusRule · pod restarts ─────────────┘
-                                           │
-                                           ▼
-                                  AlertManager · node-3
+kube-state-metrics ─────────┼── scrape ──► Prometheus · node-2
+other scrape targets ───────┘                    │
+                                                 ├── query ──► Grafana · node-3
+PrometheusRule · pod restarts ── configures ────►│
+                                                 └── firing alerts ──► AlertManager · node-3
 ```
 
 ```text
 LOGS
 
-/var/log/containers/*.log
-          │
-          ▼
-platform Fluent Bit · DaemonSet
-          │
-          ├────────────────────────────────────────────┐
-          │                                            │
-          │                                application.log
-          │                                      │
-          │                              Pod sidecar Fluent Bit
-          │                                            │
-          └──────────────────────┬─────────────────────┘
-                                 ▼
-                         Elasticsearch
-                                 │
-                                 ▼
-                       Grafana log datasource
+/var/log/containers/*.log ──► platform Fluent Bit · DaemonSet ──┐
+                                                                  │
+application.log ────────────► Pod sidecar Fluent Bit ─────────────┼──► Elasticsearch
+                                                                  │         │
+                                                                  └─────────┘
+                                                                            │
+                                                                            ▼
+                                                                  Grafana log datasource
 ```
 
 The application-specific file log path is explained in [04 — Application runtime](../04-application-runtime/README.md). Platform Fluent Bit handles cluster container logs; the application sidecar handles the explicitly rotated file log.
