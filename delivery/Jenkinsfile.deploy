@@ -10,7 +10,7 @@ def timed(String label, Closure body) {
 }
 
 pipeline {
-    agent { label 'lab-ci-deploy' }
+    agent { label 'lab-cd-runner' }
     parameters {
         string(name: 'IMAGE_REF', description: 'Immutable image reference repository@sha256:...')
         string(name: 'COMMIT_SHA', description: 'Exact Git commit SHA associated with this deployment')
