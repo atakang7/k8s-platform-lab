@@ -5,18 +5,21 @@ This layer turns the private Kubernetes cluster into a named, trusted HTTPS plat
 ## Name resolution
 
 ```text
+DNS CONTROL
+
 Kubernetes Ingress / LoadBalancer state
                  │
                  ▼
              ExternalDNS
-                 │ signed RFC2136 update
+                 │ signed RFC2136 + TSIG
                  ▼
        BIND9 · 192.168.56.1
        authoritative for lab.test
-                 │
-                 │ A / CNAME answers
-                 ▼
-          operator / browser
+
+CLIENT LOOKUP
+
+operator / browser ── DNS query ──► BIND9
+operator / browser ◄── A = 192.168.56.200 ── BIND9
 ```
 
 ExternalDNS is a control-plane component. It creates DNS records; it is not in the application request path.
@@ -24,35 +27,27 @@ ExternalDNS is a control-plane component. It creates DNS records; it is not in t
 ## HTTPS request path
 
 ```text
-operator / browser
-      │
-      │ DNS query: app.lab.test
-      ▼
-BIND9 · 192.168.56.1
-      │
-      │ A = 192.168.56.200
-      ▼
-operator / browser
-      │
-      │ HTTPS · SNI/Host: app.lab.test
-      ▼
-192.168.56.200
-LoadBalancer Service VIP
-      ▲
-      │ MetalLB assigns + advertises VIP on worker edge network
-      │
-      ▼
-ingress-nginx Service
-      │
-      ▼
-ingress-nginx controller Pod
-      │
-      │ host/path routing
-      ▼
-sample-java-app Service
-      │
-      ▼
-application Pod
+MetalLB controller / speakers
+        │ assigns + L2-advertises 192.168.56.200 on worker edge network
+        ▼
+┌──────────────────────────────────────────────┐
+│ ingress-nginx LoadBalancer Service           │
+│ VIP · 192.168.56.200                         │
+└──────────────────────┬───────────────────────┘
+                       ▲
+                       │ HTTPS · SNI/Host: app.lab.test
+                       │
+              operator / browser
+
+                       │ Service routing
+                       ▼
+             ingress-nginx controller Pod
+                       │ host/path routing
+                       ▼
+              sample-java-app Service
+                       │
+                       ▼
+                 application Pod
 ```
 
 MetalLB owns VIP assignment and L2 advertisement. It is not an HTTP proxy; ingress-nginx terminates TLS and performs application routing.
@@ -158,26 +153,26 @@ The host Vault and BIND services are infrastructure dependencies rather than Kub
 Vault initialization and unseal are intentionally explicit operator actions.
 
 ```text
-first edge reconciliation
-          │
-          ▼
-host services installed
-          │
-          ▼
+make edge-up
+     │
+     ▼
+host edge services installed
+     │
+     ▼
 Vault initialized?
-   │              │
-  no             yes
-   │              │
-   ▼              ▼
-make vault-init   Vault sealed?
-   │              │       │
-   ▼             yes      no
-store init output │       │
-   │              ▼       │
-   └──────► make vault-unseal
-                         │
-                         ▼
-                    make edge-up
+   │
+   ├── no ──► make vault-init ──► store init output ──► make vault-unseal
+   │                                                        │
+   │                                                        └──► make edge-up
+   │
+   └── yes
+        │
+        ▼
+     Vault sealed?
+        │
+        ├── yes ──► make vault-unseal ──► make edge-up
+        │
+        └── no ───► continue edge reconciliation
 ```
 
 The repository may create policies, AppRoles, Kubernetes synchronization objects, and services. It must not invent or commit the operator's root token, unseal material, registry token, or GitHub token.
