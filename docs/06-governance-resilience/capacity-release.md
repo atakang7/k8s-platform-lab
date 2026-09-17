@@ -1,6 +1,6 @@
 # Capacity and release resilience
 
-The cluster has fixed nodes. The design therefore separates guaranteed baseline capacity from burst capacity and treats batch work as expendable before the critical application.
+The cluster has fixed nodes. The design separates the application's minimum scheduled footprint from burst capacity and treats interruptible batch work as the first capacity to yield under contention.
 
 ## Capacity model
 
@@ -10,7 +10,7 @@ The existing `sample-java-app` is the critical real-time workload.
                          FIXED WORKER CAPACITY
 
 ┌────────────────────────────────────────────────────────────────────┐
-│ critical baseline                                                  │
+│ minimum scheduled application footprint                            │
 │                                                                    │
 │ sample-java-app                                                    │
 │ 4 running replicas · explicit CPU/memory requests                  │
@@ -23,22 +23,25 @@ The existing `sample-java-app` is the critical real-time workload.
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-The minimum capacity is not created by PriorityClass. It exists because four application replicas are already scheduled with explicit requests.
+The four-replica baseline exists because those Pods are already scheduled with explicit resource requests. It is not a hard capacity reservation: node failure or broader resource pressure can still reduce what the cluster can run.
 
-Priority and preemption only decide who yields when the application wants to grow beyond that baseline.
+Priority and preemption decide who yields when the application wants to grow beyond that baseline.
 
 ## Pressure flow
 
+The reference HPA uses CPU resource utilization. That requires a working `metrics.k8s.io` provider, normally Metrics Server. The current baseline platform does not install one, so `capacity-pressure.yaml` is a design reference until that dependency is added.
+
 ```text
-load rises
-   │
-   ▼
+metrics.k8s.io provider
+        │ CPU utilization
+        ▼
 HPA · min 4 / max 8 · target CPU 65%
-   │
-   ▼
-requests additional application replicas
-   │
-   ▼
+        │
+        │ load rises → desired replicas increase
+        ▼
+Deployment replica target grows
+        │
+        ▼
 free worker capacity?
    │
    ├── yes ──► scheduler places new replicas
@@ -71,7 +74,7 @@ The reference HPA scales up by up to two Pods or 100% per minute and uses a 300-
 | Mechanism | Responsibility |
 |---|---|
 | resource requests | scheduler footprint of each running Pod |
-| `minReplicas: 4` | minimum application replica floor |
+| `minReplicas: 4` | minimum desired application replica floor |
 | HPA | asks for burst replicas based on load |
 | PriorityClass | marks the application more important than batch work |
 | preemption | reclaims capacity from lower-priority Pods when required |
