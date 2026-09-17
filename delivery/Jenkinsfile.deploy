@@ -45,7 +45,7 @@ pipeline {
                     timed('Deploy.GitHubPending') {
                         container('ci-tools') {
                             withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                                sh 'sh delivery/ci/github-status.sh pending jenkins/deploy "Jenkins deploy running" "$COMMIT_SHA"'
+                                sh "sh delivery/ci/github-status.sh pending jenkins/deploy 'Jenkins deploy running' '${params.COMMIT_SHA}'"
                             }
                         }
                     }
@@ -77,16 +77,18 @@ pipeline {
                 timed('Deploy.GitHubSuccess') {
                     container('ci-tools') {
                         withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                            sh 'sh delivery/ci/github-status.sh success jenkins/deploy "Jenkins deploy passed" "$COMMIT_SHA"'
+                            sh "sh delivery/ci/github-status.sh success jenkins/deploy 'Jenkins deploy passed' '${params.COMMIT_SHA}'"
                         }
                     }
                 }
             }
         }
         failure {
-            container('ci-tools') {
-                withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                    sh 'sh delivery/ci/github-status.sh failure jenkins/deploy "Jenkins deploy failed" "$COMMIT_SHA" || true'
+            script {
+                container('ci-tools') {
+                    withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                        sh "sh delivery/ci/github-status.sh failure jenkins/deploy 'Jenkins deploy failed' '${params.COMMIT_SHA}' || true"
+                    }
                 }
             }
         }
