@@ -22,15 +22,18 @@ kubectl / controller
       ┌───────┴────────┐
       │                │
       ▼                ▼
-all containers     request missing
-have CPU + RAM     CPU or memory
+all regular        CPU or memory
+containers valid   request missing
       │                │
       ▼                ▼
-    allow              deny
+   allow             deny
       │                │
-      └───────┬────────┘
-              ▼
-       API response returned
+      ▼                ▼
+continue API       reject write
+admission          return error
+      │
+      ▼
+persist Deployment
 ```
 
 The API server remains the enforcement point. The webhook only evaluates the object and returns allow/deny.
@@ -63,10 +66,14 @@ This implementation uses a custom validating webhook because the required invari
 `failurePolicy: Fail` is intentional.
 
 ```text
-API server cannot reach webhook
-             │
-             ▼
-request is rejected
+API server
+   │
+   │ webhook call fails / times out
+   ▼
+validation unavailable
+   │
+   ▼
+Deployment write rejected
 ```
 
 For this policy, silently accepting an unvalidated Deployment would be worse than failing the write.
@@ -78,13 +85,15 @@ The webhook namespace and Kubernetes system namespaces are excluded so the polic
 The webhook listens on HTTPS `8443`. The Helm chart creates serving certificate material for the Service DNS names and places the matching CA bundle into the `ValidatingWebhookConfiguration`.
 
 ```text
-API server
-   │ validates webhook certificate using caBundle
-   ▼
-resource-requests-webhook.policy-system.svc:443
-   │
-   ▼
-Pod :8443
+Kubernetes API server
+        │
+        │ HTTPS :443
+        │ validates server cert with caBundle
+        ▼
+resource-requests-webhook.policy-system.svc
+        │ Service targetPort 8443
+        ▼
+webhook Pod :8443
 ```
 
 The runtime image is a static Go binary on a distroless non-root base.
@@ -94,10 +103,10 @@ The runtime image is a static Go binary on a distroless non-root base.
 Admission is tested with `kubectl apply --dry-run=server`.
 
 ```text
-valid Deployment        → accepted
-CPU missing             → rejected
-memory missing          → rejected
-existing app manifest   → accepted
+valid Deployment       ──► accepted
+missing CPU request    ──► rejected
+missing memory request ──► rejected
+existing app manifest  ──► accepted
 ```
 
 Server dry-run is important: it exercises the actual API server, TLS path, webhook Service, and policy code without leaving temporary Deployments in the cluster.

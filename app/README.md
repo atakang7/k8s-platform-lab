@@ -2,34 +2,28 @@
 
 `app/` owns the Java service, container image definition, Kubernetes runtime manifests, probes, resource contract, and application file logging.
 
-Full runtime design: [`docs/stage-04-application-runtime.md`](../docs/stage-04-application-runtime.md).
+Canonical runtime design: [04 — Application runtime](../docs/04-application-runtime/README.md).
 
 ## Request path
 
 ```text
-                      app.lab.test
-                              │
-                              ▼
-                  ┌──────────────────────┐
-                  │ ingress-nginx        │
-                  │ wildcard TLS         │
-                  └──────────┬───────────┘
-                             ▼
-                  ┌──────────────────────┐
-                  │ sample-java-app      │
-                  │ ClusterIP :80        │
-                  └──────────┬───────────┘
-                             │ → :9001
-                ┌────────────┴────────────┐
-                ▼                         ▼
-       ┌─────────────────┐       ┌─────────────────┐
-       │ node-2          │       │ node-3          │
-       │ app + sidecar   │       │ app + sidecar   │
-       │ app + sidecar   │       │ app + sidecar   │
-       └─────────────────┘       └─────────────────┘
+app.lab.test
+        │
+        ▼
+ ingress-nginx
+        │
+        ▼
+sample-java-app Service :80
+        │ targetPort :9001
+        ▼
+   ┌────┴────┐
+   │         │
+   ▼         ▼
+node-2     node-3
+2 Pods     2 Pods
 ```
 
-The service listens on `9001`. `GET /api/foos?val=<value>` returns `QueryStringValue: <value>` and writes the request to the application log.
+Each Pod contains the Java application and its Fluent Bit file-log sidecar. The service listens on `9001`. `GET /api/foos?val=<value>` returns `QueryStringValue: <value>` and writes the request to the application log.
 
 ## Image
 
@@ -56,17 +50,15 @@ Production releases are identified by registry digest, not by the image value co
 `k8s/deployment.yaml` maintains four replicas.
 
 ```text
-                     Deployment · replicas 4
-                               │
-                 ┌─────────────┴─────────────┐
-                 │ topology maxSkew = 1      │
-                 │ control plane excluded    │
-                 └─────────────┬─────────────┘
-                               │
-                    ┌──────────┴──────────┐
-                    ▼                     ▼
-                 node-2                node-3
-                 2 Pods                2 Pods
+sample-java-app · replicas 4
+          │
+          ├── worker-only node affinity
+          └── topology spread · hostname · maxSkew 1
+                          │
+                 ┌────────┴────────┐
+                 ▼                 ▼
+              node-2            node-3
+              2 Pods            2 Pods
 ```
 
 Each Pod contains the Java app and a Fluent Bit sidecar. Both containers declare CPU and memory requests/limits and use non-root security settings.
@@ -84,27 +76,28 @@ Replacement Pods must become Ready before old capacity is intentionally removed.
 
 | Probe | Path | Role |
 |---|---|---|
-| startup | `/api/foos?val=startup` | allows JVM initialization before liveness applies |
+| startup | `/api/foos?val=startup` | gates readiness/liveness until JVM startup succeeds |
 | readiness | `/api/foos?val=ready` | gates Service traffic |
-| liveness | `/api/foos?val=liveness` | restarts a stuck process |
+| liveness | `/api/foos?val=liveness` | restarts the container after repeated failure |
 
 Readiness is the traffic decision. A running container is not considered ready until this probe passes.
 
 ## File logging
 
 ```text
-┌───────────────────────────────────────────────────┐
-│ application Pod                                   │
-│                                                   │
-│ Java app                                          │
-│   │                                               │
-│   │ async Logback                                 │
-│   ▼                                               │
-│ /var/log/app/application.log                      │
-│   │ shared emptyDir                               │
-│   ▼                                               │
-│ Fluent Bit sidecar ───────────────► Elasticsearch │
-└───────────────────────────────────────────────────┘
+Java request thread
+      │
+      ▼
+async Logback appender
+      │
+      ▼
+/var/log/app/application.log
+      │ shared emptyDir
+      ▼
+Fluent Bit sidecar
+      │
+      ▼
+Elasticsearch
 ```
 
 Logback rotates daily and by size. Retained file history is capped at 1 GiB total. Remote log transport is outside the Java request path.

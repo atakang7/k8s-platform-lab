@@ -8,49 +8,45 @@ This layer describes the supported bootstrap, reconciliation, recovery, and vali
 fresh checkout
       │
       ▼
-┌───────────────────────┐
-│ 1. Foundation         │
-│ cluster-up            │
-│ cluster-validate      │
-└───────────┬───────────┘
-            │
-            ▼
-┌───────────────────────┐
-│ 2. Edge + trust       │
-│ edge-up               │
-│ Vault init / unseal   │
-│ edge-up               │
-└───────────┬───────────┘
-            │
-            ▼
-┌───────────────────────┐
-│ 3. Operator secrets   │
-│ GitHub + Docker Hub   │
-│ stored in Vault       │
-└───────────┬───────────┘
-            │
-            ▼
-┌───────────────────────┐
-│ 4. Platform services  │
-│ Jenkins               │
-│ observability         │
-└───────────┬───────────┘
-            │
-            ▼
-┌───────────────────────┐
-│ 5. Application        │
-│ registry identity     │
-│ CI → CD release       │
-└───────────┬───────────┘
-            │
-            ▼
-┌───────────────────────┐
-│ 6. Admission policy   │
-│ webhook image + Helm  │
-└───────────┬───────────┘
-            │
-            ▼
-      end-to-end proof
+┌──────────────────────────────┐
+│ 1. Foundation                │
+│ make cluster-up              │
+│ make cluster-validate        │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│ 2. Edge + trust              │
+│ make edge-up                 │
+│ Vault init / unseal          │
+│ make edge-up                 │
+│ make edge-smoke              │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│ 3. Operator credentials      │
+│ GitHub + Docker Hub → Vault  │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│ 4. Platform services         │
+│ make jenkins-up              │
+│ make observability-up        │
+│ make observability-smoke     │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│ 5. Application               │
+│ bootstrap registry identity  │
+│ lab-build → lab-deploy   │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│ 6. Admission policy          │
+│ registry auth + image + Helm │
+│ server-side dry-run checks   │
+└──────────────┬───────────────┘
+               ▼
+        end-to-end proof
 ```
 
 Run commands from the repository root.
@@ -154,19 +150,19 @@ export VAULT_ADDR=https://127.0.0.1:8200
 Flow:
 
 ```text
-secret/runtime/dockerhub
-          │
-          ▼
-Vault AppRole
-          │
-          ▼
+Vault · secret/runtime/dockerhub
+             │
+             ▼
+application Vault AppRole
+             │
+             ▼
 Vault Secrets Operator
-          │
-          ▼
+             │
+             ▼
 default/dockerhub-registry
-          │
-          ▼
-application imagePullSecrets
+             │
+             ▼
+Deployment imagePullSecrets
 ```
 
 Normal application deployment then occurs through `lab-build` → `lab-deploy` as described in [05 — Delivery](../05-delivery/README.md).
@@ -192,18 +188,18 @@ Validation consumes the running system. It never silently repairs it.
 
 ```text
 Git desired state
-      │
-      │ reconcile
-      ▼
+       │
+       │ reconcile
+       ▼
 running system
-      │
-      ├── cluster validation
-      ├── container validation
-      ├── edge smoke / deep validation
-      ├── observability smoke
-      ├── application runtime checks
-      ├── immutable delivery identity
-      └── admission allow / deny tests
+       │
+       ├──► cluster validation
+       ├──► container validation
+       ├──► edge smoke / deep validation
+       ├──► observability smoke
+       ├──► application runtime checks
+       ├──► immutable delivery identity
+       └──► admission allow / deny tests
 ```
 
 Normal checks:
@@ -254,24 +250,33 @@ Reproducibility is not proven by a working cluster. It is proven when a clean en
 
 ```text
 working environment
-      │
-      ▼
+        │
+        ▼
 commit repository state
-      │
-      ▼
+        │
+        ▼
 make destroy
-      │
-      ▼
-fresh checkout / fresh VMs
-      │
-      ▼
+        │
+        ▼
+fresh checkout + fresh VMs
+        │
+        ▼
 run documented bootstrap only
-      │
-      ▼
+        │
+        ▼
 run final invariants
-      │
-      ├── pass → repository is reproducible
-      └── fail → missing step belongs back in Git/docs
+        │
+   ┌────┴────┐
+   │         │
+ pass       fail
+   │         │
+   ▼         ▼
+reproducible  missing step / automation defect
+              │
+              ▼
+         fix Git/docs
+              │
+              └──────────────► repeat clean rebuild
 ```
 
 If rebuilding requires an undocumented package install, copied secret, node edit, or cluster command, the rebuild has found a documentation or automation defect. Fix that defect and repeat the clean rebuild.

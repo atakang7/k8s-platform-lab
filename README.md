@@ -3,46 +3,52 @@
 This repository is the source of truth for the infrastructure, Kubernetes platform, application runtime, delivery path, policy controls, and operating procedures. The environment is built from Git-managed configuration; credentials stay outside Git and are delivered from Vault to the consumers that need them.
 
 ```text
-                                  ┌──────────────────────┐
-                                 /                      /│
-                                / Git + operator input / │
-                               └──────────────────────┘  │
-                               │ desired state        │ /
-                               └──────────┬───────────┘/
-                                          │
-                                          ▼
-        ┌──────────────────────────────────────────────────────────┐
-       /                                                          /│
-      /  Infrastructure                                         / │
-     └──────────────────────────────────────────────────────────┘  │
-     │ Vagrant · Ansible · kubeadm · containerd · Calico       │  │
-     │ node-1 control plane · node-2/node-3 workers             │ /
-     └───────────────────────────┬───────────────────────────────┘/
-                                 │
-                                 ▼
-        ┌──────────────────────────────────────────────────────────┐
-       /                                                          /│
-      /  Edge + trust                                           / │
-     └──────────────────────────────────────────────────────────┘  │
-     │ Vault · BIND9 · local CA · MetalLB · ingress-nginx · VSO │ /
-     └───────────────────────────┬───────────────────────────────┘/
-                                 │
-                                 ▼
-        ┌──────────────────────────────────────────────────────────┐
-       /                                                          /│
-      /  Platform + application                                 / │
-     └──────────────────────────────────────────────────────────┘  │
-     │ Jenkins · observability · Java runtime · policy controls │ /
-     └───────────────────────────┬───────────────────────────────┘/
-                                 │
-                                 ▼
-        ┌──────────────────────────────────────────────────────────┐
-       /                                                          /│
-      /  Delivery + operations                                  / │
-     └──────────────────────────────────────────────────────────┘  │
-     │ test → build → scan → digest → deploy → verify           │ /
-     │ reconcile → validate → clean rebuild                      │/
-     └───────────────────────────────────────────────────────────┘
+TRUST / SECRET CONTROL
+
+local CA ──signs──► wildcard TLS cert ──stored in──► Vault
+                                                         │
+                                                         │ Vault API
+                                                         ▼
+                                              Vault Secrets Operator
+                                                         │
+                                                         ▼
+                                                Kubernetes Secrets
+
+DNS CONTROL
+
+Kubernetes Ingress / Service state ──► ExternalDNS ──RFC2136 + TSIG──► BIND9
+                                                                          │
+                                                                          │ lab.test
+                                                                          ▼
+                                                                    DNS responses
+
+HTTPS REQUEST PATH
+
+client ──DNS lookup──► BIND9 ──A: 192.168.56.200──► client
+                                                       │
+                                                       │ HTTPS
+                                                       ▼
+                         MetalLB ──assigns/L2──► ingress Service · .200
+                                                       │
+                                                       ▼
+                                              ingress-nginx ×2
+                                                       │
+                       ┌───────────────────────────────┼────────────────────┐
+                       ▼                               ▼                    ▼
+               sample-java-app                    Jenkins           observability
+               4 replicas                         controller        metrics + logs
+               node-2 / node-3                    node-3 · 0 execs
+                                                       │
+                                                       ▼
+                                                  CI/CD agents
+                                                  node-3
+
+NODE PLACEMENT
+
+node-1                      node-2                      node-3
+control plane               worker                      worker
+10.50.0.10                  10.50.0.11                 10.50.0.12
+                            192.168.56.11               192.168.56.12
 ```
 
 ## Documentation

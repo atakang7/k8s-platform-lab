@@ -1,6 +1,6 @@
 # CI helpers
 
-`delivery/ci/` contains the small executable steps used by `Jenkinsfile.build`.
+`delivery/ci/` contains the executable steps used by `Jenkinsfile.build`.
 
 ```text
 checkout
@@ -12,16 +12,27 @@ checkout
             │
             ▼
       build-image.sh
-            │ local image archive
+      BuildKit solve #1
+            │
+            ▼
+       app-image.tar
+            │
             ▼
        scan-image.sh
-            │ Trivy + CycloneDX SBOM
+       Trivy + CycloneDX SBOM
+            │
             ▼
       publish-image.sh
+      BuildKit solve #2 · warm cache
+            │
+            ▼
+       registry push
             │
             ▼
  repository@sha256:<digest>
 ```
+
+The local tar is scan input only. `publish-image.sh` performs a second BuildKit solve against the same source/context and captures the registry digest.
 
 ## Contracts
 
@@ -29,12 +40,12 @@ checkout
 |---|---|
 | `test.sh` | application tests must pass |
 | `lint.sh` | static repository/config checks |
-| `build-image.sh` | BuildKit produces the local image artifact |
+| `build-image.sh` | BuildKit exports the local scan candidate |
 | `scan-image.sh` | scans before publish and writes `sbom.json` |
-| `publish-image.sh` | pushes and records the immutable digest |
+| `publish-image.sh` | rebuilds from warm cache, pushes, records immutable digest |
 | `github-status.sh` | updates commit status contexts |
 | `benchmark-build-cache.sh` | build-cache measurement only |
 
 Trivy scans HIGH/CRITICAL findings but is report-only by default because `TRIVY_EXIT_CODE` defaults to `0`.
 
-These scripts are pipeline building blocks. They should remain non-interactive and fail clearly when their input contract is missing.
+These scripts are pipeline building blocks. They remain non-interactive and fail clearly when their input contract is missing.

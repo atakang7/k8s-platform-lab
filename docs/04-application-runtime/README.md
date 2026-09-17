@@ -11,17 +11,21 @@ https://app.lab.test/api/foos?val=<value>
                   ingress-nginx
                          │
                          ▼
-              sample-java-app Service
+              sample-java-app Service :80
                          │
-              ┌──────────┴──────────┐
-              │                     │
-              ▼                     ▼
-      ┌────────────────┐    ┌────────────────┐
-     / node-2         /│   / node-3         /│
-    / 2 app Pods     / │  / 2 app Pods     / │
-   └────────────────┘  │ └────────────────┘  │
-   │ app + Fluent Bit│ /  │ app + Fluent Bit│ /
-   └────────────────┘/   └────────────────┘/
+                         ▼
+               targetPort 9001
+                         │
+            ┌────────────┴────────────┐
+            │                         │
+            ▼                         ▼
+┌──────────────────────┐   ┌──────────────────────┐
+│ node-2               │   │ node-3               │
+│ steady state: 2 Pods │   │ steady state: 2 Pods │
+│                      │   │                      │
+│ app + Fluent Bit     │   │ app + Fluent Bit     │
+│ app + Fluent Bit     │   │ app + Fluent Bit     │
+└──────────────────────┘   └──────────────────────┘
 ```
 
 The application listens on `9001`. The Service exposes it inside the cluster and ingress-nginx owns external TLS and routing.
@@ -31,21 +35,25 @@ The application listens on `9001`. The Service exposes it inside the cluster and
 The Dockerfile separates build tooling from runtime content.
 
 ```text
-source + pom.xml
-      │
-      ▼
-JDK build stage
-  dependency:go-offline
-  Maven package
-      │
-      ▼
+pom.xml + Maven wrapper
+          │
+          ▼
+dependency:go-offline
+          │ cached layer survives source-only changes
+          ▼
+copy application source
+          │
+          ▼
+Maven package · JDK build stage
+          │
+          ▼
 application.jar
-      │
-      ▼
-minimal JRE runtime stage
-  non-root UID 10001
-  immutable base digest
-  OCI source/revision labels
+          │
+          ▼
+JRE runtime stage
+  ├─ non-root UID 10001
+  ├─ base image pinned by digest
+  └─ OCI source + revision labels
 ```
 
 Dependencies are resolved before application source is copied. Source-only changes can therefore reuse the dependency layer when the Maven descriptor is unchanged.
@@ -57,15 +65,20 @@ Both base images are pinned by digest. The runtime stage contains the JRE and ap
 The stable Deployment keeps four replicas and excludes the control-plane node.
 
 ```text
-                   sample-java-app · replicas: 4
-                              │
-                 topologySpreadConstraints
-                     maxSkew: 1
-                              │
-                 ┌────────────┴────────────┐
-                 ▼                         ▼
-              node-2                    node-3
-              2 Pods                    2 Pods
+sample-java-app Deployment · replicas: 4
+                 │
+                 │ required node affinity
+                 ├─────────────── excludes control plane
+                 │
+                 │ topologySpreadConstraints
+                 │ hostname · maxSkew: 1 · DoNotSchedule
+                 ▼
+        ┌────────┴────────┐
+        │                 │
+        ▼                 ▼
+     node-2            node-3
+     2 Pods            2 Pods
+     steady state      steady state
 ```
 
 `topologySpreadConstraints` uses the hostname topology and `DoNotSchedule`. Kubernetes must preserve the worker distribution instead of silently packing the entire replica set onto one worker.
@@ -86,15 +99,24 @@ These requests are also what the admission layer later enforces as a platform in
 The service uses separate startup, readiness, and liveness checks even though they call the same lightweight endpoint with different values.
 
 ```text
-Pod starts
+Pod created
    │
    ▼
-startup probe
-   │ success
-   ▼
-readiness probe ──► Service may send traffic
+startup probe runs
    │
-   └──────── liveness probe keeps checking process health
+   ├── failing ──► keep probing startup
+   │               readiness + liveness do not run yet
+   │
+   └── success
+          │
+          ├──────────────► liveness probe
+          │                  │ failure threshold reached
+          │                  └──────────────► restart container
+          │
+          └──────────────► readiness probe
+                             │
+                             ├── failing ──► remove / keep out of Service endpoints
+                             └── success ──► Pod may receive traffic
 ```
 
 The startup probe has a long enough failure budget for JVM startup and prevents liveness from killing a process that is still legitimately booting.
@@ -104,15 +126,20 @@ Readiness is what protects traffic. A newly created Pod is not an endpoint until
 ## Rolling update strategy
 
 ```text
-old ReplicaSet · 4 ready
+stable ReplicaSet · 4 Ready
           │
-          │ new release
+          │ new image digest
           ▼
-new ReplicaSet may surge by up to 4
+new ReplicaSet scales up
+maxSurge: 4
           │
-          │ new Pods become Ready
+          │ replacement Pods pass readiness
           ▼
-old Pods are removed
+old ReplicaSet scales down
+maxUnavailable: 0
+          │
+          ▼
+new ReplicaSet · 4 Ready
 ```
 
 `maxUnavailable: 0` prevents the rollout controller from intentionally reducing the ready replica count below the existing desired count during replacement. `maxSurge: 4` lets the new revision be created aggressively when cluster capacity allows.
@@ -127,13 +154,19 @@ The Deployment references `dockerhub-registry`. That Secret is not committed wit
 Vault · secret/runtime/dockerhub
             │
             ▼
+application Vault AppRole
+            │
+            ▼
 Vault Secrets Operator
             │
             ▼
 default/dockerhub-registry
             │
             ▼
-Pod imagePullSecrets
+Deployment imagePullSecrets
+            │
+            ▼
+private image pull
 ```
 
 The application namespace receives only the registry material required to pull runtime images.
@@ -146,12 +179,12 @@ The Java process writes `/var/log/app/application.log` through an asynchronous L
 request thread
      │
      ▼
-async Logback queue
+async Logback appender
      │
      ▼
 /var/log/app/application.log
      │
-     │ shared emptyDir
+     │ shared emptyDir · sidecar mount is read-only
      ▼
 Fluent Bit sidecar
      │

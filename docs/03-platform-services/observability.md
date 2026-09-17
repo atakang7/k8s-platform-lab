@@ -5,31 +5,27 @@ The observability stack owns metrics, alerts, dashboards, and centralized logs. 
 ## Data flow
 
 ```text
-                                METRICS
+METRICS + ALERTS
 
-Kubernetes / nodes / workloads
-             │
-             ▼
-      Prometheus · node-2
-             │
-      ┌──────┴──────────┐
-      │                 │
-      ▼                 ▼
- Grafana · node-3   AlertManager · node-3
-      │                 ▲
-      │                 │
-      └──── dashboards  └── PrometheusRule · pod restarts
+node-exporter ───────────────┐
+kube-state-metrics ─────────┼── scrape ──► Prometheus · node-2
+other scrape targets ───────┘                    │
+                                                 ├── query ──► Grafana · node-3
+PrometheusRule · pod restarts ── configures ────►│
+                                                 └── firing alerts ──► AlertManager · node-3
+```
 
-                                 LOGS
+```text
+LOGS
 
-container stdout/stderr ── platform Fluent Bit ──┐
-                                                │
-Java application.log ── Pod sidecar Fluent Bit ─┼──► Elasticsearch
-                                                │          │
-                                                └──────────┘
-                                                           │
-                                                           ▼
-                                                     Grafana logs
+/var/log/containers/*.log ──► platform Fluent Bit · DaemonSet ──┐
+                                                                  │
+application.log ────────────► Pod sidecar Fluent Bit ─────────────┼──► Elasticsearch
+                                                                  │         │
+                                                                  └─────────┘
+                                                                            │
+                                                                            ▼
+                                                                  Grafana log datasource
 ```
 
 The application-specific file log path is explained in [04 — Application runtime](../04-application-runtime/README.md). Platform Fluent Bit handles cluster container logs; the application sidecar handles the explicitly rotated file log.
@@ -55,13 +51,16 @@ The Prometheus Operator, Grafana, AlertManager, and kube-state-metrics are pinne
 The required pod-restart signal is a repository-owned `PrometheusRule`.
 
 ```text
-pod restart counter increases
-          │
-          ▼
-Prometheus evaluates rule
-          │
-          ▼
-AlertManager receives alert
+kube_pod_container_status_restarts_total
+                 │
+                 ▼
+Prometheus evaluates repository rule
+                 │ increase(...) > 0
+                 ▼
+         alert becomes firing
+                 │
+                 ▼
+            AlertManager
 ```
 
 AlertManager routing exists even though the reference environment does not configure an external notification provider. The alert generation path is still complete and testable.
@@ -87,18 +86,18 @@ Elasticsearch is the log store. Fluent Bit is the transport layer.
 The design deliberately separates log production from transport:
 
 ```text
-application thread
-      │
-      ▼
-async Logback queue
-      │
-      ▼
-rotating file
-      │
-      ▼
-sidecar Fluent Bit
-      │
-      ▼
+application request thread
+          │
+          ▼
+async Logback appender
+          │
+          ▼
+rotating application.log
+          │ shared emptyDir
+          ▼
+Pod sidecar Fluent Bit
+          │
+          ▼
 Elasticsearch
 ```
 

@@ -5,12 +5,9 @@
 ```text
 make edge-up
      │
-     ├──► host Ansible: Vault / BIND9 / CA / resolver
-     │
-     ├──► Vault bootstrap identities
-     │
+     ├──► host Ansible · Vault / BIND9 / CA / resolver
+     ├──► Vault policies + AppRole identities
      ├──► Kubernetes edge charts/resources
-     │
      └──► DNS + TLS secret delivery
 ```
 
@@ -50,13 +47,22 @@ make edge-up
 ## Flow
 
 ```text
-Vault ──► Vault Agent ──► BIND TSIG runtime file
-   │
-   └────► VSO identities ──► cluster Secrets
+Vault · edge/dns/tsig
+      │
+      ├──► Vault Agent ──► BIND9 runtime TSIG key
+      └──► VSO ──────────► ExternalDNS TSIG Secret
 
-Kubernetes metadata ──► ExternalDNS ──RFC2136──► BIND9
+ExternalDNS ── signed RFC2136 ──► BIND9
 
-MetalLB 192.168.56.200 ──► ingress-nginx ──► managed Services
+Vault · edge/tls/wildcard ──► VSO ──► ingress TLS Secret
+
+MetalLB ── assigns + L2-advertises ──► ingress Service VIP · 192.168.56.200
+                                               │
+                                               ▼
+                                      ingress-nginx controllers
+                                               │
+                                               ▼
+                                         managed Services
 ```
 
 `bin/up` coordinates state; `lib/` contains narrow Vault/Kubernetes helpers. Do not bypass this layer with persistent manual Helm or host-service changes.

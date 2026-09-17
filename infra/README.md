@@ -1,67 +1,43 @@
 # Infrastructure
 
-`infra/` owns machine creation, Kubernetes foundation, and host-side edge services.
+`infra/` owns machine creation, the Kubernetes foundation, and host-side edge services. Kubernetes-resident edge components stay under [`platform/edge/`](../platform/edge/README.md).
 
-Detailed stages:
-
-- [`docs/stage-01-foundation.md`](../docs/stage-01-foundation.md)
-- [`docs/stage-02-edge-trust.md`](../docs/stage-02-edge-trust.md)
+Canonical design: [01 — Foundation](../docs/01-foundation/README.md) and [02 — Edge and trust](../docs/02-edge-trust/README.md).
 
 ## Ownership boundary
 
 ```text
-                           HOST
+Vagrant / VirtualBox
+        │ creates VMs
+        ▼
+infra/ansible/
+        │ provisions OS + Kubernetes
+        ▼
+running Kubernetes
 
-       ┌───────────────────────────────────────────────┐
-      /                                               /│
-     /  Vagrant / VirtualBox                         / │
-    └──────────────────┬────────────────────────────┘  │
-                       │ creates VMs                    │
-                       ▼                                │
-          ┌──────────────────────────────┐              │
-          │ infra/ansible/               │              │
-          │ Kubernetes foundation        │              │
-          └──────────────┬───────────────┘              │
-                         │                              │
-                         ▼                              │
-               running Kubernetes                      │
-                                                        │
-       ┌──────────────────────────────┐                 │
-       │ infra/edge/                  │                 │
-       │ host Vault/BIND/CA/resolver  │                 │
-       └──────────────┬───────────────┘                 │
-                      │ feeds cluster edge              │
-                      ▼                                 │
-               platform/edge/                          │
+infra/edge/
+   │
+   ├──► host Vault / BIND9 / CA / resolver
+   └──► coordinates platform/edge/ reconciliation
 ```
-
-Kubernetes-resident edge components belong under [`platform/edge/`](../platform/README.md), not `infra/`.
 
 ## Cluster topology
 
 ```text
-               private VM network · 10.50.0.0/24
+                  Kubernetes private network · 10.50.0.0/24
 
-      ┌─────────────────┐
-     / node-1          /│       control plane
-    └─────────────────┘ │       10.50.0.10
-    │ no edge NIC      │
-    └──────────────────┘
-
-      ┌─────────────────┐        ┌─────────────────┐
-     / node-2          /│       / node-3          /│
-    └─────────────────┘ │      └─────────────────┘ │
-    │ worker           │       │ worker           │
-    │ 10.50.0.11      │       │ 10.50.0.12      │
-    │ 192.168.56.11   │       │ 192.168.56.12   │
-    └──────────────────┘       └──────────────────┘
-              │                         │
-              └───────────┬─────────────┘
-                          ▼
-             host-only edge · 192.168.56.0/24
+node-1                      node-2                      node-3
+control plane               worker                      worker
+10.50.0.10                  10.50.0.11                 10.50.0.12
+                                │                           │
+                         192.168.56.11               192.168.56.12
+                                │                           │
+                                └──────────┬────────────────┘
+                                           ▼
+                              host-only edge · 192.168.56.0/24
 ```
 
-Cluster networks are fixed and non-overlapping:
+The control plane has no host-edge NIC. Cluster networks are explicit:
 
 | Plane | CIDR |
 |---|---|
@@ -70,30 +46,23 @@ Cluster networks are fixed and non-overlapping:
 | Service | `10.96.0.0/12` |
 | edge | `192.168.56.0/24` |
 
-## Provisioning flow
+## Provisioning
 
-`node-3` owns the single cluster-wide Vagrant Ansible provisioner. During normal `vagrant up`, all machines are created before that provisioner applies `infra/ansible/site.yml`.
+A single **host-side Vagrant Ansible provisioner** is attached to the `node-3` machine definition and starts after all three VMs exist.
 
 ```text
-Vagrant creates node-1 / node-2 / node-3
-                 │
-                 ▼
-          Ansible site.yml
-                 │
-     ┌───────────┼────────────┐
-     ▼           ▼            ▼
-   common     containerd   Kubernetes packages
-                               │
-                      ┌────────┴────────┐
-                      ▼                 ▼
-                 control plane      worker join
-                      │                 │
-                      └────────┬────────┘
-                               ▼
-                            Calico
-                               │
-                               ▼
-                       local-path storage
+3 VMs ready
+    │
+    ▼
+infra/ansible/site.yml
+    │
+    ├──► common OS state
+    ├──► containerd
+    ├──► Kubernetes packages
+    ├──► kubeadm control plane
+    ├──► worker joins
+    ├──► Calico
+    └──► local-path storage
 ```
 
 Create and validate:
@@ -103,17 +72,15 @@ make cluster-up
 make cluster-validate
 ```
 
-Reconcile an existing cluster from Git:
+Reconcile an existing cluster:
 
 ```bash
 vagrant provision node-3
 ```
 
-Do not keep an SSH-only repair as permanent state. Move the fix into the owning role and reprovision.
+An SSH-only repair is diagnostic. Permanent state belongs in the owning role.
 
 ## VM resources
-
-Reference sizing:
 
 | Node | CPU | RAM |
 |---|---:|---:|
@@ -127,21 +94,17 @@ Overrides: `MASTER_MEMORY`, `NODE_2_MEMORY`, `WORKER_MEMORY`, `MASTER_CPUS`, `WO
 
 ## Host edge
 
-`infra/edge/` coordinates Vault, BIND9, the local CA, Vault Agent, host resolver integration, and Kubernetes edge reconciliation.
+`infra/edge/` coordinates the host side of DNS, trust, and secret delivery.
 
 ```text
-Vault
-  │
-  ├──► Vault Agent ──► /run TSIG file ──► BIND9
-  │
-  └──► VSO identities ──────────────────► Kubernetes Secrets
+Vault · edge/dns/tsig ──► Vault Agent ──► BIND9 TSIG runtime file
+          │
+          └──────────────► VSO ──► ExternalDNS TSIG Secret
 
-BIND9 ◄──────── RFC2136 ◄──────── ExternalDNS
+ExternalDNS ── signed RFC2136 ──► BIND9
 
-local CA ──► host trust ──► Vault + *.lab.test HTTPS
+local CA ──► wildcard TLS cert ──► Vault ──► VSO ──► ingress TLS Secret
 ```
-
-Shared addresses live in `edge/config.env`; version pins live in `edge/versions.env`.
 
 First bootstrap:
 
@@ -152,14 +115,14 @@ make vault-unseal
 make edge-up
 ```
 
-Normal reconcile:
+Normal operation:
 
 ```bash
 make edge-up
 make edge-smoke
 ```
 
-Deep validation:
+Deep integration check:
 
 ```bash
 make edge-validate
@@ -167,15 +130,13 @@ make edge-validate
 
 ## Network safety
 
-`Vagrantfile` checks `192.168.56.0/24` before creating the edge network. Startup fails when a non-VirtualBox host address/route conflicts or when VirtualBox DHCP overlaps the reserved MetalLB range.
+`Vagrantfile` rejects host-route/address conflicts on `192.168.56.0/24` and VirtualBox DHCP overlap with the MetalLB range before VM startup.
 
-MetalLB automatic allocation is disabled for the edge pool. The ingress VIP is explicitly `192.168.56.200`.
+MetalLB automatic allocation is disabled for the edge pool. The ingress Service explicitly uses `192.168.56.200`.
 
 ## Operator-held state
 
-The following never belong in Git: Vault init output, unseal material, Vault root tokens, CA private key, AppRole SecretIDs, GitHub tokens, and Docker Hub tokens.
-
-The repository owns where those values are consumed and how they are delivered. The operator owns the values themselves.
+Vault init output, unseal material, Vault root tokens, the CA private key, AppRole SecretIDs, GitHub tokens, and Docker Hub tokens stay outside Git.
 
 ## Paths
 

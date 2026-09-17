@@ -5,30 +5,30 @@ Jenkins is the delivery controller. Configuration, credentials wiring, agent tem
 ## Runtime model
 
 ```text
-                    https://jenkins.lab.test
-                                  │
-                                  ▼
-                           ingress-nginx
-                                  │
-                                  ▼
-                    ┌────────────────────────┐
-                   /                        /│
-                  / Jenkins controller     / │
-                 └────────────────────────┘  │
-                 │ node-3                 │  │
-                 │ persistent 8 GiB PVC   │  │
-                 │ 0 executors            │ /
-                 └───────────┬────────────┘/
-                             │ Kubernetes plugin
-                 ┌───────────┴───────────┐
-                 │                       │
-                 ▼                       ▼
-        ┌──────────────────┐    ┌──────────────────┐
-       / CI agent         /│   / CD agent         /│
-      / lab-ci-runner  / │  / lab-cd-runner / │
-     └──────────────────┘  │ └──────────────────┘  │
-     │ node-3            │ /  │ node-3            │ /
-     └──────────────────┘/   └──────────────────┘/
+https://jenkins.lab.test
+              │
+              ▼
+       ingress-nginx
+              │
+              ▼
+┌──────────────────────────────────────┐
+│ Jenkins controller · node-3          │
+│ 0 executors · 8 GiB local-path PVC   │
+└──────────────────┬───────────────────┘
+                   │ Kubernetes plugin · WebSocket
+          ┌────────┴────────┐
+          │                 │
+          ▼                 ▼
+┌──────────────────┐  ┌──────────────────┐
+│ lab-ci-runner  │  │ lab-cd-runner  │
+│ Pod · node-3     │  │ Pod · node-3     │
+│ ci-tools         │  │ ci-tools         │
+│ BuildKit         │  │ deployment tools │
+└────────┬─────────┘  └────────┬─────────┘
+         │                     │
+         └──────────┬──────────┘
+                    ▼
+        serviceAccount: jenkins-agent
 ```
 
 The controller never builds or deploys application code itself. `numExecutors: 0` keeps controller CPU, memory, and filesystem state out of the workload execution path.
@@ -50,24 +50,28 @@ Source: [`platform/jenkins/jcasc/jenkins.yaml`](../../platform/jenkins/jcasc/jen
 ## Credential path
 
 ```text
-operator stores values in Vault
-            │
-            ▼
-Vault paths
-  secret/ci/github
-  secret/ci/dockerhub
-            │
-            ▼
+operator
+   │ stores values
+   ▼
+Vault
+   │
+   ├─ secret/ci/github
+   └─ secret/ci/dockerhub
+           │
+           ▼
 Vault Secrets Operator
-            │
-            ▼
+           │
+           ▼
 Kubernetes Secrets · jenkins namespace
-            │
-            ▼
-JCasC environment / Jenkins credentials store
-            │
-            ▼
-CI/CD jobs
+           │
+           ▼
+Jenkins controller environment
+           │
+           ▼
+JCasC credential definitions
+           │
+           ▼
+lab-build / lab-deploy
 ```
 
 Jenkins configuration contains credential references, not credential values. Vault remains the authority for the underlying secrets.
@@ -76,23 +80,28 @@ Jenkins configuration contains credential references, not credential values. Vau
 
 CI and CD use separate labels and templates even though both are pinned to `node-3`.
 
-| Agent | Owns | Important state |
+| Agent | Owns | Runtime inputs/state |
 |---|---|---|
-| `lab-ci-runner` | tests, lint, BuildKit, Trivy, publication | Maven, Trivy, BuildKit caches |
-| `lab-cd-runner` | exact-commit checkout and Kubernetes deployment | kubeconfig credential only |
+| `lab-ci-runner` | tests, lint, server dry-run, BuildKit, Trivy, publication | GitHub/Docker Hub bindings; Maven, Trivy, BuildKit caches |
+| `lab-cd-runner` | exact-commit checkout and Kubernetes deployment | GitHub binding; kubeconfig bound only during deployment |
 
-The split keeps deployment capability out of the image-build path and makes the execution intent visible in Jenkins scheduling.
+The split separates scheduling, tooling, caches, and pipeline intent. It is **not** an RBAC isolation boundary in the current reference configuration: both Pod templates use the same `jenkins-agent` ServiceAccount. CI uses that in-cluster identity for server-side Kubernetes dry-runs; CD additionally binds the explicit kubeconfig credential for deployment.
 
 ## CI warm state
 
-The CI Pod is disposable. Expensive caches are not.
+The CI agent Pod can be recreated. Expensive caches live on node-3 and are mounted into each replacement Pod.
 
 ```text
-CI Pod starts
-    │
-    ├── /root/.m2       ──► hostPath /var/lib/lab-ci/m2
-    ├── Trivy cache     ──► hostPath /var/lib/lab-ci/trivy
-    └── BuildKit state  ──► hostPath /var/lib/lab-ci/buildkit
+node-3 host state
+
+/var/lib/lab-ci/m2       ─────► ci-tools:/root/.m2
+/var/lib/lab-ci/trivy    ─────► ci-tools:/root/.cache/trivy
+/var/lib/lab-ci/buildkit ─────► buildkit:/var/lib/buildkit
+
+                                  mounted into
+                                      │
+                                      ▼
+                             lab-ci-runner Pod
 ```
 
 This preserves dependency and layer reuse across agent Pods without making the Jenkins controller a build host.
@@ -106,18 +115,18 @@ The CI toolchain is built as its own image and pinned in JCasC by digest. This p
 Change sequence:
 
 ```text
-change ci-agent.Dockerfile
-        │
-        ▼
+ci-agent.Dockerfile changes
+          │
+          ▼
 build + publish agent image
-        │
-        ▼
-resolve immutable digest
-        │
-        ▼
-update JCasC digest
-        │
-        ▼
+          │
+          ▼
+resolve repository@sha256 digest
+          │
+          ▼
+update JCasC image reference
+          │
+          ▼
 make jenkins-up
 ```
 

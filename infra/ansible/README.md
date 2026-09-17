@@ -19,7 +19,7 @@ Vagrant inventory
            └──► local-path storage
 ```
 
-`node-3` runs the single cluster-wide Vagrant Ansible provisioner after all machines exist.
+A single host-side Vagrant Ansible provisioner is attached to the `node-3` definition. It runs the cluster-wide play after all three machines exist.
 
 ## Reconcile
 
