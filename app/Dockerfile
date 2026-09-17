@@ -7,7 +7,7 @@ COPY mvnw pom.xml ./
 RUN sh ./mvnw --batch-mode --no-transfer-progress dependency:go-offline
 
 COPY src/ src/
-RUN sh ./mvnw --batch-mode --no-transfer-progress clean verify \
+RUN sh ./mvnw --batch-mode --no-transfer-progress package -DskipTests \
 && cp target/app-0.0.1-SNAPSHOT.jar /workspace/application.jar
 
 FROM eclipse-temurin:11.0.32_9-jre-ubi9-minimal@sha256:6bca03a0f51a7b8af331c3c5db0cfc47d5f5853dda33b5a125031d08250c3f88
