@@ -4,9 +4,10 @@ set -euo pipefail
 : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
 : "${DOCKER_USER:?DOCKER_USER is required}"
 : "${DOCKER_PASS:?DOCKER_PASS is required}"
+: "${COMMIT_SHA:?COMMIT_SHA is required}"
 
-COMMIT_SHA="$(git rev-parse --short=12 HEAD)"
-IMAGE_TAG="sha-${COMMIT_SHA}"
+SHORT_SHA="${COMMIT_SHA:0:12}"
+IMAGE_TAG="sha-${SHORT_SHA}"
 TAGGED_REF="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
 
 echo "==> Authenticating to DockerHub"
