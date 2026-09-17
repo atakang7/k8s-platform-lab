@@ -10,11 +10,7 @@ def timed(String label, Closure body) {
 }
 
 pipeline {
-    agent {
-        kubernetes {
-            yamlFile 'delivery/jenkins/agent.yaml'
-        }
-    }
+    agent { label 'lab-ci-warm' }
     parameters {
         string(name: 'IMAGE_REF', description: 'Immutable image reference repository@sha256:...')
         string(name: 'COMMIT_SHA', description: 'Exact Git commit SHA associated with this deployment')
