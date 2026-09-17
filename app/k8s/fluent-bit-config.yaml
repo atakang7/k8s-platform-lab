@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+  namespace: default
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush        1
+        Log_Level    info
+        Daemon       off
+
+    [INPUT]
+        Name         tail
+        Path         /var/log/app/*
+        Tag          app.logs
+        Read_from_Head True
+
+    [OUTPUT]
+        Name         es
+        Match        *
+        Host         logs-es-http.observability.svc.cluster.local
+        Port         9200
+        Index        app-logs
+        Suppress_Type_Name On

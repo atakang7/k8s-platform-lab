@@ -1,0 +1,21 @@
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: edge
+  namespace: metallb-system
+spec:
+  addresses:
+    - 192.168.56.200-192.168.56.220
+  autoAssign: false
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: edge
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - edge
+  nodeSelectors:
+    - matchLabels:
+        edge.lab.test/worker: "true"

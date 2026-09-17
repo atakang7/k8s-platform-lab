@@ -1,0 +1,41 @@
+controller:
+  nodeSelector:
+    kubernetes.io/hostname: node-3
+  serviceType: ClusterIP
+  agentListenerEnabled: false
+  installPlugins:
+    - configuration-as-code:2121.v86fe99d4b_b_a_b_
+  installLatestPlugins: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: "1500m"
+      memory: 1Gi
+  admin:
+    createSecret: true
+    existingSecret: jenkins-admin
+  JCasC:
+    defaultConfig: false
+  sidecars:
+    configAutoReload:
+      enabled: false
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hostName: jenkins.lab.test
+    path: /
+    pathType: Prefix
+    # ingress-nginx serves its VSO-managed wildcard default certificate.
+    tls:
+      - hosts:
+          - jenkins.lab.test
+
+agent:
+  enabled: false
+
+persistence:
+  enabled: true
+  storageClass: local-path
+  size: 8Gi

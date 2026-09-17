@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: jenkins-agent
+  labels:
+    component: jenkins-agent
+spec:
+  containers:
+    - name: tools
+      image: alpine:3.18
+      command: ["cat"]
+      tty: true
+      # Alpine with git, jq, bash, skopeo, docker etc. expected to be installed or present in CI image.
+    - name: maven
+      image: maven:3.9.4-eclipse-temurin-17
+      command: ["cat"]
+      tty: true
+    - name: buildkit
+      image: moby/buildkit:v0.12.2
+      command: ["cat"]
+      tty: true
+      securityContext:
+        privileged: true
+    - name: trivy
+      image: aquasec/trivy:0.45.0
+      command: ["cat"]
+      tty: true
+    - name: ansible
+      image: cytopia/ansible:2.15-tools
+      command: ["cat"]
+      tty: true

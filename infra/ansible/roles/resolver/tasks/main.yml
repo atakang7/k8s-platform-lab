@@ -1,0 +1,30 @@
+---
+- name: Require systemd-resolved ownership of resolv.conf
+  ansible.builtin.command: readlink -f /etc/resolv.conf
+  register: resolv_conf_target
+  changed_when: false
+  failed_when: not resolv_conf_target.stdout.startswith('/run/systemd/resolve/')
+
+- name: Find the host edge interface
+  ansible.builtin.shell: ip -o -4 addr show | awk '$4 == "{{ edge_host_ip }}/24" { print $2; exit }'
+  register: edge_interface
+  changed_when: false
+  failed_when: edge_interface.stdout == ''
+
+- name: Revert scoped DNS routing
+  ansible.builtin.command: "resolvectl revert {{ edge_interface.stdout }}"
+  changed_when: false
+  when: resolver_state | default('up') == 'down'
+
+- name: Route the lab DNS zone through BIND
+  when: resolver_state | default('up') == 'up'
+  block:
+    - name: Select BIND on the edge interface
+      ansible.builtin.command: "resolvectl dns {{ edge_interface.stdout }} {{ edge_host_ip }}"
+      changed_when: false
+    - name: Scope resolution to the lab zone
+      ansible.builtin.command: "resolvectl domain {{ edge_interface.stdout }} ~{{ dns_zone }}"
+      changed_when: false
+    - name: Keep default DNS routing unchanged
+      ansible.builtin.command: "resolvectl default-route {{ edge_interface.stdout }} false"
+      changed_when: false

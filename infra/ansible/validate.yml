@@ -1,0 +1,177 @@
+---
+- name: Validate the runtime on every node
+  hosts: k8s_cluster
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read containerd service state
+      ansible.builtin.command: systemctl is-active containerd
+      register: containerd_state
+      changed_when: false
+      failed_when: false
+
+    - name: Report containerd outcome
+      ansible.builtin.assert:
+        that: containerd_state.stdout == "active"
+        success_msg: "PASS | containerd is healthy on {{ inventory_hostname }}"
+        fail_msg: "FAIL | containerd is not healthy on {{ inventory_hostname }}"
+
+- name: Validate Kubernetes outcomes
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    validation_manifest: /etc/kubernetes/stage1-validation.yml
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+  tasks:
+    - name: Count Kubernetes nodes
+      ansible.builtin.shell: kubectl get nodes -o name | wc -l
+      args:
+        executable: /bin/bash
+      register: node_result
+      changed_when: false
+
+    - name: Report node count outcome
+      ansible.builtin.assert:
+        that: node_result.stdout == "3"
+        success_msg: "PASS | exactly 3 Kubernetes nodes exist"
+        fail_msg: "FAIL | expected exactly 3 Kubernetes nodes"
+
+    - name: Read Kubernetes node names
+      ansible.builtin.shell: kubectl get nodes -o name | sort
+      args:
+        executable: /bin/bash
+      register: node_names
+      changed_when: false
+
+    - name: Report node naming outcome
+      ansible.builtin.assert:
+        that: node_names.stdout == "node/node-1\nnode/node-2\nnode/node-3"
+        success_msg: "PASS | node names match Node 1, Node 2, and Node 3"
+        fail_msg: "FAIL | expected Kubernetes nodes node-1, node-2, and node-3"
+
+    - name: Read control-plane node assignment
+      ansible.builtin.command: kubectl get nodes -l node-role.kubernetes.io/control-plane -o name
+      register: control_plane_node
+      changed_when: false
+
+    - name: Report control-plane assignment outcome
+      ansible.builtin.assert:
+        that: control_plane_node.stdout == "node/node-1"
+        success_msg: "PASS | node-1 is the only control-plane node"
+        fail_msg: "FAIL | node-1 must be the only control-plane node"
+
+    - name: Verify that every node is Ready
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes --no-headers | awk '$2 != "Ready" { exit 1 }'
+      args:
+        executable: /bin/bash
+      register: ready_result
+      changed_when: false
+      failed_when: false
+
+    - name: Report node readiness outcome
+      ansible.builtin.assert:
+        that: ready_result.rc == 0
+        success_msg: "PASS | all Kubernetes nodes are Ready"
+        fail_msg: "FAIL | one or more Kubernetes nodes are not Ready"
+
+    - name: Verify the kubelet version on every node
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.kubeletVersion}{"\n"}{end}' |
+          sed 's/^v//' |
+          awk -F. '$1 < 1 || ($1 == 1 && $2 < 28) { exit 1 }'
+      args:
+        executable: /bin/bash
+      register: version_result
+      changed_when: false
+      failed_when: false
+
+    - name: Report Kubernetes version outcome
+      ansible.builtin.assert:
+        that: version_result.rc == 0
+        success_msg: "PASS | Kubernetes version is >= 1.28 on every node"
+        fail_msg: "FAIL | a node is running Kubernetes older than 1.28"
+
+    - name: Read kubeadm cluster configuration
+      ansible.builtin.command: kubectl -n kube-system get configmap kubeadm-config -o jsonpath={.data.ClusterConfiguration}
+      register: cluster_configuration
+      changed_when: false
+
+    - name: Report cluster network outcomes
+      ansible.builtin.assert:
+        that:
+          - "('podSubnet: ' + pod_cidr) in cluster_configuration.stdout"
+          - "('serviceSubnet: ' + service_cidr) in cluster_configuration.stdout"
+        success_msg: "PASS | Pod and Service CIDRs match the Stage 1 design"
+        fail_msg: "FAIL | kubeadm Pod or Service CIDR does not match the Stage 1 design"
+
+    - name: Verify Calico node agents
+      ansible.builtin.command: kubectl -n kube-system rollout status daemonset/calico-node --timeout=30s
+      changed_when: false
+
+    - name: Verify Calico controllers
+      ansible.builtin.command: kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=30s
+      changed_when: false
+
+    - name: Report Calico outcome
+      ansible.builtin.debug:
+        msg: "PASS | Calico is healthy"
+
+    - name: Write the temporary validation workload manifest
+      ansible.builtin.template:
+        src: cluster-validation.yml.j2
+        dest: "{{ validation_manifest }}"
+        mode: "0600"
+
+    - name: Validate Pod networking and dynamic storage
+      block:
+        - name: Apply temporary validation workloads
+          ansible.builtin.command: "kubectl apply -f {{ validation_manifest }}"
+          register: validation_apply
+          changed_when: "'created' in validation_apply.stdout or 'configured' in validation_apply.stdout"
+
+        - name: Wait for cross-node network test Pods
+          ansible.builtin.command: kubectl -n stage1-validation rollout status deployment/network-check --timeout=180s
+          changed_when: false
+
+        - name: Test Pod-to-Pod traffic
+          ansible.builtin.shell: |
+            set -o pipefail
+            mapfile -t pods < <(kubectl -n stage1-validation get pods -l app=network-check -o name)
+            target_ip=$(kubectl -n stage1-validation get "${pods[1]}" -o jsonpath='{.status.podIP}')
+            kubectl -n stage1-validation exec "${pods[0]}" -- wget -qO- "http://${target_ip}:8080/health" | grep -qx healthy
+          args:
+            executable: /bin/bash
+          changed_when: false
+
+        - name: Report Pod networking outcome
+          ansible.builtin.debug:
+            msg: "PASS | Pod networking works across worker nodes"
+
+        - name: Wait for the storage consumer
+          ansible.builtin.command: kubectl -n stage1-validation wait --for=condition=Ready pod/storage-check --timeout=180s
+          changed_when: false
+
+        - name: Read test PVC phase
+          ansible.builtin.command: kubectl -n stage1-validation get pvc/storage-check -o jsonpath={.status.phase}
+          register: pvc_phase
+          changed_when: false
+
+        - name: Report dynamic storage outcome
+          ansible.builtin.assert:
+            that: pvc_phase.stdout == "Bound"
+            success_msg: "PASS | test PVC is Bound through local-path storage"
+            fail_msg: "FAIL | test PVC did not become Bound"
+      always:
+        - name: Remove temporary validation workloads
+          ansible.builtin.command: kubectl delete namespace stage1-validation --ignore-not-found --wait=true
+          changed_when: false
+
+    - name: Report Stage 1 outcome
+      ansible.builtin.debug:
+        msg: "PASS | Stage 1 cluster foundation validation complete"

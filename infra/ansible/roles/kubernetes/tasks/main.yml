@@ -1,0 +1,48 @@
+---
+- name: Create APT keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Install Kubernetes repository signing key
+  ansible.builtin.get_url:
+    url: "https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_repository_minor }}/deb/Release.key"
+    dest: /etc/apt/keyrings/kubernetes.asc
+    mode: "0644"
+
+- name: Configure the Kubernetes package repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/kubernetes.asc] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_repository_minor }}/deb/ /"
+    filename: kubernetes
+    state: present
+    update_cache: true
+
+- name: Install pinned Kubernetes packages
+  ansible.builtin.apt:
+    name:
+      - "kubeadm={{ kubernetes_package_version }}"
+      - "kubectl={{ kubernetes_package_version }}"
+      - "kubelet={{ kubernetes_package_version }}"
+    state: present
+
+- name: Hold Kubernetes packages for deliberate upgrades
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubeadm
+    - kubectl
+    - kubelet
+
+- name: Select the private VM address for kubelet
+  ansible.builtin.copy:
+    dest: /etc/default/kubelet
+    mode: "0644"
+    content: "KUBELET_EXTRA_ARGS=--node-ip={{ node_ips[inventory_hostname] }}\n"
+  notify: Restart kubelet
+
+- name: Keep kubelet enabled
+  ansible.builtin.service:
+    name: kubelet
+    enabled: true

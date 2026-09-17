@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+if [[ "${1:-}" != --cluster ]]; then
+  "${root}/infra/edge/lib/with-kubeconfig.sh" "${root}/platform/observability/bin/smoke" --cluster
+  exit
+fi
+
+namespace=observability
+host=observability.lab.test
+kubectl -n "${namespace}" rollout status deployment/observability-grafana --timeout=90s >/dev/null
+kubectl -n "${namespace}" rollout status deployment/observability-kube-prometh-operator --timeout=90s >/dev/null
+kubectl -n "${namespace}" rollout status statefulset/logs-es --timeout=90s >/dev/null
+kubectl -n "${namespace}" rollout status daemonset/fluent-bit --timeout=90s >/dev/null
+kubectl -n "${namespace}" rollout status statefulset/prometheus-observability-kube-prometh-prometheus --timeout=90s >/dev/null
+kubectl -n "${namespace}" rollout status statefulset/alertmanager-observability-kube-prometh-alertmanager --timeout=90s >/dev/null
+kubectl -n "${namespace}" get pvc -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase}{"\n"}{end}' | awk 'NF {count++; if ($2 != "Bound") bad=1} END {exit bad || count < 2}'
+kubectl -n "${namespace}" get prometheusrule pod-restarts >/dev/null
+
+resolved="$(getent ahostsv4 "${host}" | awk 'NR == 1 {print $1}')"
+[[ "${resolved}" == 192.168.56.200 ]] || { echo "FAIL | DNS resolved ${host} to ${resolved}" >&2; exit 1; }
+curl --silent --show-error --fail --max-time 10 "https://${host}/grafana/api/health" >/dev/null
+curl --silent --show-error --fail --max-time 10 "https://${host}/prometheus/-/ready" >/dev/null
+
+curl --silent --show-error --fail --max-time 10 "https://${host}/elasticsearch/" >/dev/null
+indices=""
+for _ in {1..6}; do
+  indices="$(curl --silent --fail --max-time 10 \
+    "https://${host}/elasticsearch/_cat/indices/kubernetes-*?h=index")" || true
+  [[ -n "${indices}" ]] && break
+  sleep 5
+done
+[[ -n "${indices}" ]] || { echo 'FAIL | Fluent Bit has not written a Kubernetes index' >&2; exit 1; }
+echo 'PASS | Stage 5 workloads, PVCs, DNS, TLS, endpoints, rule, and log delivery'

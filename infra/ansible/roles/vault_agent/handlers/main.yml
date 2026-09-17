@@ -1,0 +1,3 @@
+---
+- name: restart vault agent if running
+  ansible.builtin.command: systemctl try-restart vault-agent

@@ -1,0 +1,29 @@
+pipeline {
+    agent {
+        kubernetes {
+            yamlFile 'delivery/jenkins/agent.yaml'
+        }
+    }
+    parameters {
+        string(name: 'IMAGE_REF', description: 'Immutable image reference (e.g. repository/image@sha256:...)')
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('Deploy to Kubernetes') {
+            steps {
+                container('ansible') {
+                    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                        sh '''
+                        export K8S_AUTH_KUBECONFIG=$KUBECONFIG
+                        ansible-playbook delivery/ansible/deploy.yml -e "image_ref=${IMAGE_REF}"
+                        '''
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+source "${root}/platform/jenkins/versions.env"
+export VAULT_ADDR=https://127.0.0.1:8200
+
+if [[ "${1:-}" != --cluster ]]; then
+  if [[ -z "${VAULT_TOKEN:-}" ]]; then
+    read -r -s -p 'Vault bootstrap token: ' VAULT_TOKEN
+    echo
+    export VAULT_TOKEN
+  fi
+  vault token lookup >/dev/null
+  vault policy write jenkins-read "${root}/platform/jenkins/resources/admin-read.hcl" >/dev/null
+  vault write auth/approle/role/jenkins-vso \
+    token_policies=jenkins-read token_ttl=1h token_max_ttl=4h \
+    secret_id_ttl=0 secret_id_num_uses=0 >/dev/null
+
+  if ! vault kv get secret/jenkins/admin >/dev/null 2>&1; then
+    temporary="$(mktemp -d)"
+    chmod 0700 "${temporary}"
+    trap 'rm -rf -- "${temporary}"' EXIT
+    umask 077
+    python3 - "${temporary}/admin.json" <<'PY'
+import json
+import secrets
+import sys
+
+with open(sys.argv[1], 'w') as destination:
+    json.dump({'jenkins-admin-user': 'admin',
+               'jenkins-admin-password': secrets.token_urlsafe(36)}, destination)
+PY
+    vault kv put secret/jenkins/admin "@${temporary}/admin.json" >/dev/null
+  fi
+  "${root}/infra/edge/lib/with-kubeconfig.sh" "${root}/platform/jenkins/bin/up" --cluster
+  exit
+fi
+
+kubectl create namespace jenkins --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n jenkins create secret generic vault-ca \
+  --from-file=ca.crt=/usr/local/share/ca-certificates/lab.crt \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+
+if ! kubectl -n jenkins get secret approle-id >/dev/null 2>&1; then
+  temporary="$(mktemp)"
+  trap 'rm -f -- "${temporary}"' EXIT
+  umask 077
+  vault write -field=secret_id -f auth/approle/role/jenkins-vso/secret-id > "${temporary}"
+  kubectl -n jenkins create secret generic approle-id \
+    --from-file="id=${temporary}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+fi
+
+kubectl apply -f "${root}/platform/jenkins/resources/vault-connection.yaml" >/dev/null
+role_id="$(vault read -field=role_id auth/approle/role/jenkins-vso/role-id)"
+kubectl apply -f - >/dev/null <<EOF
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: jenkins
+  namespace: jenkins
+spec:
+  vaultConnectionRef: edge
+  method: appRole
+  mount: approle
+  appRole:
+    roleId: ${role_id}
+    secretRef: approle-id
+EOF
+kubectl apply -f "${root}/platform/jenkins/resources/admin-secret.yaml" >/dev/null
+for _ in {1..60}; do
+  if kubectl -n jenkins get secret jenkins-admin >/dev/null 2>&1; then break; fi
+  sleep 2
+done
+kubectl -n jenkins get secret jenkins-admin >/dev/null
+
+helm repo add jenkins https://charts.jenkins.io --force-update >/dev/null
+helm repo update jenkins >/dev/null
+helm upgrade --install jenkins jenkins/jenkins \
+  --namespace jenkins --version "${JENKINS_CHART_VERSION}" \
+  --values "${root}/platform/jenkins/values.yaml" \
+  --set-file controller.JCasC.configScripts.platform="${root}/platform/jenkins/jcasc/jenkins.yaml" \
+  --wait --atomic --timeout 10m >/dev/null
+echo 'PASS | Jenkins release reconciled'

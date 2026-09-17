@@ -1,0 +1,93 @@
+pipeline {
+    agent {
+        kubernetes {
+            yamlFile 'delivery/jenkins/agent.yaml'
+        }
+    }
+    options {
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+    environment {
+        DOCKER_REGISTRY = 'dockerhub.example.com' // Replace with actual registry or secret
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('Quality Gates') {
+            steps {
+                container('tools') {
+                    sh 'chmod +x delivery/ci/*.sh'
+                    sh 'delivery/ci/lint.sh'
+                }
+            }
+        }
+        stage('Unit Tests') {
+            steps {
+                container('maven') {
+                    sh 'delivery/ci/test.sh'
+                }
+            }
+        }
+        stage('Build Image') {
+            steps {
+                container('buildkit') {
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        sh 'mkdir -p ~/.docker && echo "{\\"auths\\":{\\"${DOCKER_REGISTRY}\\":{\\"username\\":\\"${DOCKER_USER}\\",\\"password\\":\\"${DOCKER_PASS}\\"}}}" > ~/.docker/config.json'
+                        sh 'delivery/ci/build-image.sh'
+                    }
+                }
+            }
+        }
+        stage('Security Scan') {
+            steps {
+                container('trivy') {
+                    sh 'delivery/ci/scan-image.sh'
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'sbom.json', allowEmptyArchive: true
+                }
+            }
+        }
+        stage('Publish Image') {
+            when {
+                anyOf {
+                    branch 'main'
+                    buildingTag()
+                }
+            }
+            steps {
+                container('tools') {
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        sh 'mkdir -p ~/.docker && echo "{\\"auths\\":{\\"${DOCKER_REGISTRY}\\":{\\"username\\":\\"${DOCKER_USER}\\",\\"password\\":\\"${DOCKER_PASS}\\"}}}" > ~/.docker/config.json'
+                        sh 'delivery/ci/publish-image.sh'
+                    }
+                }
+            }
+        }
+        stage('Trigger Deploy') {
+            when {
+                anyOf {
+                    branch 'main'
+                    buildingTag()
+                }
+            }
+            steps {
+                container('tools') {
+                    script {
+                        def imageRefEnv = readFile('image_ref.env').trim()
+                        def imageRef = imageRefEnv.split('=')[1]
+                        build job: 'lab-deploy', parameters: [
+                            string(name: 'IMAGE_REF', value: imageRef)
+                        ], wait: false
+                    }
+                }
+            }
+        }
+    }
+}

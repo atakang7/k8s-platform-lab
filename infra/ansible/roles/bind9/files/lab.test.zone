@@ -1,0 +1,4 @@
+$TTL 60
+@ IN SOA ns.lab.test. hostmaster.lab.test. ( 1 60 60 604800 60 )
+@ IN NS ns.lab.test.
+ns IN A 192.168.56.1

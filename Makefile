@@ -1,0 +1,42 @@
+.PHONY: cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up observability-up observability-smoke vault-init vault-unseal destroy
+
+cluster-up:
+	vagrant up
+
+cluster-validate:
+	./validation/cluster/validate.sh
+
+container-validate:
+	./validation/container/validate.sh
+
+validate: cluster-validate container-validate
+
+edge-up:
+	./infra/edge/bin/up
+
+edge-smoke:
+	./validation/edge/smoke.sh
+
+edge-validate:
+	./validation/edge/validate.sh
+
+edge-down:
+	./infra/edge/bin/down
+
+jenkins-up:
+	./platform/jenkins/bin/up
+
+observability-up:
+	./platform/observability/bin/up
+
+observability-smoke:
+	./platform/observability/bin/smoke
+
+vault-init:
+	./infra/edge/bin/vault-init
+
+vault-unseal:
+	./infra/edge/bin/vault-unseal
+
+destroy:
+	vagrant destroy

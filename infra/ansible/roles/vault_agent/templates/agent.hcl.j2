@@ -1,0 +1,26 @@
+vault {
+  address = "https://127.0.0.1:8200"
+  ca_cert = "/etc/vault-agent/ca.crt"
+}
+
+auto_auth {
+  method "approle" {
+    mount_path = "auth/approle"
+    config = {
+      role_id_file_path = "/etc/vault-agent/role-id"
+      secret_id_file_path = "/etc/vault-agent/secret-id"
+      remove_secret_id_file_after_reading = false
+    }
+  }
+  sink "file" {
+    config = { path = "/run/vault-agent/token" }
+  }
+}
+
+template {
+  source = "/etc/vault-agent/tsig.ctmpl"
+  destination = "/run/lab-bind/tsig.key"
+  perms = "0640"
+  command = "/usr/sbin/rndc reload"
+  error_on_missing_key = true
+}

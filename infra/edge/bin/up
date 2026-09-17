@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+source "${root}/infra/edge/config.env"
+source "${root}/infra/edge/versions.env"
+export VAULT_ADDR=https://127.0.0.1:8200
+cd "${root}"
+
+configure_host() {
+  sudo -v
+  sudo ANSIBLE_CONFIG="${root}/infra/ansible/ansible.cfg" VAULT_VERSION="${VAULT_VERSION}" VAULT_SHA256="${VAULT_SHA256}" \
+    ansible-playbook -i localhost, -c local infra/ansible/playbooks/edge-host.yml \
+    --tags host -e "edge_host_ip=${EDGE_HOST_IP}" -e "edge_network_cidr=${EDGE_NETWORK_CIDR}" \
+    -e "dns_zone=${DNS_ZONE}"
+}
+
+ensure_vault_ready() {
+  local init_state=0
+  vault operator init -status >/dev/null 2>&1 || init_state=$?
+  case "${init_state}" in
+    0) ;;
+    2) echo 'FAIL | Vault needs explicit initialization: set VAULT_INIT_OUTPUT, run make vault-init, then make vault-unseal and retry edge-up' >&2; exit 1 ;;
+    *) echo 'FAIL | Vault initialization state unavailable; inspect systemctl status vault' >&2; exit 1 ;;
+  esac
+  vault status >/dev/null 2>&1 || { echo 'FAIL | Vault is sealed; run make vault-unseal, then retry edge-up' >&2; exit 1; }
+}
+
+configure_vault_runtime() {
+  "${root}/infra/edge/lib/with-kubeconfig.sh" "${root}/infra/edge/lib/kubernetes.sh" vso
+  if ! sudo test -s /etc/vault-agent/secret-id ||
+     ! "${root}/infra/edge/lib/with-kubeconfig.sh" kubectl -n external-dns get secret approle-id >/dev/null 2>&1 ||
+     ! "${root}/infra/edge/lib/with-kubeconfig.sh" kubectl -n ingress-nginx get secret approle-id >/dev/null 2>&1; then
+    "${root}/infra/edge/lib/vault.sh"
+  fi
+  sudo systemctl start vault-agent
+  for _ in {1..30}; do
+    if sudo test -s /run/lab-bind/tsig.key; then return; fi
+    sleep 1
+  done
+  echo 'FAIL | Vault Agent did not render the DNS TSIG; inspect systemctl status vault-agent' >&2
+  exit 1
+}
+
+configure_dns_host() {
+  sudo ANSIBLE_CONFIG="${root}/infra/ansible/ansible.cfg" ansible-playbook -i localhost, -c local infra/ansible/playbooks/edge-host.yml \
+    --tags dns -e "edge_host_ip=${EDGE_HOST_IP}" -e "edge_network_cidr=${EDGE_NETWORK_CIDR}" \
+    -e "dns_zone=${DNS_ZONE}"
+}
+
+configure_host
+ensure_vault_ready
+configure_vault_runtime
+configure_dns_host
+"${root}/infra/edge/lib/with-kubeconfig.sh" "${root}/infra/edge/lib/kubernetes.sh" full
+echo 'PASS | Stage 3 edge is configured; run make edge-smoke'

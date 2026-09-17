@@ -1,0 +1,23 @@
+---
+- name: Check whether BIND is already installed
+  ansible.builtin.stat:
+    path: /usr/sbin/named
+  register: bind_binary
+
+- name: Prevent package installation from starting BIND with its default listeners
+  ansible.builtin.command: systemctl mask named.service
+  register: bind_mask
+  changed_when: "'Created symlink' in bind_mask.stdout"
+  when: not bind_binary.stat.exists
+
+- name: Install host packages
+  ansible.builtin.apt:
+    name: [bind9, bind9utils, dnsutils]
+    state: present
+
+- name: Permit BIND to read the Vault Agent TSIG copy
+  ansible.builtin.lineinfile:
+    path: /etc/apparmor.d/local/usr.sbin.named
+    line: '  /run/lab-bind/tsig.key r,'
+    state: present
+  notify: reload named AppArmor profile

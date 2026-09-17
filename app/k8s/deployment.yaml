@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-java-app
+  namespace: default
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: sample-java-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: sample-java-app
+    spec:
+      securityContext:
+        fsGroup: 10001
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: DoesNotExist
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: sample-java-app
+        matchLabelKeys:
+        - pod-template-hash
+      imagePullSecrets:
+      - name: dockerhub-registry
+      volumes:
+      - name: app-logs
+        emptyDir: {}
+      - name: fluent-bit-config
+        configMap:
+          name: fluent-bit-config
+      containers:
+      - name: app
+        image: atakangul/sample-java-app:stage6-960f2dbbf729fcfa
+        ports:
+        - containerPort: 9001
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          allowPrivilegeEscalation: false
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        volumeMounts:
+        - name: app-logs
+          mountPath: /var/log/app
+        startupProbe:
+          httpGet:
+            path: /api/foos?val=startup
+            port: 9001
+          failureThreshold: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/foos?val=ready
+            port: 9001
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /api/foos?val=liveness
+            port: 9001
+          periodSeconds: 10
+      - name: fluent-bit
+        image: fluent/fluent-bit@sha256:d792375ca8e53be72fc25716c28f291f32c6fc6f4f31d12d0d14bc78cefe9226
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          allowPrivilegeEscalation: false
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
+        volumeMounts:
+        - name: app-logs
+          mountPath: /var/log/app
+          readOnly: true
+        - name: fluent-bit-config
+          mountPath: /fluent-bit/etc/

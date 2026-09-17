@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+source "${root}/platform/observability/versions.env"
+
+if [[ "${1:-}" != --cluster ]]; then
+  "${root}/infra/edge/lib/with-kubeconfig.sh" "${root}/platform/observability/bin/up" --cluster
+  exit
+fi
+
+namespace=observability
+# This layout needs room for Prometheus on node-2 and Grafana beside Jenkins on node-3.
+for node in node-2 node-3; do
+  kubectl wait --for=condition=Ready "node/${node}" --timeout=5s >/dev/null
+  allocatable="$(kubectl get node "${node}" -o jsonpath='{.status.allocatable.memory}')"
+  if [[ "${allocatable}" != *Ki ]] || (( ${allocatable%Ki} < 1450000 )); then
+    echo "FAIL | ${node} needs at least 1450000Ki allocatable memory for Stage 5; found ${allocatable}" >&2
+    exit 1
+  fi
+done
+kubectl create namespace "${namespace}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update >/dev/null
+helm repo add fluent https://fluent.github.io/helm-charts --force-update >/dev/null
+helm repo update prometheus-community fluent >/dev/null
+
+helm upgrade --install observability prometheus-community/kube-prometheus-stack \
+  --namespace "${namespace}" --version "${KUBE_PROMETHEUS_STACK_CHART_VERSION}" \
+  --values "${root}/platform/observability/kube-prometheus-stack/values.yaml" \
+  --wait --timeout 10m >/dev/null
+kubectl apply -f "${root}/platform/observability/elasticsearch/resources.yaml" >/dev/null
+kubectl apply -f "${root}/platform/observability/alerts/pod-restarts.yaml" >/dev/null
+
+kubectl -n "${namespace}" create configmap lab-cluster-dashboard \
+  --from-file=cluster.json="${root}/platform/observability/dashboards/cluster.json" \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "${namespace}" label configmap lab-cluster-dashboard \
+  grafana_dashboard=1 --overwrite >/dev/null
+
+kubectl -n "${namespace}" create configmap lab-logs-dashboard \
+  --from-file=logs.json="${root}/platform/observability/dashboards/logs.json" \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "${namespace}" label configmap lab-logs-dashboard \
+  grafana_dashboard=1 --overwrite >/dev/null
+
+kubectl -n "${namespace}" rollout status statefulset/logs-es --timeout=8m >/dev/null
+helm upgrade --install fluent-bit fluent/fluent-bit \
+  --namespace "${namespace}" --version "${FLUENT_BIT_CHART_VERSION}" \
+  --values "${root}/platform/observability/fluent-bit/values.yaml" \
+  --wait --timeout 5m >/dev/null
+kubectl apply -f "${root}/platform/observability/ingress.yaml" >/dev/null
+echo 'PASS | Stage 5 components reconciled; run make observability-smoke'

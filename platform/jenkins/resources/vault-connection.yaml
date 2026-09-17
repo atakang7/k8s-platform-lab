@@ -1,0 +1,9 @@
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultConnection
+metadata:
+  name: edge
+  namespace: jenkins
+spec:
+  address: https://192.168.56.1:8200
+  caCertSecretRef: vault-ca
+  skipTLSVerify: false

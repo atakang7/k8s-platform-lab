@@ -1,0 +1,7 @@
+---
+- name: Deploy Application to Kubernetes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - application

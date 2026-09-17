@@ -1,0 +1,35 @@
+---
+- name: Read Deployment manifest
+  set_fact:
+    app_deployment: "{{ lookup('file', playbook_dir + '/../../app/k8s/deployment.yaml') | from_yaml }}"
+
+- name: Update image in Deployment manifest
+  set_fact:
+    app_deployment_updated: "{{ app_deployment | combine({'spec': {'template': {'spec': {'containers': [{'name': 'lab-app', 'image': image_ref}]}}}}, recursive=True) }}"
+
+- name: Apply namespace
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ playbook_dir }}/../../app/k8s/namespace.yaml"
+  ignore_errors: yes
+
+- name: Apply ConfigMap and Secret
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ item }}"
+  loop:
+    - "{{ playbook_dir }}/../../app/k8s/configmap.yaml"
+    - "{{ playbook_dir }}/../../app/k8s/secret.yaml"
+
+- name: Apply updated Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ app_deployment_updated }}"
+
+- name: Apply Service and Ingress
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ item }}"
+  loop:
+    - "{{ playbook_dir }}/../../app/k8s/service.yaml"
+    - "{{ playbook_dir }}/../../app/k8s/ingress.yaml"
