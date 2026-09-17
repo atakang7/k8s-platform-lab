@@ -17,8 +17,8 @@ jenkins:
         jenkinsUrl: http://jenkins.jenkins.svc.cluster.local:8080
         webSocket: true
         templates:
-          - name: warm-build
-            label: lab-ci-build
+          - name: ci-runner
+            label: lab-ci-runner
             namespace: jenkins
             idleMinutes: 60
             instanceCap: 1
@@ -32,7 +32,7 @@ jenkins:
               metadata:
                 labels:
                   component: jenkins-agent
-                  workload: lab-ci-build
+                  workload: lab-ci-runner
               spec:
                 serviceAccountName: jenkins-agent
                 restartPolicy: Never
@@ -87,8 +87,8 @@ jenkins:
                       limits:
                         cpu: "1"
                         memory: 1Gi
-          - name: warm-deploy
-            label: lab-ci-deploy
+          - name: cd-runner
+            label: lab-cd-runner
             namespace: jenkins
             idleMinutes: 60
             instanceCap: 1
@@ -102,7 +102,7 @@ jenkins:
               metadata:
                 labels:
                   component: jenkins-agent
-                  workload: lab-ci-deploy
+                  workload: lab-cd-runner
               spec:
                 serviceAccountName: jenkins-agent
                 restartPolicy: Never
@@ -151,7 +151,7 @@ jobs:
   - script: >
       pipelineJob('lab-build') {
         description('Lab CI pipeline')
-        triggers { scm('H/2 * * * *') }
+        triggers { scm('* * * * *') }
         definition {
           cpsScm {
             scm {
