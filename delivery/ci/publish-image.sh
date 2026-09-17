@@ -1,43 +1,35 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
-: "${DOCKER_USER:?DOCKER_USER is required}"
-: "${DOCKER_PASS:?DOCKER_PASS is required}"
 : "${COMMIT_SHA:?COMMIT_SHA is required}"
 
-SHORT_SHA="${COMMIT_SHA:0:12}"
+SHORT_SHA="$(printf '%s' "$COMMIT_SHA" | cut -c1-12)"
 IMAGE_TAG="sha-${SHORT_SHA}"
 TAGGED_REF="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+META_FILE="image-metadata.json"
 
-step_start() {
-  STEP_STARTED="$(date +%s%3N)"
-}
+echo "==> Publishing scanned image ${TAGGED_REF} from warm BuildKit cache"
 
-step_done() {
-  local label="$1"
-  local now
-  now="$(date +%s%3N)"
-  echo "PUSH_TIMING|${label}|$((now - STEP_STARTED))"
-}
+buildctl build \
+  --frontend dockerfile.v0 \
+  --local context=app \
+  --local dockerfile=app \
+  --opt build-arg:SOURCE_REPOSITORY=https://github.com/atakang7/k8s-platform-lab \
+  --opt build-arg:SOURCE_REVISION="${COMMIT_SHA}" \
+  --output "type=image,name=${TAGGED_REF},push=true" \
+  --metadata-file "${META_FILE}"
 
-echo "==> Authenticating to DockerHub"
-step_start
-printf '%s' "$DOCKER_PASS" | skopeo login --username "$DOCKER_USER" --password-stdin docker.io >/dev/null
-step_done Login
+DIGEST="$(sed -n 's/.*"containerimage.digest"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${META_FILE}" | head -n1)"
 
-echo "==> Publishing ${IMAGE_TAG}"
-step_start
-skopeo copy docker-archive:app-image.tar "docker://${TAGGED_REF}" >/dev/null
-step_done Copy
-
-echo "==> Resolving immutable digest"
-step_start
-DIGEST="$(skopeo inspect "docker://${TAGGED_REF}" --format '{{.Digest}}')"
-step_done Inspect
+if [ -z "${DIGEST}" ]; then
+  echo "ERROR: BuildKit did not return containerimage.digest" >&2
+  cat "${META_FILE}" >&2
+  exit 1
+fi
 
 printf 'IMAGE_REF=%s@%s\n' "$IMAGE_REPOSITORY" "$DIGEST" > image_ref.env
 printf 'IMAGE_TAG=%s\n' "$IMAGE_TAG" > image_tag.env
 
 echo "Published ${IMAGE_TAG}"
-echo "Resolved immutable digest"
+echo "Resolved immutable digest ${DIGEST}"
