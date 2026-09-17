@@ -3,45 +3,50 @@
 This repository is the source of truth for the infrastructure, Kubernetes platform, application runtime, delivery path, policy controls, and operating procedures. The environment is built from Git-managed configuration; credentials stay outside Git and are delivered from Vault to the consumers that need them.
 
 ```text
-                              Git + operator inputs
-                                       │
-                        desired state / credentials
-                                       │
-                                       ▼
-┌──────────────────────────────── HOST ────────────────────────────────┐
-│                                                                     │
-│  local CA ── signs certificates ──► Vault              BIND9        │
-│                                     secret authority    DNS          │
-│                                          │               ▲          │
-│                                          │ Vault API     │ RFC2136  │
-└──────────────────────────────────────────┼───────────────┼──────────┘
-                                           │               │
-┌──────────────────────────────────────────┼───────────────┼──────────┐
-│                                          ▼               │          │
-│                                Vault Secrets Operator   ExternalDNS  │
-│                                          │                          │
-│                               TLS / runtime Secrets                 │
-│                                          │                          │
-│  MetalLB assigns + L2-advertises 192.168.56.200                    │
-│                                          │                          │
-│                                          ▼                          │
-│                                 ingress-nginx ×2                    │
-│                                          │ HTTPS routing            │
-│                   ┌──────────────────────┼───────────────────┐      │
-│                   │                      │                   │      │
-│                   ▼                      ▼                   ▼      │
-│           sample-java-app            Jenkins           observability│
-│           4 replicas                 controller        metrics + logs│
-│           node-2 / node-3            node-3 · 0 execs               │
-│                                          │                          │
-│                                     CI/CD agents                    │
-│                                     node-3                          │
-│                                                                     │
-│  node-1                    node-2                    node-3          │
-│  control plane             worker                    worker          │
-│  10.50.0.10                10.50.0.11               10.50.0.12     │
-│                            192.168.56.11             192.168.56.12  │
-└──────────────────────────── KUBERNETES ──────────────────────────────┘
+                         HOST / TRUST BOUNDARY
+
+┌──────────┐   signs   ┌────────────────────┐   stored in   ┌─────────┐
+│ local CA │──────────►│ wildcard TLS cert  │──────────────►│  Vault  │
+└──────────┘           └────────────────────┘               └────┬────┘
+                                                                 │ Vault API
+                                                                 ▼
+                                                        ┌──────────────────┐
+                                                        │ Vault Secrets    │
+                                                        │ Operator         │
+                                                        └────────┬─────────┘
+                                                                 │
+                                                                 ▼
+                                                        Kubernetes Secrets
+
+┌────────────────────┐   signed RFC2136 / TSIG   ┌──────────────────┐
+│ BIND9              │◄──────────────────────────│ ExternalDNS      │
+│ lab.test    │                           │ watches K8s      │
+└────────────────────┘                           └──────────────────┘
+
+                         KUBERNETES / DATA PATH
+
+┌─────────┐   assigns + L2 advertises   ┌────────────────────────────┐
+│ MetalLB │────────────────────────────►│ ingress Service · .200     │
+└─────────┘                             └──────────────┬─────────────┘
+                                                     │
+                                                     ▼
+                                            ingress-nginx ×2
+                                                     │ HTTPS routing
+                          ┌──────────────────────────┼─────────────────────┐
+                          │                          │                     │
+                          ▼                          ▼                     ▼
+                  sample-java-app               Jenkins            observability
+                  4 replicas                    controller         metrics + logs
+                  node-2 / node-3               node-3 · 0 execs
+                                                     │
+                                                     ▼
+                                                CI/CD agents
+                                                node-3
+
+node-1                      node-2                      node-3
+control plane               worker                      worker
+10.50.0.10                  10.50.0.11                 10.50.0.12
+                            192.168.56.11               192.168.56.12
 ```
 
 ## Documentation
