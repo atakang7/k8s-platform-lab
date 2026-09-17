@@ -51,6 +51,8 @@ fresh checkout
 
 Run commands from the repository root.
 
+Before a clean rebuild, retain the Vault Raft data, the matching operator-held unseal key, an authorized Vault token, the local CA, and the GitHub/Docker Hub credentials listed below. The host operator also needs sudo access. A webhook image digest must be published before policy installation. An init file for a different Vault store cannot unseal this one.
+
 ## 1. Foundation
 
 ```bash
