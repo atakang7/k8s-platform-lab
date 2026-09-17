@@ -59,7 +59,7 @@ helm upgrade --install resource-requests-webhook \
   --namespace policy-system \
   --create-namespace \
   --set image.repository=docker.io/atakangul/resource-requests-webhook \
-  --set image.tag=<published-tag>
+  --set image.digest=sha256:<published-digest>
 ```
 
 ## Verify

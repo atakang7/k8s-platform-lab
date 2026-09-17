@@ -1,4 +1,4 @@
-.PHONY: cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up observability-up observability-smoke vault-init vault-unseal destroy
+.PHONY: cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up observability-up observability-smoke vault-init vault-unseal e2e-validate destroy
 
 cluster-up:
 	vagrant up
@@ -37,6 +37,9 @@ vault-init:
 
 vault-unseal:
 	./infra/edge/bin/vault-unseal
+
+e2e-validate:
+	./validation/e2e/validate.sh
 
 destroy:
 	vagrant destroy

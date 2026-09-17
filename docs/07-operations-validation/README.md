@@ -177,10 +177,12 @@ helm upgrade --install resource-requests-webhook \
   --namespace policy-system \
   --create-namespace \
   --set image.repository=docker.io/atakangul/resource-requests-webhook \
-  --set image.tag=<published-tag>
+  --set image.digest=sha256:<published-digest>
 ```
 
 Admission verification uses server-side dry-run. See [Admission policy](../06-governance-resilience/admission-policy.md).
+
+After the application release and admission policy are installed, run `make e2e-validate`.
 
 ## Validation model
 
@@ -212,13 +214,14 @@ make observability-smoke
 ```
 
 Use `make edge-validate` when deeper DNS/TLS/create-delete integration needs to be exercised.
+`make e2e-validate` composes cluster, edge, and observability checks, then verifies the installed Jenkins, application, metrics, logs, and admission path. Run it after the webhook and application release are installed; it does not install or repair components.
 
 ## Final invariants
 
 A complete environment should satisfy all of these:
 
 - three Kubernetes nodes are Ready;
-- Pod CIDR is `10.244.0.0/16` and Service CIDR is `10.96.0.0/12`;
+- Pod CIDR is `10.60.0.0/16` and Service CIDR is `10.70.0.0/16`;
 - `*.lab.test` resolves through BIND and ingress uses `192.168.56.200`;
 - HTTPS is trusted through the local CA/wildcard certificate path;
 - Jenkins controller is on node-3 with zero executors;

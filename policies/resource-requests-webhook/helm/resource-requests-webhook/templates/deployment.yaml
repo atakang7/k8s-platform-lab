@@ -1,3 +1,7 @@
+{{- $digest := required "Set image.digest to a published sha256 digest" .Values.image.digest -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $digest) -}}
+{{- fail "image.digest must be sha256:<64 lowercase hex characters>" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,7 +29,7 @@ spec:
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.image.repository }}@{{ $digest }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: https

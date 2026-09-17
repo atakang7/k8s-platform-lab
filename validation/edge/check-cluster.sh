@@ -68,6 +68,8 @@ spec:
           image: ${VALIDATION_IMAGE}
           args: ["-listen=:5678", "-text=stage3-edge-ok"]
           ports: [{containerPort: 5678}]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
 ---
 apiVersion: v1
 kind: Service

@@ -12,8 +12,9 @@ The rule is simple: configuration belongs under `infra/`, `platform/`, `app/`, `
 | `container/` | `make container-validate` | application tests, runtime image, HTTP behavior, non-root execution, OCI metadata |
 | `edge/` | `make edge-smoke` | normal edge health, DNS, HTTPS, Kubernetes workloads |
 | `edge/` | `make edge-validate` | deeper DNS/TLS/security integration and create/delete behavior |
+| `e2e/` | `make e2e-validate` | installed platform, application metrics/logs, and admission policy |
 
-`platform/` and `e2e/` are reserved for cross-platform and clean-room validation. They should contain tests that consume the deployed system, not installation logic.
+Validation consumes the deployed system. Installation logic stays in the owning subsystem.
 
 ## Validation layers
 
@@ -38,6 +39,7 @@ A smoke test answers "is the normal path healthy now?". A deeper validation may 
 make cluster-validate
 make edge-smoke
 make observability-smoke
+make e2e-validate
 ```
 
 Application and admission-policy checks should be run after Jenkins has delivered the application and the policy webhook is installed.
