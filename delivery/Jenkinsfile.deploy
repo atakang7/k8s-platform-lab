@@ -1,3 +1,14 @@
+def timed(String label, Closure body) {
+    def started = System.currentTimeMillis()
+    echo "TIMING_START|${label}|${started}"
+    try {
+        body()
+    } finally {
+        def elapsed = System.currentTimeMillis() - started
+        echo "TIMING|${label}|${elapsed}"
+    }
+}
+
 pipeline {
     agent {
         kubernetes {
@@ -9,46 +20,52 @@ pipeline {
         string(name: 'COMMIT_SHA', description: 'Exact Git commit SHA associated with this deployment')
     }
     options {
+        skipDefaultCheckout(true)
         disableConcurrentBuilds()
         timeout(time: 15, unit: 'MINUTES')
     }
     stages {
-        stage('Validate Input') {
+        stage('Prepare') {
             steps {
                 script {
-                    if (!(params.IMAGE_REF ==~ /^.+@sha256:[0-9a-f]{64}$/)) {
-                        error('IMAGE_REF must be an immutable sha256 digest reference')
+                    timed('Deploy.ValidateInput') {
+                        if (!(params.IMAGE_REF ==~ /^.+@sha256:[0-9a-f]{64}$/)) {
+                            error('IMAGE_REF must be an immutable sha256 digest reference')
+                        }
+                        if (!(params.COMMIT_SHA ==~ /^[0-9a-f]{40}$/)) {
+                            error('COMMIT_SHA must be a full Git SHA')
+                        }
                     }
-                    if (!(params.COMMIT_SHA ==~ /^[0-9a-f]{40}$/)) {
-                        error('COMMIT_SHA must be a full Git SHA')
+
+                    timed('Deploy.Checkout') {
+                        checkout scm
+                        sh "git checkout --detach ${params.COMMIT_SHA}"
+                    }
+
+                    timed('Deploy.GitHubPending') {
+                        container('ci-tools') {
+                            withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                                sh 'sh delivery/ci/github-status.sh pending jenkins/deploy "Jenkins deploy running" "$COMMIT_SHA"'
+                            }
+                        }
                     }
                 }
             }
         }
-        stage('Checkout') {
+
+        stage('Deploy') {
             steps {
-                checkout scm
-                sh "git checkout --detach ${params.COMMIT_SHA}"
-            }
-        }
-        stage('Report Deploy Pending') {
-            steps {
-                container('ci-tools') {
-                    withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                        sh 'sh delivery/ci/github-status.sh pending jenkins/deploy "Jenkins deploy running" "$COMMIT_SHA"'
-                    }
-                }
-            }
-        }
-        stage('Deploy with Ansible') {
-            steps {
-                container('ci-tools') {
-                    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-                        sh '''
-                          set -eu
-                          export K8S_AUTH_KUBECONFIG="$KUBECONFIG"
-                          ansible-playbook delivery/ansible/deploy.yml -e "image_ref=${IMAGE_REF}"
-                        '''
+                script {
+                    timed('Deploy.Ansible') {
+                        container('ci-tools') {
+                            withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                                sh '''
+                                  set -eu
+                                  export K8S_AUTH_KUBECONFIG="$KUBECONFIG"
+                                  ansible-playbook delivery/ansible/deploy.yml -e "image_ref=${IMAGE_REF}"
+                                '''
+                            }
+                        }
                     }
                 }
             }
@@ -56,9 +73,13 @@ pipeline {
     }
     post {
         success {
-            container('ci-tools') {
-                withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                    sh 'sh delivery/ci/github-status.sh success jenkins/deploy "Jenkins deploy passed" "$COMMIT_SHA"'
+            script {
+                timed('Deploy.GitHubSuccess') {
+                    container('ci-tools') {
+                        withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                            sh 'sh delivery/ci/github-status.sh success jenkins/deploy "Jenkins deploy passed" "$COMMIT_SHA"'
+                        }
+                    }
                 }
             }
         }
