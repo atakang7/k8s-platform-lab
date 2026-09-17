@@ -3,9 +3,8 @@ kind: Ingress
 metadata:
   name: sample-java-app
   namespace: default
-  annotations:
-    kubernetes.io/ingress.class: nginx
 spec:
+  ingressClassName: nginx
   tls:
   - hosts:
     - app.lab.test

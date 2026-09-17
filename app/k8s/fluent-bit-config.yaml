@@ -12,9 +12,11 @@ data:
 
     [INPUT]
         Name         tail
-        Path         /var/log/app/*
+        Path         /var/log/app/*.log
         Tag          app.logs
         Read_from_Head True
+        DB           /var/log/app/fluent-bit.db
+        Mem_Buf_Limit 5MB
 
     [OUTPUT]
         Name         es

@@ -5,4 +5,4 @@
 !.mvn/**
 !src/
 !src/**
-app/target/
+target/

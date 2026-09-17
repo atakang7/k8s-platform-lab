@@ -8,6 +8,7 @@ spec:
   selector:
     matchLabels:
       app: sample-java-app
+      track: stable
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -17,6 +18,7 @@ spec:
     metadata:
       labels:
         app: sample-java-app
+        track: stable
     spec:
       securityContext:
         fsGroup: 10001
@@ -46,7 +48,7 @@ spec:
           name: fluent-bit-config
       containers:
       - name: app
-        image: atakangul/sample-java-app:stage6-960f2dbbf729fcfa
+        image: docker.io/atakangul/sample-java-app@sha256:0c81155a4581e5affa528cce2e8d205d58236ded419ff4427e71d963d48cfe86
         ports:
         - containerPort: 9001
         securityContext:
@@ -95,6 +97,5 @@ spec:
         volumeMounts:
         - name: app-logs
           mountPath: /var/log/app
-          readOnly: true
         - name: fluent-bit-config
           mountPath: /fluent-bit/etc/

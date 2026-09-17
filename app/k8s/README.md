@@ -30,7 +30,7 @@ This creates the application Vault policy/AppRole, Kubernetes `VaultAuth`, and a
 
 ## Release behavior
 
-Do not manually edit `deployment.yaml` to the latest pushed tag. Normal CD renders the `app` container image locally with the immutable digest passed from CI:
+Do not manually edit `deployment.yaml` to the latest pushed tag. The committed digest is a published reference image for dry-run and bootstrap checks. Normal CD renders the `app` container image locally with the immutable digest passed from CI:
 
 ```text
 source Deployment

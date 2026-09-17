@@ -20,6 +20,8 @@ LABEL org.opencontainers.image.source="${SOURCE_REPOSITORY}" \
 
 WORKDIR /app
 
+RUN mkdir -p /var/log/app && chown 10001:10001 /var/log/app
+
 COPY --from=build --chown=10001:10001 /workspace/application.jar ./application.jar
 
 USER 10001:10001

@@ -173,7 +173,7 @@ The application namespace receives only the registry material required to pull r
 
 ## Application logging
 
-The Java process writes `/var/log/app/application.log` through an asynchronous Logback appender.
+The Java process writes `/var/log/app/app.log` through an asynchronous Logback appender.
 
 ```text
 request thread
@@ -182,7 +182,7 @@ request thread
 async Logback appender
      │
      ▼
-/var/log/app/application.log
+/var/log/app/app.log
      │
      │ shared emptyDir · sidecar mount is read-only
      ▼

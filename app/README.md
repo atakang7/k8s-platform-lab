@@ -82,6 +82,8 @@ Replacement Pods must become Ready before old capacity is intentionally removed.
 
 Readiness is the traffic decision. A running container is not considered ready until this probe passes.
 
+`/actuator/prometheus` exposes HTTP and JVM metrics to the Git-managed ServiceMonitor. The management web surface is limited to health and Prometheus.
+
 ## File logging
 
 ```text
@@ -91,7 +93,7 @@ Java request thread
 async Logback appender
       │
       ▼
-/var/log/app/application.log
+/var/log/app/app.log
       │ shared emptyDir
       ▼
 Fluent Bit sidecar
@@ -103,6 +105,7 @@ Elasticsearch
 Logback rotates daily and by size. Retained file history is capped at 1 GiB total. Remote log transport is outside the Java request path.
 
 The platform-level Fluent Bit still collects normal Kubernetes container logs. This sidecar exists for the explicit application file log.
+Its tail offset database lives on the Pod's shared volume, so a sidecar restart resumes without replaying the file.
 
 ## Private registry
 

@@ -62,6 +62,7 @@ pipeline {
                                 sh '''
                                   kubectl apply --dry-run=server -f app/k8s/fluent-bit-config.yaml
                                   kubectl apply --dry-run=server -f app/k8s/service.yaml
+                                  kubectl apply --dry-run=server -f app/k8s/service-monitor.yaml
                                   kubectl apply --dry-run=server -f app/k8s/ingress.yaml
                                   kubectl apply --dry-run=server -f app/k8s/deployment.yaml
                                 '''

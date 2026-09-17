@@ -3,6 +3,8 @@ kind: Service
 metadata:
   name: sample-java-app
   namespace: default
+  labels:
+    app: sample-java-app
 spec:
   type: ClusterIP
   ports:
@@ -12,3 +14,4 @@ spec:
     name: http
   selector:
     app: sample-java-app
+    track: stable

@@ -133,10 +133,22 @@ actual_response="$(<"${response_file}")"
   fail "HTTP response did not contain the supplied query parameter"
 pass "HTTP response contains the supplied query parameter"
 
-container_output="$(docker logs "${container_name}" 2>&1)"
-grep --fixed-strings --quiet "${expected_response}" <<<"${container_output}" ||
-  fail "application output did not contain the supplied query parameter"
-pass "application output contains the supplied query parameter"
+for _ in $(seq 1 10); do
+  if docker exec "${container_name}" grep --fixed-strings --quiet "${expected_response}" /var/log/app/app.log; then
+    break
+  fi
+  sleep 1
+done
+docker exec "${container_name}" grep --fixed-strings --quiet "${expected_response}" /var/log/app/app.log ||
+  fail "application file log did not contain the supplied query parameter"
+pass "application file log contains the supplied query parameter"
+
+curl --silent --show-error --fail --output "${response_file}" \
+  "http://127.0.0.1:${host_port}/actuator/prometheus" ||
+  fail "Prometheus endpoint is unavailable"
+grep --fixed-strings --quiet 'http_server_requests_seconds_count' "${response_file}" ||
+  fail "Prometheus endpoint does not expose HTTP request metrics"
+pass "Prometheus endpoint exposes HTTP request metrics"
 
 runtime_uid="$(docker exec "${container_name}" sh -c 'id -u')"
 [[ "${runtime_uid}" =~ ^[0-9]+$ && "${runtime_uid}" != "0" ]] ||
