@@ -18,12 +18,12 @@ pipeline {
     stages {
         stage('Test') {
             steps {
-                checkout scm
+                script {
+                    def scmVars = checkout scm
+                    env.COMMIT_SHA = scmVars.GIT_COMMIT
+                }
 
                 container('ci-tools') {
-                    script {
-                        env.COMMIT_SHA = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
-                    }
                     withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
                         sh 'sh delivery/ci/github-status.sh pending jenkins/ci "Jenkins CI running" "$COMMIT_SHA"'
                     }
