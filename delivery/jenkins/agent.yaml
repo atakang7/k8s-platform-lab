@@ -6,6 +6,8 @@ metadata:
 spec:
   serviceAccountName: jenkins-agent
   restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: node-3
   imagePullSecrets:
     - name: dockerhub-registry
   containers:
