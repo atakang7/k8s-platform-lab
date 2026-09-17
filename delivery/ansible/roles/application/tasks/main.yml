@@ -35,12 +35,12 @@
 
 - name: Wait for application rollout
   ansible.builtin.command:
-    cmd: kubectl rollout status deployment/sample-java-app --timeout=180s
+    cmd: kubectl -n default rollout status deployment/sample-java-app --timeout=180s
   changed_when: false
 
 - name: Confirm deployed image
   ansible.builtin.command:
-    cmd: kubectl get deployment sample-java-app -o jsonpath={.spec.template.spec.containers[?(@.name==\"app\")].image}
+    cmd: kubectl -n default get deployment sample-java-app -o jsonpath={.spec.template.spec.containers[?(@.name==\"app\")].image}
   register: deployed_image
   changed_when: false
 
