@@ -1,40 +1,39 @@
 # Application
 
-`app/` contains the Java service, container definition, runtime logging, and Kubernetes manifests.
+`app/` owns the Java service, container image definition, Kubernetes runtime manifests, probes, resource contract, and application file logging.
 
-## Runtime contract
+Full runtime design: [`docs/stage-04-application-runtime.md`](../docs/stage-04-application-runtime.md).
 
-- Java 11 Spring Boot application.
-- Listens on `9001`.
-- `GET /api/foos?val=<value>` returns `QueryStringValue: <value>` and writes the request to the application log.
-- Runs as non-root UID/GID `10001`.
-- Production images are deployed by immutable registry digest.
+## Request path
 
 ```text
-request
-   │
-   │ HTTPS
-   │
-app.lab.test
-   │
- ingress-nginx
-   │
- sample-java-app Service
-   │
-┌──┴───────────────────────────────────────────┐
-│ Deployment · 4 replicas                     │
-│                                             │
-│ worker node-2             worker node-3     │
-│ app + Fluent Bit          app + Fluent Bit  │
-│ app + Fluent Bit          app + Fluent Bit  │
-└──────────────────────────────────────────────┘
+                      app.lab.test
+                              │
+                              ▼
+                  ┌──────────────────────┐
+                  │ ingress-nginx        │
+                  │ wildcard TLS         │
+                  └──────────┬───────────┘
+                             ▼
+                  ┌──────────────────────┐
+                  │ sample-java-app      │
+                  │ ClusterIP :80        │
+                  └──────────┬───────────┘
+                             │ → :9001
+                ┌────────────┴────────────┐
+                ▼                         ▼
+       ┌─────────────────┐       ┌─────────────────┐
+       │ node-2          │       │ node-3          │
+       │ app + sidecar   │       │ app + sidecar   │
+       │ app + sidecar   │       │ app + sidecar   │
+       └─────────────────┘       └─────────────────┘
 ```
 
-The Deployment excludes the control plane and uses topology spread with `maxSkew: 1`. Rolling updates use `maxUnavailable: 0`; a rollout must keep the previous replicas available while replacement Pods become ready.
+The service listens on `9001`. `GET /api/foos?val=<value>` returns `QueryStringValue: <value>` and writes the request to the application log.
 
-## Build
+## Image
 
-Local application build:
+Local application checks:
 
 ```bash
 cd app
@@ -42,49 +41,99 @@ cd app
 ./mvnw package
 ```
 
-Container validation from the repository root:
+Full container contract from repository root:
 
 ```bash
 make container-validate
 ```
 
-The Dockerfile is multi-stage. The runtime image contains the JAR and Java runtime, not Maven, source code, or the compiler.
+`Dockerfile` is multi-stage. The final image contains the application JAR and Java runtime, not Maven, source code, or compiler tooling. The runtime process uses UID/GID `10001` and does not require root.
 
-## Kubernetes manifests
+Production releases are identified by registry digest, not by the image value committed in `k8s/deployment.yaml`. CI publishes the digest; CD renders the Deployment with that digest and verifies the live value after rollout.
 
-| File | Purpose |
-|---|---|
-| `k8s/deployment.yaml` | Four application Pods, probes, resources, topology spread, Fluent Bit sidecar |
-| `k8s/service.yaml` | ClusterIP service on port 80 to application port 9001 |
-| `k8s/ingress.yaml` | `app.lab.test` over the shared wildcard TLS certificate |
-| `k8s/fluent-bit-config.yaml` | Reads the application file log and ships it to Elasticsearch |
-| `k8s/registry-secret.yaml` | VSO declaration for the private Docker Hub pull secret |
-| `k8s/vault-connection.yaml` | Vault connection used by the application namespace |
+## Deployment contract
 
-Do not treat the image value committed in `deployment.yaml` as the release identifier. CD renders the manifest with the immutable digest produced by CI and asserts the running Deployment matches that digest.
+`k8s/deployment.yaml` maintains four replicas.
+
+```text
+                     Deployment · replicas 4
+                               │
+                 ┌─────────────┴─────────────┐
+                 │ topology maxSkew = 1      │
+                 │ control plane excluded    │
+                 └─────────────┬─────────────┘
+                               │
+                    ┌──────────┴──────────┐
+                    ▼                     ▼
+                 node-2                node-3
+                 2 Pods                2 Pods
+```
+
+Each Pod contains the Java app and a Fluent Bit sidecar. Both containers declare CPU and memory requests/limits and use non-root security settings.
+
+The stable rollout strategy is:
+
+```text
+maxUnavailable: 0
+maxSurge:       4
+```
+
+Replacement Pods must become Ready before old capacity is intentionally removed.
 
 ## Health
 
-The same lightweight endpoint is used with distinct values:
+| Probe | Path | Role |
+|---|---|---|
+| startup | `/api/foos?val=startup` | allows JVM initialization before liveness applies |
+| readiness | `/api/foos?val=ready` | gates Service traffic |
+| liveness | `/api/foos?val=liveness` | restarts a stuck process |
 
-| Probe | Request |
-|---|---|
-| startup | `/api/foos?val=startup` |
-| readiness | `/api/foos?val=ready` |
-| liveness | `/api/foos?val=liveness` |
+Readiness is the traffic decision. A running container is not considered ready until this probe passes.
 
-## Logging
-
-The application writes `/var/log/app/application.log` through an asynchronous Logback appender. Files rotate daily and by size, with the configured history capped at 1 GiB total.
-
-An `emptyDir` is shared with the per-Pod Fluent Bit sidecar:
+## File logging
 
 ```text
-Java process ── file log ── shared volume ── Fluent Bit ── Elasticsearch
+┌───────────────────────────────────────────────────┐
+│ application Pod                                   │
+│                                                   │
+│ Java app                                          │
+│   │                                               │
+│   │ async Logback                                 │
+│   ▼                                               │
+│ /var/log/app/application.log                      │
+│   │ shared emptyDir                               │
+│   ▼                                               │
+│ Fluent Bit sidecar ───────────────► Elasticsearch │
+└───────────────────────────────────────────────────┘
 ```
 
-This keeps application logging asynchronous and separates log transport from the Java process.
+Logback rotates daily and by size. Retained file history is capped at 1 GiB total. Remote log transport is outside the Java request path.
 
-## Deployment
+The platform-level Fluent Bit still collects normal Kubernetes container logs. This sidecar exists for the explicit application file log.
 
-Normal deployment is owned by [`delivery/`](../delivery/README.md). Do not manually replace the production image tag with an ad-hoc `kubectl set image`; the delivery pipeline carries the source commit and immutable image digest together.
+## Private registry
+
+`k8s/registry-secret.yaml` tells Vault Secrets Operator to materialize `secret/runtime/dockerhub` as the `dockerhub-registry` pull Secret.
+
+Bootstrap the application Vault identity after Vault and VSO are healthy:
+
+```bash
+./app/k8s/bootstrap-registry-auth.sh
+```
+
+Do not commit registry credentials.
+
+## Manifests
+
+| File | Owns |
+|---|---|
+| `k8s/deployment.yaml` | replicas, placement, probes, resources, security, sidecar |
+| `k8s/service.yaml` | `:80` → application `:9001` |
+| `k8s/ingress.yaml` | `app.lab.test` + wildcard TLS |
+| `k8s/fluent-bit-config.yaml` | application file-log shipping |
+| `k8s/registry-secret.yaml` | Vault-backed Docker Hub pull Secret |
+| `k8s/vault-connection.yaml` | application namespace Vault connection |
+
+## Release ownership
+
+Normal deployment is owned by [`delivery/`](../delivery/README.md). Avoid ad-hoc `kubectl set image` changes for production releases; they break the Git-SHA + image-digest release identity.
