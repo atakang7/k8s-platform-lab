@@ -20,15 +20,17 @@ GitHub · main
 │      └── Ansible syntax check ──────┘                       │
 │      │                                                      │
 │      ▼                                                      │
-│ same source revision + Docker build context                 │
+│ BuildKit solve #1                                           │
+│ same source + app/ context                                  │
 │      │                                                      │
-│      ├──► BuildKit solve #1 ─► app-image.tar ─► Trivy/SBOM │
-│      │                                      scan must finish │
+│      ▼                                                      │
+│ app-image.tar ──► Trivy HIGH/CRITICAL report + SBOM        │
+│      │             scan step completes                     │
+│      ▼                                                      │
+│ BuildKit solve #2 · same source/context · warm cache        │
 │      │                                                      │
-│      └──► BuildKit solve #2 · warm cache ─► registry push  │
-│                                             │               │
-│                                             ▼               │
-│                               repository@sha256:<digest>     │
+│      ▼                                                      │
+│ registry push ──► repository@sha256:<digest>                │
 └───────────────────────────┬─────────────────────────────────┘
                             │ async enqueue
                             │ exact commit SHA + image digest
@@ -52,7 +54,7 @@ GitHub · main
 └─────────────────────────────────────────────────────────────┘
 ```
 
-The second BuildKit solve starts only after the scan stage succeeds. It uses the same checked-out source and build context and reuses BuildKit's warm state; the local tar itself is not pushed.
+The local tar is scan input only. The registry publication is a second BuildKit solve after scanning, against the same checked-out source and build context, with the warm BuildKit state reused.
 
 The release identity is the pair:
 
@@ -117,23 +119,24 @@ The first BuildKit solve exports a local Docker archive for scanning. Publicatio
 ```text
 checked-out commit + app/ context
              │
-             ├──► BuildKit solve #1
-             │          │
-             │          ▼
-             │     app-image.tar
-             │          │
-             │          ▼
-             │     Trivy scan + CycloneDX SBOM
-             │          │
-             │          │ scan completed
-             │          ▼
-             └──► BuildKit solve #2 · warm cache
-                        │
-                        ▼
-                   registry push
-                        │
-                        ▼
-                immutable registry digest
+             ▼
+      BuildKit solve #1
+             │
+             ▼
+        app-image.tar
+             │
+             ▼
+Trivy scan + CycloneDX SBOM
+             │ scan stage completed
+             ▼
+      BuildKit solve #2
+      same source + warm cache
+             │
+             ▼
+        registry push
+             │
+             ▼
+ immutable registry digest
 ```
 
 Jenkins archives the SBOM.
