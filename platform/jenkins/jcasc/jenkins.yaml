@@ -57,7 +57,7 @@ jobs:
               }
             }
             scriptPath('delivery/Jenkinsfile.build')
-            lightweight(true)
+            lightweight(false)
           }
         }
       }
