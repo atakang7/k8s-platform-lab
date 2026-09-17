@@ -10,7 +10,7 @@ def timed(String label, Closure body) {
 }
 
 pipeline {
-    agent { label 'lab-ci-build' }
+    agent { label 'lab-ci-runner' }
     options {
         skipDefaultCheckout(true)
         disableConcurrentBuilds()
@@ -139,15 +139,15 @@ pipeline {
             }
         }
 
-        stage('Deploy') {
+        stage('Trigger CD') {
             steps {
                 script {
-                    timed('Deploy.DownstreamJob') {
+                    timed('CD.Enqueue') {
                         def imageRef = readFile('image_ref.env').trim().split('=', 2)[1]
                         build job: 'lab-deploy', parameters: [
                             string(name: 'IMAGE_REF', value: imageRef),
                             string(name: 'COMMIT_SHA', value: env.COMMIT_SHA)
-                        ], wait: true, propagate: true
+                        ], wait: false
                     }
                 }
             }
