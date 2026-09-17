@@ -1,90 +1,34 @@
-# Stage 9 sample manifest: canary release with ingress-nginx.
-# Illustrative only; not part of the live sample-java-app deployment.
+# Stage 9 sample: canary release for the existing sample-java-app.
+#
+# The current sample-java-app Deployment, Service, and primary Ingress remain
+# the stable path. This file only represents the temporary candidate side of
+# the release. The candidate should otherwise keep the same production pod
+# conventions as the stable app (security, logging, probes, image auth, etc.).
 
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: critical-app-v1
-spec:
-  replicas: 4
-  selector:
-    matchLabels:
-      app: critical-app
-      version: v1
-  template:
-    metadata:
-      labels:
-        app: critical-app
-        version: v1
-    spec:
-      containers:
-        - name: app
-          image: example/critical-app:v1
-          ports:
-            - containerPort: 8080
-          resources:
-            requests:
-              cpu: "250m"
-              memory: "256Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: 8080
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: critical-app-stable
-spec:
-  selector:
-    app: critical-app
-    version: v1
-  ports:
-    - port: 80
-      targetPort: 8080
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: critical-app-stable
-spec:
-  ingressClassName: nginx
-  rules:
-    - host: critical.lab.test
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: critical-app-stable
-                port:
-                  number: 80
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: critical-app-v2
+  name: sample-java-app-canary
+  namespace: default
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: critical-app
-      version: v2
+      app: sample-java-app
+      track: canary
   template:
     metadata:
       labels:
-        app: critical-app
-        version: v2
+        app: sample-java-app
+        track: canary
     spec:
+      imagePullSecrets:
+        - name: dockerhub-registry
       containers:
         - name: app
-          image: example/critical-app:v2
+          image: docker.io/atakangul/sample-java-app:<candidate-digest-or-tag>
           ports:
-            - containerPort: 8080
+            - containerPort: 9001
           resources:
             requests:
               cpu: "250m"
@@ -92,40 +36,59 @@ spec:
             limits:
               cpu: "500m"
               memory: "512Mi"
+          startupProbe:
+            httpGet:
+              path: /api/foos?val=startup
+              port: 9001
+            failureThreshold: 60
+            periodSeconds: 2
           readinessProbe:
             httpGet:
-              path: /healthz
-              port: 8080
+              path: /api/foos?val=ready
+              port: 9001
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /api/foos?val=liveness
+              port: 9001
+            periodSeconds: 10
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: critical-app-canary
+  name: sample-java-app-canary
+  namespace: default
 spec:
   selector:
-    app: critical-app
-    version: v2
+    app: sample-java-app
+    track: canary
   ports:
-    - port: 80
-      targetPort: 8080
+    - name: http
+      port: 80
+      targetPort: 9001
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: critical-app-canary
+  name: sample-java-app-canary
+  namespace: default
   annotations:
+    kubernetes.io/ingress.class: nginx
     nginx.ingress.kubernetes.io/canary: "true"
     nginx.ingress.kubernetes.io/canary-weight: "5"
 spec:
-  ingressClassName: nginx
+  tls:
+    - hosts:
+        - app.lab.test
+      secretName: lab-wildcard
   rules:
-    - host: critical.lab.test
+    - host: app.lab.test
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: critical-app-canary
+                name: sample-java-app-canary
                 port:
                   number: 80
