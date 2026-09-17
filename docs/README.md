@@ -35,7 +35,7 @@ The documentation is organized by operational layer, not by repository history. 
                        ▼
 ┌──────────────────────────────────────────────┐
 │ 07 · Operations + validation                 │
-│ bootstrap · recovery · checks · clean rebuild│
+│ bootstrap · recovery · validation · rebuild  │
 └──────────────────────────────────────────────┘
 ```
 
