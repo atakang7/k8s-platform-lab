@@ -6,6 +6,7 @@ pipeline {
     }
     parameters {
         string(name: 'IMAGE_REF', description: 'Immutable image reference repository@sha256:...')
+        string(name: 'COMMIT_SHA', description: 'Exact Git commit SHA associated with this deployment')
     }
     options {
         disableConcurrentBuilds()
@@ -18,12 +19,29 @@ pipeline {
                     if (!(params.IMAGE_REF ==~ /^.+@sha256:[0-9a-f]{64}$/)) {
                         error('IMAGE_REF must be an immutable sha256 digest reference')
                     }
+                    if (!(params.COMMIT_SHA ==~ /^[0-9a-f]{40}$/)) {
+                        error('COMMIT_SHA must be a full Git SHA')
+                    }
                 }
             }
         }
         stage('Checkout') {
             steps {
                 checkout scm
+                sh "git checkout --detach ${params.COMMIT_SHA}"
+            }
+        }
+        stage('Report Deploy Pending') {
+            steps {
+                container('ansible') {
+                    withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                        sh '''
+                          set +x
+                          apk add --no-cache curl >/dev/null
+                          sh delivery/ci/github-status.sh pending jenkins/deploy "Jenkins deploy running" "$COMMIT_SHA"
+                        '''
+                    }
+                }
             }
         }
         stage('Deploy with Ansible') {
@@ -39,6 +57,30 @@ pipeline {
                           ansible-playbook delivery/ansible/deploy.yml -e "image_ref=${IMAGE_REF}"
                         '''
                     }
+                }
+            }
+        }
+    }
+    post {
+        success {
+            container('ansible') {
+                withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                    sh '''
+                      set +x
+                      apk add --no-cache curl >/dev/null
+                      sh delivery/ci/github-status.sh success jenkins/deploy "Jenkins deploy passed" "$COMMIT_SHA"
+                    '''
+                }
+            }
+        }
+        failure {
+            container('ansible') {
+                withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                    sh '''
+                      set +x
+                      apk add --no-cache curl >/dev/null
+                      sh delivery/ci/github-status.sh failure jenkins/deploy "Jenkins deploy failed" "$COMMIT_SHA" || true
+                    '''
                 }
             }
         }
