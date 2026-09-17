@@ -10,11 +10,7 @@ def timed(String label, Closure body) {
 }
 
 pipeline {
-    agent {
-        kubernetes {
-            yamlFile 'delivery/jenkins/agent.yaml'
-        }
-    }
+    agent { label 'lab-ci-warm' }
     options {
         skipDefaultCheckout(true)
         disableConcurrentBuilds()
@@ -91,19 +87,9 @@ pipeline {
         stage('Build') {
             steps {
                 script {
-                    timed('Build.BuildAndPush') {
+                    timed('Build.LocalImage') {
                         container('buildkit') {
-                            withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                                sh '''
-                                  set +x
-                                  export DOCKER_CONFIG="$(mktemp -d)"
-                                  trap 'rm -rf "$DOCKER_CONFIG"' EXIT
-                                  AUTH="$(printf '%s:%s' "$DOCKER_USER" "$DOCKER_PASS" | base64 | tr -d '\\n')"
-                                  printf '{"auths":{"docker.io":{"auth":"%s"},"https://index.docker.io/v1/":{"auth":"%s"}}}' "$AUTH" "$AUTH" > "$DOCKER_CONFIG/config.json"
-                                  chmod 600 "$DOCKER_CONFIG/config.json"
-                                  delivery/ci/build-image.sh
-                                '''
-                            }
+                            sh 'delivery/ci/build-image.sh'
                         }
                     }
                 }
@@ -115,8 +101,22 @@ pipeline {
                 script {
                     timed('Publish.TrivyAndSBOM') {
                         container('ci-tools') {
+                            sh 'delivery/ci/scan-image.sh'
+                        }
+                    }
+
+                    timed('Publish.BuildKitPush') {
+                        container('buildkit') {
                             withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                                sh 'delivery/ci/scan-image.sh'
+                                sh '''
+                                  set +x
+                                  export DOCKER_CONFIG="$(mktemp -d)"
+                                  trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+                                  AUTH="$(printf '%s:%s' "$DOCKER_USER" "$DOCKER_PASS" | base64 | tr -d '\n')"
+                                  printf '{"auths":{"docker.io":{"auth":"%s"},"https://index.docker.io/v1/":{"auth":"%s"}}}' "$AUTH" "$AUTH" > "$DOCKER_CONFIG/config.json"
+                                  chmod 600 "$DOCKER_CONFIG/config.json"
+                                  delivery/ci/publish-image.sh
+                                '''
                             }
                         }
                     }
