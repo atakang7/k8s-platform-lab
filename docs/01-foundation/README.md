@@ -59,10 +59,11 @@ The reference versions and network ranges are declared in [`infra/ansible/group_
 | Setting | Value |
 |---|---|
 | Kubernetes | `1.34.1` |
+| containerd | `1.7.24-0ubuntu1~20.04.2` |
 | Calico | `3.32.2` |
 | VM network | `10.50.0.0/24` |
-| Pod network | `10.244.0.0/16` |
-| Service network | `10.96.0.0/12` |
+| Pod network | `10.60.0.0/16` |
+| Service network | `10.70.0.0/16` |
 | API endpoint | `10.50.0.10:6443` |
 
 ## Resource layout

@@ -9,51 +9,6 @@ rescue ArgumentError
   abort "#{name} must be an integer, got #{value.inspect}"
 end
 
-def existing_machine_memory_mb(name)
-  id_path = File.join(__dir__, ".vagrant/machines", name, "virtualbox/id")
-  return unless File.file?(id_path)
-
-  clean_environment = { "LD_LIBRARY_PATH" => nil, "LD_PRELOAD" => nil }
-  details, status = Open3.capture2(
-    clean_environment,
-    "VBoxManage", "showvminfo", File.read(id_path).strip, "--machinereadable"
-  )
-  return unless status.success?
-
-  details[/^memory=(\d+)$/, 1]&.to_i
-end
-
-def available_memory_mb
-  if File.readable?("/proc/meminfo")
-    value_kb = File.read("/proc/meminfo")[/^MemAvailable:\s+(\d+)\s+kB$/, 1]
-    return value_kb.to_i / 1024 if value_kb
-  end
-
-  value_bytes = `sysctl -n hw.memsize 2>/dev/null`.strip
-  return value_bytes.to_i / 1024 / 1024 unless value_bytes.empty?
-
-  abort "Unable to detect host memory. Set MASTER_MEMORY and WORKER_MEMORY explicitly."
-end
-
-def adaptive_memory(available_mb)
-  return [4096, 3072, "large"] if available_mb >= 20_000
-  return [3072, 2560, "medium"] if available_mb >= 12_000
-  return [2560, 2048, "small"] if available_mb >= 8_000
-  return [2048, 1536, "constrained"] if available_mb >= 7_000
-  return [2048, 1536, "low-memory"] if available_mb >= 6_000
-
-  unless (ARGV & %w[up reload resume]).any? &&
-         !(ENV.key?("MASTER_MEMORY") && ENV.key?("WORKER_MEMORY"))
-    return [2048, 1536, "low-memory"]
-  end
-
-  abort <<~MESSAGE
-    Only #{available_mb} MB of host memory is available. At least 6000 MB is required
-    to start the default three-node lab. Free memory or set MASTER_MEMORY and
-    WORKER_MEMORY explicitly if you accept the risk of host pressure.
-  MESSAGE
-end
-
 IMAGE_NAME = ENV.fetch("IMAGE_NAME", "ubuntu/focal64")
 BASE_IP = ENV.fetch("BASE_IP", "10.50.0")
 EDGE_CIDR = IPAddr.new("192.168.56.0/24")
@@ -96,16 +51,6 @@ end
 
 check_edge_network! if (ARGV & %w[up reload]).any?
 
-available_mb = available_memory_mb
-existing_master_memory = existing_machine_memory_mb("node-1")
-existing_worker_memory = existing_machine_memory_mb("node-3")
-if existing_master_memory && existing_worker_memory
-  default_master_memory = existing_master_memory
-  default_worker_memory = existing_worker_memory
-  memory_tier = "existing"
-else
-  default_master_memory, default_worker_memory, memory_tier = adaptive_memory(available_mb)
-end
 master_memory = integer_env("MASTER_MEMORY", 2048)
 worker_memory = integer_env("WORKER_MEMORY", 4096)
 node_2_memory = integer_env("NODE_2_MEMORY", 2048)
@@ -113,11 +58,11 @@ master_cpus = integer_env("MASTER_CPUS", 2)
 worker_cpus = integer_env("WORKER_CPUS", 2)
 
 puts <<~PLAN
-  Stage 1 resource plan (#{memory_tier} tier, #{available_mb} MB host memory currently available)
+  Stage 1 resource plan (deterministic defaults)
     node-1: #{master_cpus} CPU / #{master_memory} MB RAM (control plane)
     node-2: #{worker_cpus} CPU / #{node_2_memory} MB RAM (worker, locally constrained)
     node-3: #{worker_cpus} CPU / #{worker_memory} MB RAM (worker)
-  ENV overrides take precedence over adaptive defaults.
+  ENV overrides take precedence over deterministic defaults.
 PLAN
 
 Vagrant.configure("2") do |config|

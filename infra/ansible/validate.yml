@@ -16,6 +16,25 @@
         success_msg: "PASS | containerd is healthy on {{ inventory_hostname }}"
         fail_msg: "FAIL | containerd is not healthy on {{ inventory_hostname }}"
 
+    - name: Read installed containerd package version
+      ansible.builtin.command: dpkg-query -W -f=${Version} containerd
+      register: containerd_version
+      changed_when: false
+
+    - name: Verify pinned containerd version
+      ansible.builtin.assert:
+        that: containerd_version.stdout == containerd_package_version
+        fail_msg: "FAIL | containerd version differs from the pinned package"
+
+    - name: Verify containerd CRI responds
+      ansible.builtin.shell: |
+        set -o pipefail
+        ctr plugins ls | awk '$1 == "io.containerd.grpc.v1" && $2 == "cri" && $NF == "ok" { found=1 } END { exit !found }'
+      args:
+        executable: /bin/bash
+      register: containerd_cri
+      changed_when: false
+
 - name: Validate Kubernetes outcomes
   hosts: control_plane
   become: true

@@ -1,7 +1,7 @@
 ---
 - name: Install containerd
   ansible.builtin.apt:
-    name: containerd
+    name: "containerd={{ containerd_package_version }}"
     state: present
     update_cache: true
 
@@ -36,4 +36,3 @@
     name: containerd
     enabled: true
     state: started
-

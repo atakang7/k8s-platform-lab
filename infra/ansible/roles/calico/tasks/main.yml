@@ -40,6 +40,14 @@
                     value: "cidr={{ vm_cidr }}"
   when: calico_upstream.changed or calico_settings.changed or not calico_manifest.stat.exists
 
+- name: Assert rendered Calico Pod CIDR
+  ansible.builtin.command: "grep -Fq 'value: \"{{ pod_cidr }}\"' /etc/kubernetes/calico.yaml"
+  changed_when: false
+
+- name: Assert rendered Calico node autodetection
+  ansible.builtin.command: "grep -Fq 'value: \"cidr={{ vm_cidr }}\"' /etc/kubernetes/calico.yaml"
+  changed_when: false
+
 - name: Apply Calico
   ansible.builtin.command: kubectl apply -f /etc/kubernetes/calico.yaml
   environment:

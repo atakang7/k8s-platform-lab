@@ -38,6 +38,10 @@
       provisioner: rancher.io/local-path
   when: storage_upstream.changed or storage_settings.changed or not storage_manifest.stat.exists
 
+- name: Assert rendered default StorageClass annotation
+  ansible.builtin.command: "grep -Fq 'storageclass.kubernetes.io/is-default-class: \"true\"' /etc/kubernetes/local-path-storage.yaml"
+  changed_when: false
+
 - name: Apply local-path storage
   ansible.builtin.command: kubectl apply -f /etc/kubernetes/local-path-storage.yaml
   environment:

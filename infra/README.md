@@ -42,8 +42,8 @@ The control plane has no host-edge NIC. Cluster networks are explicit:
 | Plane | CIDR |
 |---|---|
 | VM | `10.50.0.0/24` |
-| Pod | `10.244.0.0/16` |
-| Service | `10.96.0.0/12` |
+| Pod | `10.60.0.0/16` |
+| Service | `10.70.0.0/16` |
 | edge | `192.168.56.0/24` |
 
 ## Provisioning
