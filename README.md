@@ -7,23 +7,29 @@ This repository is the source of truth for the infrastructure, Kubernetes platfo
 
 ┌──────────┐   signs   ┌────────────────────┐   stored in   ┌─────────┐
 │ local CA │──────────►│ wildcard TLS cert  │──────────────►│  Vault  │
-└──────────┘           └────────────────────┘               └────┬────┘
-                                                                 │ Vault API
-                                                                 ▼
-                                                        ┌──────────────────┐
-                                                        │ Vault Secrets    │
-                                                        │ Operator         │
-                                                        └────────┬─────────┘
-                                                                 │
-                                                                 ▼
-                                                        Kubernetes Secrets
+└──────────┘           └────────────────────┘               └─────────┘
 
-┌────────────────────┐   signed RFC2136 / TSIG   ┌──────────────────┐
-│ BIND9              │◄──────────────────────────│ ExternalDNS      │
-│ lab.test    │                           │ watches K8s      │
-└────────────────────┘                           └──────────────────┘
+┌────────────────────┐
+│ BIND9              │
+│ lab.test    │
+└────────────────────┘
 
-                         KUBERNETES / DATA PATH
+                       KUBERNETES CONTROL PLANE
+
+┌──────────────────┐      Vault API       ┌─────────┐
+│ Vault Secrets    │◄─────────────────────│  Vault  │
+│ Operator         │                      └─────────┘
+└────────┬─────────┘
+         │
+         ▼
+Kubernetes Secrets
+
+┌──────────────────┐   signed RFC2136 / TSIG   ┌────────────────────┐
+│ ExternalDNS      │──────────────────────────►│ BIND9              │
+│ watches K8s      │                           │ lab.test    │
+└──────────────────┘                           └────────────────────┘
+
+                         KUBERNETES DATA PATH
 
 ┌─────────┐   assigns + L2 advertises   ┌────────────────────────────┐
 │ MetalLB │────────────────────────────►│ ingress Service · .200     │
