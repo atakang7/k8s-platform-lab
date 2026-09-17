@@ -12,7 +12,7 @@ spec:
     - name: dockerhub-registry
   containers:
     - name: ci-tools
-      image: docker.io/atakangul/lab-ci-agent:v1
+      image: docker.io/atakangul/lab-ci-agent@sha256:7ffa97e62c587bb1b8884b2512265e47bba87ae80bd6f61cfa2e41dcc0d6c5de
       imagePullPolicy: IfNotPresent
       command: ["sh", "-c", "sleep infinity"]
       tty: true
