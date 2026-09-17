@@ -10,7 +10,7 @@ controller:
     - configuration-as-code:2121.v86fe99d4b_b_a_b_
     - credentials-binding:728.v902a_273b_8947
     - job-dsl:3732.v9a_c49a_61a_313
-  installLatestPlugins: false
+  installLatestPlugins: true
   containerEnv:
     - name: GITHUB_USERNAME
       valueFrom:

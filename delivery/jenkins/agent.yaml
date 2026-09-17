@@ -30,7 +30,7 @@ spec:
           cpu: 100m
           memory: 64Mi
     - name: kubectl
-      image: bitnami/kubectl:1.36
+      image: bitnami/kubectl:latest
       command: ["sh", "-c", "sleep infinity"]
       tty: true
       resources:
