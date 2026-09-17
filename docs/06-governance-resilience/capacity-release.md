@@ -7,27 +7,20 @@ The cluster has fixed nodes. The design therefore separates guaranteed baseline 
 The existing `sample-java-app` is the critical real-time workload.
 
 ```text
-                    FIXED WORKER CAPACITY
+                         FIXED WORKER CAPACITY
 
-       ┌────────────────────────────────────────────┐
-      /                                            /│
-     / critical baseline                         / │
-    └────────────────────────────────────────────┘  │
-    │ sample-java-app                              │
-    │ 4 replicas minimum                           │
-    │ CPU + memory requests                        │
-    │ spread across node-2 / node-3               │
-    └───────────────────────────────────────────────┘
-                         │
-                         │ remaining capacity
-                         ▼
-              ┌──────────────────────┐
-             /                      /│
-            / batch Job / CronJob  / │
-           └──────────────────────┘  │
-           │ low priority          │ /
-           │ restartable          │/
-           └──────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│ critical baseline                                                  │
+│                                                                    │
+│ sample-java-app                                                    │
+│ 4 running replicas · explicit CPU/memory requests                  │
+│ spread across node-2 / node-3                                      │
+├────────────────────────────────────────────────────────────────────┤
+│ remaining capacity                                                 │
+│                                                                    │
+│ low-priority batch Job / CronJob Pods                              │
+│ restartable / idempotent                                           │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 The minimum capacity is not created by PriorityClass. It exists because four application replicas are already scheduled with explicit requests.
@@ -43,32 +36,32 @@ load rises
 HPA · min 4 / max 8 · target CPU 65%
    │
    ▼
-requests more application replicas
+requests additional application replicas
    │
    ▼
 free worker capacity?
    │
-   ├── yes ──► schedule new replicas
+   ├── yes ──► scheduler places new replicas
    │
    └── no
        │
        ▼
-high-priority app Pods remain Pending briefly
+new high-priority app Pod remains Pending
        │
        ▼
 scheduler evaluates lower-priority victims
        │
        ▼
-interruptible batch Pods are preempted
+interruptible batch Pod is preempted
        │
        ▼
-capacity becomes available
+resources become available
        │
        ▼
-critical replica schedules
+critical app Pod schedules
        │
        ▼
-batch work retries later
+batch work retries / resumes later
 ```
 
 The reference HPA scales up by up to two Pods or 100% per minute and uses a 300-second scale-down stabilization window. Fast scale-up protects the service during demand spikes; delayed scale-down avoids immediately collapsing capacity after a short dip.
@@ -103,25 +96,25 @@ For a high-risk release, the stable version stays in place and a candidate is in
                                   ▼
                          ingress-nginx
                                   │
-                         same host + path
+                    same host + same path
                                   │
-                    ┌─────────────┴─────────────┐
-                    │ weighted traffic          │
-                    │                           │
-                  95%                           5%
-                    │                           │
-                    ▼                           ▼
-          ┌──────────────────┐        ┌──────────────────┐
-         / stable Service   /│       / canary Service   /│
-        └──────────────────┘ │      └──────────────────┘ │
-        │ current version  │ /      │ candidate version│ /
-        └────────┬─────────┘/       └────────┬─────────┘/
-                 │                           │
-                 ▼                           ▼
-             stable Pods                 canary Pod(s)
+                 ┌────────────────┴────────────────┐
+                 │                                 │
+                 ▼                                 ▼
+        stable Ingress                    canary Ingress
+        normal route                      canary=true
+                                          weight=5
+                 │                                 │
+               ~95%                               ~5%
+                 │                                 │
+                 ▼                                 ▼
+        stable Service                     canary Service
+                 │                                 │
+                 ▼                                 ▼
+          stable Pods                       candidate Pod(s)
 ```
 
-The canary ingress uses ingress-nginx canary annotations for the same host/path.
+The traffic split is configured by ingress-nginx canary annotations on the second Ingress for the same host/path.
 
 ## Promotion flow
 
@@ -134,17 +127,29 @@ candidate deployed
       ▼
 health · readiness · errors · latency · restarts acceptable?
       │
-      ├── no ──► weight 0 / remove canary ingress
-      │                   │
-      │                   └── stable version keeps serving
+      ├── no ──► set weight 0 / remove canary Ingress
+      │                         │
+      │                         ▼
+      │                  stable keeps serving
       │
-      ▼ yes
-10% → 25% → 50% → 100%
-      │
-      ▼
+      └── yes
+           │
+           ▼
+          10%
+           │
+           ▼
+          25%
+           │
+           ▼
+          50%
+           │
+           ▼
+         100%
+           │
+           ▼
 promote candidate through normal stable release path
-      │
-      ▼
+           │
+           ▼
 remove temporary canary Deployment / Service / Ingress
 ```
 
@@ -162,7 +167,10 @@ set canary weight to 0
 or remove canary Ingress
       │
       ▼
-all traffic returns to stable Service
+ingress-nginx routes requests to stable Ingress only
+      │
+      ▼
+stable Service / Pods continue serving
 ```
 
 This is the main risk reduction: the known-good release remains present while the candidate is evaluated.
