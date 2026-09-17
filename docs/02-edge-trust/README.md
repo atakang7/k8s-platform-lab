@@ -27,18 +27,14 @@ ExternalDNS is a control-plane component. It creates DNS records; it is not in t
 ## HTTPS request path
 
 ```text
-MetalLB controller / speakers
-        │ assigns + L2-advertises 192.168.56.200 on worker edge network
-        ▼
+operator / browser
+       │
+       │ HTTPS · SNI/Host: app.lab.test
+       ▼
 ┌──────────────────────────────────────────────┐
-│ ingress-nginx LoadBalancer Service           │
-│ VIP · 192.168.56.200                         │
-└──────────────────────┬───────────────────────┘
-                       ▲
-                       │ HTTPS · SNI/Host: app.lab.test
-                       │
-              operator / browser
-
+│ ingress-nginx LoadBalancer Service           │◄──── MetalLB
+│ VIP · 192.168.56.200                         │      assigns + L2-advertises VIP
+└──────────────────────┬───────────────────────┘      on worker edge network
                        │ Service routing
                        ▼
              ingress-nginx controller Pod
