@@ -1,23 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${DOCKER_USER:?DOCKER_USER is required}"
-: "${DOCKER_PASS:?DOCKER_PASS is required}"
+[ -f app-image.tar ] || { echo "app-image.tar missing" >&2; exit 1; }
 
-IMAGE_REF="$(sed -n 's/^IMAGE_REF=//p' image_ref.env | head -n1)"
-[ -n "$IMAGE_REF" ] || { echo "IMAGE_REF missing from image_ref.env" >&2; exit 1; }
+echo "==> Scanning local image before publish and generating CycloneDX SBOM..."
 
-echo "==> Scanning published image and generating CycloneDX SBOM..."
-
-export TRIVY_USERNAME="$DOCKER_USER"
-export TRIVY_PASSWORD="$DOCKER_PASS"
-trivy image "$IMAGE_REF" \
+trivy image --input app-image.tar \
     --scanners vuln \
     --severity HIGH,CRITICAL \
-    --exit-code 0 \
+    --exit-code "${TRIVY_EXIT_CODE:-0}" \
     --format cyclonedx \
     --output sbom.json \
     --no-progress
-unset TRIVY_USERNAME TRIVY_PASSWORD
 
-echo "Security scan complete; SBOM written to sbom.json"
+echo "Pre-publish security scan complete; SBOM written to sbom.json"
