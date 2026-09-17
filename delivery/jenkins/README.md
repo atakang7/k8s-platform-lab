@@ -32,5 +32,3 @@ The agent image contains the tools required by pipeline steps. BuildKit itself r
 5. Run `make jenkins-up`.
 
 Do not change the live Pod template in Jenkins and leave JCasC behind. The digest in Git is the source of truth.
-
-`agent.yaml` is a standalone agent definition/reference; the active templates are owned by JCasC.

@@ -39,12 +39,10 @@ The local tar is scan input only. `publish-image.sh` performs a second BuildKit 
 | File | Contract |
 |---|---|
 | `test.sh` | application tests must pass |
-| `lint.sh` | static repository/config checks |
 | `build-image.sh` | BuildKit exports the local scan candidate |
 | `scan-image.sh` | scans before publish and writes `sbom.json` |
 | `publish-image.sh` | rebuilds from warm cache, pushes, records immutable digest |
 | `github-status.sh` | updates commit status contexts |
-| `benchmark-build-cache.sh` | build-cache measurement only |
 
 Trivy scans HIGH/CRITICAL findings but is report-only by default because `TRIVY_EXIT_CODE` defaults to `0`.
 
