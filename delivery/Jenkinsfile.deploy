@@ -33,26 +33,19 @@ pipeline {
         }
         stage('Report Deploy Pending') {
             steps {
-                container('ansible') {
+                container('ci-tools') {
                     withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                        sh '''
-                          set +x
-                          apk add --no-cache curl >/dev/null
-                          sh delivery/ci/github-status.sh pending jenkins/deploy "Jenkins deploy running" "$COMMIT_SHA"
-                        '''
+                        sh 'sh delivery/ci/github-status.sh pending jenkins/deploy "Jenkins deploy running" "$COMMIT_SHA"'
                     }
                 }
             }
         }
         stage('Deploy with Ansible') {
             steps {
-                container('ansible') {
+                container('ci-tools') {
                     withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
                         sh '''
                           set -eu
-                          apk add --no-cache ansible curl python3 >/dev/null
-                          curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl
-                          chmod +x /usr/local/bin/kubectl
                           export K8S_AUTH_KUBECONFIG="$KUBECONFIG"
                           ansible-playbook delivery/ansible/deploy.yml -e "image_ref=${IMAGE_REF}"
                         '''
@@ -63,24 +56,16 @@ pipeline {
     }
     post {
         success {
-            container('ansible') {
+            container('ci-tools') {
                 withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                    sh '''
-                      set +x
-                      apk add --no-cache curl >/dev/null
-                      sh delivery/ci/github-status.sh success jenkins/deploy "Jenkins deploy passed" "$COMMIT_SHA"
-                    '''
+                    sh 'sh delivery/ci/github-status.sh success jenkins/deploy "Jenkins deploy passed" "$COMMIT_SHA"'
                 }
             }
         }
         failure {
-            container('ansible') {
+            container('ci-tools') {
                 withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                    sh '''
-                      set +x
-                      apk add --no-cache curl >/dev/null
-                      sh delivery/ci/github-status.sh failure jenkins/deploy "Jenkins deploy failed" "$COMMIT_SHA" || true
-                    '''
+                    sh 'sh delivery/ci/github-status.sh failure jenkins/deploy "Jenkins deploy failed" "$COMMIT_SHA" || true'
                 }
             }
         }
