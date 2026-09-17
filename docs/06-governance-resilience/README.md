@@ -3,21 +3,41 @@
 This layer defines what workloads are allowed to enter the cluster and how critical workloads behave when capacity or release risk becomes the constraint.
 
 ```text
-                        Kubernetes API
-                             │
-                ┌────────────┴────────────┐
-                │                         │
-                ▼                         ▼
-      admission governance       runtime resilience
-                │                         │
-                ▼                         ▼
- CPU + memory requests      baseline capacity + HPA
- must exist on Deployments  priority + preemption
-                            PDB + topology spread
-                            canary traffic shifting
+DESIRED-STATE CONTROL
+
+kubectl / controller
+        │
+        ▼
+Kubernetes API server
+        │
+        ▼
+validating admission webhook
+        │
+        ├── invalid ──► reject write
+        │
+        └── valid ────► continue admission / persist
 ```
 
-These are different controls. Admission rejects invalid desired state before it is stored. Scheduling and release controls decide how valid workloads share capacity and how new versions receive traffic.
+```text
+RUNTIME CONTROL
+
+metrics ──► HPA ──► desired replicas
+                     │
+                     ▼
+                  scheduler
+                     │
+         priority / preemption / spread
+                     │
+                     ▼
+               running Pods
+                     │
+                     ▼
+             ingress traffic
+                     │
+             stable / canary split
+```
+
+These are different controls. Admission rejects invalid desired state before it is stored. Scheduling, autoscaling, disruption protection, and traffic shifting operate on valid runtime state after admission.
 
 ## Pages
 
