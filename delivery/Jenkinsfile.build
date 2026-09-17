@@ -10,7 +10,7 @@ def timed(String label, Closure body) {
 }
 
 pipeline {
-    agent { label 'lab-ci-warm' }
+    agent { label 'lab-ci-build' }
     options {
         skipDefaultCheckout(true)
         disableConcurrentBuilds()
