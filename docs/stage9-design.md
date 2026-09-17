@@ -1,59 +1,87 @@
 # Stage 9 — Resource and Release Design
 
-Stage 9 answers the two design questions from the requirements. These manifests are illustrative architecture samples; they are not part of the live application deployment.
+Stage 9 answers the two design questions from the requirements. It does not introduce another production platform. The existing `sample-java-app` is treated as App X; App Y is modeled as interruptible batch work.
 
-## 1. Fixed-capacity cluster: App X vs App Y
+## 1. Fixed-capacity cluster: protect App X, let App Y yield
 
-### Goal
+### Model
 
-App X is real-time, highly available, and performance-sensitive. App Y runs interruptible batch work. The cluster cannot add nodes, so scaling App X must reclaim capacity from App Y when necessary.
+App X is our existing `sample-java-app`: real-time, highly available, and performance-sensitive. App Y is batch work that can be paused, killed, and retried. The cluster cannot add nodes.
+
+The first requirement is not burst scaling. It is preserving App X's minimum operating footprint.
 
 ```text
-normal load
+baseline
 
-node-2                     node-3
-┌───────────────┐          ┌───────────────┐
-│ App X         │          │ App X         │
-│ App Y         │          │ App Y         │
-└───────────────┘          └───────────────┘
+sample-java-app
+4 healthy replicas minimum
+resource requests already defined
+spread across node-2 / node-3
+          ↓
+this is the capacity App X must retain
 
-heavy load
+remaining cluster capacity
+          ↓
+low-priority batch Jobs / CronJobs
+```
 
-App X HPA requests more replicas
+Under load:
+
+```text
+App X HPA wants > 4 replicas
              ↓
-cluster has no free capacity
+free capacity exists? ── yes ──→ schedule normally
+             │
+             no
              ↓
-PriorityClass + preemption
+high-priority App X Pod remains pending
              ↓
-lower-priority App Y pods yield capacity
+Kubernetes preempts lower-priority App Y Pod(s)
              ↓
-App X replicas schedule across both workers
+App X gets capacity
+             ↓
+App Y retries / resumes later
 ```
 
 ### Choice
 
-Use four mechanisms together:
+Use Kubernetes-native scheduling controls around the existing application:
 
-- **HPA for App X** — increases/decreases replicas from load signals.
+- **Minimum App X footprint** — HPA `minReplicas: 4`; the four running replicas and their existing resource requests are the baseline that must remain available.
+- **HPA for App X** — scales above the floor when demand increases.
 - **PriorityClass** — App X receives much higher scheduling priority than App Y.
-- **Preemption** — when the cluster is full, pending App X pods may displace lower-priority App Y pods.
-- **Topology spread + PDB** — keep App X distributed across workers and protect availability during voluntary disruptions.
-
-The request/limit values in the sample are illustrative because the requirements state those values are already defined. The important part is the scheduling policy around them.
+- **Preemption** — if the cluster is full, pending App X Pods may displace lower-priority App Y Pods.
+- **Topology spread** — keep App X replicas distributed across both workers.
+- **PDB** — protect App X availability during voluntary disruptions.
+- **Job/CronJob semantics for App Y** — batch work should be restartable/idempotent or checkpointed, because interruption is expected by design.
 
 Sample: [`stage9-resource-pressure.yaml`](./stage9-resource-pressure.yaml)
 
-### Why this fits a fixed cluster
+The existing App X Deployment remains the source of truth. To participate in this policy it only needs `priorityClassName: app-x-critical` in its Pod template; the Stage 9 sample does not duplicate the production Deployment.
 
-HPA alone cannot create physical capacity. On a full cluster it can create additional App X Pods, but they remain Pending. Priority and preemption give Kubernetes a controlled way to free capacity by evicting the workload that the scenario explicitly says is safe to interrupt.
+### Capacity nuance
 
-A PDB protects App X from voluntary disruptions such as maintenance; it is not a resource-reservation mechanism and is not a substitute for priority/preemption.
+`PriorityClass` does **not** reserve future burst capacity. Kubernetes cannot manufacture CPU or memory on a fixed cluster.
 
-### Tradeoff
+The protected baseline comes from having the minimum App X replicas already scheduled with resource requests. HPA may then request additional replicas. If there is no spare capacity, priority/preemption decides which workload gives way.
 
-Preemption deliberately sacrifices App Y throughput during pressure. That is acceptable here because App Y is pausable/killable. In a production batch system, the batch work must be restartable/idempotent or checkpointed.
+So the intended model is:
 
-HPA also requires a metrics API. In production that can be supplied by metrics-server or an adapter for custom/external metrics.
+```text
+App X baseline capacity
+        +
+App Y uses spare capacity
+        +
+App X may reclaim App Y capacity when it bursts
+```
+
+HPA itself also requires a Kubernetes metrics API (for example metrics-server, or an adapter for custom/external metrics). The sample shows the scheduling design rather than claiming that the current lab already provides that API.
+
+### Why App Y is a CronJob-style workload
+
+The requirements describe App Y as batch work that can be killed or paused. A `Job` / `CronJob` is therefore a more natural model than another long-running Deployment.
+
+Preemption intentionally reduces App Y throughput during pressure. That is acceptable only because App Y is designed to tolerate interruption and resume later.
 
 ---
 
@@ -61,45 +89,45 @@ HPA also requires a metrics API. In production that can be supplied by metrics-s
 
 ### Choice
 
-Use a **canary deployment** rather than replacing the entire production version at once.
+Use a **canary deployment** for the existing application rather than replacing the entire production fleet at once.
+
+The current `sample-java-app` Deployment, Service, and Ingress remain the stable path. A second candidate Deployment and Service receive only a small fraction of traffic through ingress-nginx.
 
 ```text
 initial
 
-users ───────────────→ v1 100%
+users ───────────────→ stable v1 100%
 
-canary
+candidate introduced
 
-users ──┬────────────→ v1 95%
-        └────────────→ v2  5%
+users ──┬────────────→ stable v1 95%
+        └────────────→ canary v2  5%
 
-observe errors / latency / health
+observe errors / latency / readiness / restarts
         ↓
 5% → 10% → 25% → 50% → 100%
         ↓
 promote v2
 ```
 
-With ingress-nginx, a second Ingress for the same host/path can be marked as a canary and assigned a traffic weight.
-
 Sample: [`stage9-canary.yaml`](./stage9-canary.yaml)
 
 ### Release procedure
 
-1. Keep v1 Deployment, Service, and primary Ingress unchanged.
-2. Deploy v2 as a separate Deployment and Service.
-3. Create the canary Ingress with a small weight (for example 5%).
-4. Observe readiness, error rate, latency, restart rate, and application-specific signals.
+1. Leave the current `sample-java-app` Deployment, Service, and primary Ingress untouched.
+2. Deploy the candidate version as a separate canary Deployment and Service using the same production pod conventions.
+3. Add an ingress-nginx canary Ingress for `app.lab.test` with a small weight, initially 5%.
+4. Observe readiness, application errors, latency, restart rate, and other application-specific signals.
 5. Increase weight gradually: 5% → 10% → 25% → 50% → 100%.
-6. If signals regress, set canary weight to 0/remove the canary Ingress; v1 remains available.
-7. After v2 is proven, update the stable Deployment to v2 and remove the temporary canary resources.
+6. If signals regress, set the canary weight to 0 or remove the canary Ingress. Stable v1 never stopped serving.
+7. When v2 is proven, update the normal deployment pipeline to promote that image to the stable Deployment, then remove the temporary canary resources.
 
 ### Why canary
 
-A RollingUpdate limits unavailable replicas, but it still replaces the production fleet directly. Canary keeps the known-good version serving most traffic while the new version is exposed to a controlled fraction of real requests.
+Our existing RollingUpdate configuration protects availability during a normal deployment, but a healthy Pod can still contain an application-level regression. Canary limits the blast radius by exposing the candidate to only a controlled fraction of real traffic first.
 
-Blue/green also provides fast rollback, but the cutover is normally much larger unless an additional traffic-splitting layer is added. For this question, canary directly demonstrates the requested gradual traffic shift.
+Blue/green would also give fast rollback, but without traffic weighting its cutover is much larger. Canary directly addresses the requirement to describe a gradual traffic shift.
 
 ### Tradeoff
 
-For a short period two versions are running simultaneously, which consumes extra cluster capacity. In a fixed-capacity environment, the canary replica count and rollout weights must therefore be chosen conservatively.
+For a short period two versions run at once, so canary consumes additional cluster capacity. On this fixed-capacity cluster, the candidate should start small and promotion should only increase its footprint as capacity permits.
