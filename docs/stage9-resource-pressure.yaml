@@ -1,6 +1,18 @@
-# Stage 9 sample manifest: fixed-capacity cluster resource pressure
-# The requirements state requests/limits are already set. Values below are illustrative;
-# the scheduling design relies on priority, preemption, HPA and disruption policy.
+# Stage 9 sample: fixed-capacity cluster under resource pressure.
+#
+# App X is the existing sample-java-app Deployment. We deliberately do not
+# duplicate that Deployment here. Its current resource requests/limits and
+# four-replica topology remain the production source of truth.
+#
+# To opt App X into this scheduling policy, its Pod template would add:
+#
+#   spec:
+#     template:
+#       spec:
+#         priorityClassName: app-x-critical
+#
+# App Y is modeled as interruptible batch work because the requirements say it may
+# be paused/killed. The values below are illustrative.
 
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
@@ -17,50 +29,19 @@ metadata:
   name: app-y-batch
 value: 100
 globalDefault: false
+preemptionPolicy: PreemptLowerPriority
 description: "Interruptible batch workload; yields capacity to App X under pressure."
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: app-x
-spec:
-  replicas: 4
-  selector:
-    matchLabels:
-      app: app-x
-  template:
-    metadata:
-      labels:
-        app: app-x
-    spec:
-      priorityClassName: app-x-critical
-      topologySpreadConstraints:
-        - maxSkew: 1
-          topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: DoNotSchedule
-          labelSelector:
-            matchLabels:
-              app: app-x
-      containers:
-        - name: app-x
-          image: example/app-x:1.0.0
-          resources:
-            requests:
-              cpu: "500m"
-              memory: "512Mi"
-            limits:
-              cpu: "1"
-              memory: "1Gi"
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: app-x
+  name: sample-java-app
+  namespace: default
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: app-x
+    name: sample-java-app
   minReplicas: 4
   maxReplicas: 8
   behavior:
@@ -87,35 +68,42 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: app-x
+  name: sample-java-app
+  namespace: default
 spec:
   minAvailable: 3
   selector:
     matchLabels:
-      app: app-x
+      app: sample-java-app
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: batch/v1
+kind: CronJob
 metadata:
-  name: app-y
+  name: app-y-batch
+  namespace: default
 spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: app-y
-  template:
-    metadata:
-      labels:
-        app: app-y
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
     spec:
-      priorityClassName: app-y-batch
-      containers:
-        - name: app-y
-          image: example/app-y:1.0.0
-          resources:
-            requests:
-              cpu: "250m"
-              memory: "256Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
+      backoffLimit: 3
+      template:
+        metadata:
+          labels:
+            app: app-y-batch
+        spec:
+          priorityClassName: app-y-batch
+          restartPolicy: Never
+          containers:
+            - name: batch
+              image: busybox:1.36
+              command: ["sh", "-c", "echo batch-start; sleep 120; echo batch-complete"]
+              resources:
+                requests:
+                  cpu: "250m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
