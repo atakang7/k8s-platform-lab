@@ -1,0 +1,91 @@
+# Reference manifest for a canary release of sample-java-app.
+# This is a design reference, not part of baseline reconciliation.
+# The stable Deployment, Service, and primary Ingress remain unchanged.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-java-app-canary
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sample-java-app
+      track: canary
+  template:
+    metadata:
+      labels:
+        app: sample-java-app
+        track: canary
+    spec:
+      imagePullSecrets:
+        - name: dockerhub-registry
+      containers:
+        - name: app
+          image: docker.io/atakangul/sample-java-app:<candidate-digest-or-tag>
+          ports:
+            - containerPort: 9001
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          startupProbe:
+            httpGet:
+              path: /api/foos?val=startup
+              port: 9001
+            failureThreshold: 60
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /api/foos?val=ready
+              port: 9001
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /api/foos?val=liveness
+              port: 9001
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-java-app-canary
+  namespace: default
+spec:
+  selector:
+    app: sample-java-app
+    track: canary
+  ports:
+    - name: http
+      port: 80
+      targetPort: 9001
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sample-java-app-canary
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "5"
+spec:
+  tls:
+    - hosts:
+        - app.lab.test
+      secretName: lab-wildcard
+  rules:
+    - host: app.lab.test
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sample-java-app-canary
+                port:
+                  number: 80
