@@ -26,7 +26,7 @@ spec:
         - name: dockerhub-registry
       containers:
         - name: app
-          image: docker.io/atakangul/sample-java-app:<candidate-digest-or-tag>
+          image: docker.io/atakangul/sample-java-app:canary-candidate
           ports:
             - containerPort: 9001
           resources:
