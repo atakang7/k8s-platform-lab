@@ -76,6 +76,10 @@ lab-build / lab-deploy
 
 Jenkins configuration contains credential references, not credential values. Vault remains the authority for the underlying secrets.
 
+`make jenkins-up` also generates `jenkins-kubeconfig` from the `jenkins-agent` ServiceAccount. Its deployment permissions are limited to the `default` namespace. The controller receives it through JCasC; no administrator kubeconfig is copied into Jenkins.
+
+The public Jenkins URL resolves to ingress-nginx's MetalLB LoadBalancer at `192.168.56.200`. That LoadBalancer terminates HTTPS and routes to the Jenkins ClusterIP Service. This is the supported hostname and TLS path.
+
 ## Agent separation
 
 CI and CD use separate labels and templates even though both are pinned to `node-3`.

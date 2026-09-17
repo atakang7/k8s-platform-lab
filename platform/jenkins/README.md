@@ -27,7 +27,7 @@ Jenkins Secrets
 make jenkins-up
 ```
 
-The command creates/reuses the Vault identity, waits for VSO-managed Secrets, and reconciles the pinned Helm release with JCasC.
+The command creates/reuses the Vault identity, waits for VSO-managed Secrets, generates the namespace-scoped `jenkins-agent` kubeconfig Secret, checks its RBAC, and reconciles the pinned Helm release with JCasC.
 
 Endpoint: `https://jenkins.lab.test`.
 

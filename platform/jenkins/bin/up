@@ -38,17 +38,18 @@ PY
 fi
 
 kubectl create namespace jenkins --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+temporary="$(mktemp -d)"
+chmod 0700 "${temporary}"
+trap 'rm -rf -- "${temporary}"' EXIT
 kubectl -n jenkins create secret generic vault-ca \
   --from-file=ca.crt=/usr/local/share/ca-certificates/lab.crt \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
 if ! kubectl -n jenkins get secret approle-id >/dev/null 2>&1; then
-  temporary="$(mktemp)"
-  trap 'rm -f -- "${temporary}"' EXIT
   umask 077
-  vault write -field=secret_id -f auth/approle/role/jenkins-vso/secret-id > "${temporary}"
+  vault write -field=secret_id -f auth/approle/role/jenkins-vso/secret-id > "${temporary}/approle-id"
   kubectl -n jenkins create secret generic approle-id \
-    --from-file="id=${temporary}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    --from-file="id=${temporary}/approle-id" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 fi
 
 kubectl apply -f "${root}/platform/jenkins/resources/vault-connection.yaml" >/dev/null
@@ -71,14 +72,51 @@ EOF
 kubectl apply -f "${root}/platform/jenkins/resources/admin-secret.yaml" >/dev/null
 kubectl apply -f "${root}/platform/jenkins/resources/ci-secrets.yaml" >/dev/null
 kubectl apply -f "${root}/platform/jenkins/resources/agent-rbac.yaml" >/dev/null
+kubectl -n jenkins apply -f - >/dev/null <<'EOF'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jenkins-agent-token
+  namespace: jenkins
+  annotations:
+    kubernetes.io/service-account.name: jenkins-agent
+type: kubernetes.io/service-account-token
+EOF
+for _ in {1..30}; do
+  if [[ -n "$(kubectl -n jenkins get secret jenkins-agent-token -o jsonpath='{.data.token}')" ]]; then break; fi
+  sleep 2
+done
+kubectl -n jenkins get secret jenkins-agent-token -o json |
+  python3 -c '
+import base64, json, sys
+secret = json.load(sys.stdin)
+token = base64.b64decode(secret["data"]["token"]).decode()
+ca = secret["data"]["ca.crt"]
+kubeconfig = {
+    "apiVersion": "v1", "kind": "Config",
+    "clusters": [{"name": "cluster", "cluster": {
+        "server": "https://kubernetes.default.svc.cluster.local", "certificate-authority-data": ca}}],
+    "users": [{"name": "jenkins-agent", "user": {"token": token}}],
+    "contexts": [{"name": "jenkins-agent", "context": {
+        "cluster": "cluster", "user": "jenkins-agent", "namespace": "default"}}],
+    "current-context": "jenkins-agent",
+}
+sys.stdout.write(base64.b64encode(json.dumps(kubeconfig).encode()).decode())
+' | kubectl -n jenkins create secret generic jenkins-kubeconfig \
+  --from-file=base64=/dev/stdin --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
-for secret in jenkins-admin github-creds dockerhub-creds; do
+for secret in jenkins-admin github-creds dockerhub-creds jenkins-kubeconfig; do
   for _ in {1..60}; do
     if kubectl -n jenkins get secret "${secret}" >/dev/null 2>&1; then break; fi
     sleep 2
   done
   kubectl -n jenkins get secret "${secret}" >/dev/null
- done
+done
+[[ "$(kubectl auth can-i create deployments -n default --as=system:serviceaccount:jenkins:jenkins-agent)" == yes ]]
+[[ "$(kubectl auth can-i create deployments -n kube-system --as=system:serviceaccount:jenkins:jenkins-agent)" == no ]]
+for secret in jenkins-admin github-creds dockerhub-creds jenkins-kubeconfig; do
+  [[ "$(kubectl -n jenkins get secret "${secret}" -o json | jq '.data | length')" -gt 0 ]]
+done
 
 helm repo add jenkins https://charts.jenkins.io --force-update >/dev/null
 helm repo update jenkins >/dev/null
