@@ -29,13 +29,16 @@ pipeline {
         stage('Deploy with Ansible') {
             steps {
                 container('ansible') {
-                    sh '''
-                      set -eu
-                      apk add --no-cache ansible curl python3 >/dev/null
-                      curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl
-                      chmod +x /usr/local/bin/kubectl
-                      ansible-playbook delivery/ansible/deploy.yml -e "image_ref=${IMAGE_REF}"
-                    '''
+                    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                        sh '''
+                          set -eu
+                          apk add --no-cache ansible curl python3 >/dev/null
+                          curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl
+                          chmod +x /usr/local/bin/kubectl
+                          export K8S_AUTH_KUBECONFIG="$KUBECONFIG"
+                          ansible-playbook delivery/ansible/deploy.yml -e "image_ref=${IMAGE_REF}"
+                        '''
+                    }
                 }
             }
         }

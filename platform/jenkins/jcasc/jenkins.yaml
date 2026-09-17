@@ -33,6 +33,12 @@ credentials:
               description: DockerHub CI credential
               username: "${DOCKERHUB_USERNAME}"
               password: "${DOCKERHUB_TOKEN}"
+          - file:
+              scope: GLOBAL
+              id: kubeconfig
+              description: Cluster Kubeconfig
+              fileName: kubeconfig
+              secretBytes: "${KUBECONFIG_BASE64}"
 
 jobs:
   - script: >

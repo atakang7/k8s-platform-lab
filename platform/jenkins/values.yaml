@@ -32,6 +32,11 @@ controller:
         secretKeyRef:
           name: dockerhub-creds
           key: token
+    - name: KUBECONFIG_BASE64
+      valueFrom:
+        secretKeyRef:
+          name: jenkins-kubeconfig
+          key: base64
   resources:
     requests:
       cpu: 100m
