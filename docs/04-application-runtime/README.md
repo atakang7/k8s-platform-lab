@@ -102,20 +102,21 @@ The service uses separate startup, readiness, and liveness checks even though th
 Pod created
    │
    ▼
-startup probe
+startup probe runs
    │
-   ├── failing ──► readiness/liveness are not used to kill startup
+   ├── failing ──► keep probing startup
+   │               readiness + liveness do not run yet
    │
    └── success
           │
-          ├──────────────► liveness probe checks continued health
+          ├──────────────► liveness probe
+          │                  │ failure threshold reached
+          │                  └──────────────► restart container
           │
-          ▼
-   readiness probe
-          │
-          ├── failing ──► Pod stays out of Service endpoints
-          │
-          └── success ──► Pod may receive traffic
+          └──────────────► readiness probe
+                             │
+                             ├── failing ──► remove / keep out of Service endpoints
+                             └── success ──► Pod may receive traffic
 ```
 
 The startup probe has a long enough failure budget for JVM startup and prevents liveness from killing a process that is still legitimately booting.
