@@ -8,18 +8,14 @@ This layer runs the shared services used to build, deploy, observe, and operate 
 │  node-2                              node-3                        │
 │  ┌──────────────────────┐            ┌──────────────────────────┐  │
 │  │ Prometheus           │            │ Jenkins controller       │  │
-│  │ local-path PVC       │            │ 0 executors · 8 GiB PVC  │  │
-│  └──────────────────────┘            ├──────────────────────────┤  │
-│                                      │ CI/CD agent Pods          │  │
-│                                      ├──────────────────────────┤  │
-│                                      │ Grafana                   │  │
-│                                      │ AlertManager              │  │
+│  │ Elasticsearch        │            │ CI/CD agent Pods          │  │
+│  │ local-path PVCs      │            │ Grafana                   │  │
+│  └──────────────────────┘            │ AlertManager              │  │
 │                                      │ kube-state-metrics        │  │
 │                                      │ Prometheus Operator       │  │
 │                                      └──────────────────────────┘  │
 │                                                                    │
 │  every node: node-exporter + platform Fluent Bit                  │
-│  observability namespace: Elasticsearch with local-path storage    │
 │                                                                    │
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -38,11 +34,11 @@ These services share the same DNS, TLS, storage, secret, and ingress foundations
 The cluster is intentionally small. Platform placement is explicit instead of left to chance:
 
 - Jenkins controller and Jenkins agents run on `node-3`.
-- Prometheus runs on `node-2`.
+- Prometheus and Elasticsearch run on `node-2`.
 - Grafana, AlertManager, kube-state-metrics, and Prometheus Operator run on `node-3`.
-- node-exporter runs on each node.
+- node-exporter and platform Fluent Bit run on each node.
 
-This keeps Prometheus memory pressure away from Jenkins while still using both workers.
+This keeps the heavier Prometheus/Elasticsearch data plane away from Jenkins while still using both workers.
 
 ## Change rule
 
