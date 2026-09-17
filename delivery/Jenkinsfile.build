@@ -12,11 +12,28 @@ pipeline {
     environment {
         IMAGE_REPOSITORY = 'docker.io/atakangul/sample-java-app'
         CACHE_REF = 'docker.io/atakangul/sample-java-app:buildcache'
+        CI_COMPLETE = 'false'
     }
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
+                script {
+                    env.COMMIT_SHA = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+                }
+            }
+        }
+        stage('Report CI Pending') {
+            steps {
+                container('ansible') {
+                    withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                        sh '''
+                          set +x
+                          apk add --no-cache curl >/dev/null
+                          sh delivery/ci/github-status.sh pending jenkins/ci "Jenkins CI running" "$COMMIT_SHA"
+                        '''
+                    }
+                }
             }
         }
         stage('Quality Gates') {
@@ -74,10 +91,8 @@ pipeline {
                           set +x
                           export DOCKER_CONFIG="$(mktemp -d)"
                           trap 'rm -rf "$DOCKER_CONFIG"' EXIT
-                          printf '%s' "$DOCKER_PASS" | buildctl registry login --username "$DOCKER_USER" --password-stdin docker.io >/dev/null 2>&1 || true
-                          mkdir -p "$DOCKER_CONFIG"
                           AUTH="$(printf '%s:%s' "$DOCKER_USER" "$DOCKER_PASS" | base64 | tr -d '\\n')"
-                          printf '{"auths":{"https://index.docker.io/v1/":{"auth":"%s"},"docker.io":{"auth":"%s"}}}' "$AUTH" "$AUTH" > "$DOCKER_CONFIG/config.json"
+                          printf '{"auths":{"docker.io":{"auth":"%s"},"https://index.docker.io/v1/":{"auth":"%s"}}}' "$AUTH" "$AUTH" > "$DOCKER_CONFIG/config.json"
                           chmod 600 "$DOCKER_CONFIG/config.json"
                           delivery/ci/build-image.sh
                         '''
@@ -106,13 +121,47 @@ pipeline {
                 }
             }
         }
+        stage('Report CI Success') {
+            steps {
+                container('ansible') {
+                    withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                        sh '''
+                          set +x
+                          apk add --no-cache curl >/dev/null
+                          sh delivery/ci/github-status.sh success jenkins/ci "Jenkins CI passed" "$COMMIT_SHA"
+                        '''
+                    }
+                }
+                script {
+                    env.CI_COMPLETE = 'true'
+                }
+            }
+        }
         stage('Deploy') {
             steps {
                 script {
                     def imageRef = readFile('image_ref.env').trim().split('=', 2)[1]
                     build job: 'lab-deploy', parameters: [
-                        string(name: 'IMAGE_REF', value: imageRef)
+                        string(name: 'IMAGE_REF', value: imageRef),
+                        string(name: 'COMMIT_SHA', value: env.COMMIT_SHA)
                     ], wait: true, propagate: true
+                }
+            }
+        }
+    }
+    post {
+        failure {
+            script {
+                if (env.COMMIT_SHA && env.CI_COMPLETE != 'true') {
+                    container('ansible') {
+                        withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                            sh '''
+                              set +x
+                              apk add --no-cache curl >/dev/null
+                              sh delivery/ci/github-status.sh failure jenkins/ci "Jenkins CI failed" "$COMMIT_SHA" || true
+                            '''
+                        }
+                    }
                 }
             }
         }
