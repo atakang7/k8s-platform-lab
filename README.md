@@ -10,32 +10,32 @@ This repository is the source of truth for the infrastructure, Kubernetes platfo
                                        ▼
 ┌──────────────────────────────── HOST ────────────────────────────────┐
 │                                                                     │
-│  Vault                         BIND9                    local CA      │
-│  secret authority              lab.test          trust root   │
-│     │                              ▲                         │       │
-│     │                              │ RFC2136                 │       │
-└─────┼──────────────────────────────┼─────────────────────────┼───────┘
-      │                              │                         │
-      │ Vault API                    │ DNS control             │ TLS trust
-      │                              │                         │
-┌─────┼──────────────────────────────┼─────────────────────────┼───────┐
-│     ▼                              │                         ▼       │
-│  Vault Secrets Operator      ExternalDNS              ingress TLS   │
-│                                                                     │
-│  MetalLB assigns/advertises 192.168.56.200 to the ingress Service   │
-│                                       │                             │
-│                                       ▼                             │
-│                              ingress-nginx ×2                       │
-│                                       │ HTTPS routing               │
-│                  ┌────────────────────┼────────────────────┐         │
-│                  │                    │                    │         │
-│                  ▼                    ▼                    ▼         │
-│          sample-java-app          Jenkins            observability  │
-│          4 replicas               controller         metrics + logs │
-│          node-2 / node-3          node-3 · 0 execs                  │
-│                                       │                             │
-│                                  CI/CD agents                       │
-│                                  node-3                             │
+│  local CA ── signs certificates ──► Vault              BIND9        │
+│                                     secret authority    DNS          │
+│                                          │               ▲          │
+│                                          │ Vault API     │ RFC2136  │
+└──────────────────────────────────────────┼───────────────┼──────────┘
+                                           │               │
+┌──────────────────────────────────────────┼───────────────┼──────────┐
+│                                          ▼               │          │
+│                                Vault Secrets Operator   ExternalDNS  │
+│                                          │                          │
+│                               TLS / runtime Secrets                 │
+│                                          │                          │
+│  MetalLB assigns + L2-advertises 192.168.56.200                    │
+│                                          │                          │
+│                                          ▼                          │
+│                                 ingress-nginx ×2                    │
+│                                          │ HTTPS routing            │
+│                   ┌──────────────────────┼───────────────────┐      │
+│                   │                      │                   │      │
+│                   ▼                      ▼                   ▼      │
+│           sample-java-app            Jenkins           observability│
+│           4 replicas                 controller        metrics + logs│
+│           node-2 / node-3            node-3 · 0 execs               │
+│                                          │                          │
+│                                     CI/CD agents                    │
+│                                     node-3                          │
 │                                                                     │
 │  node-1                    node-2                    node-3          │
 │  control plane             worker                    worker          │
