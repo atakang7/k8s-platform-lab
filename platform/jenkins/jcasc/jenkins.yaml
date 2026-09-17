@@ -17,11 +17,11 @@ jenkins:
         jenkinsUrl: http://jenkins.jenkins.svc.cluster.local:8080
         webSocket: true
         templates:
-          - name: warm-ci
-            label: lab-ci-warm
+          - name: warm-build
+            label: lab-ci-build
             namespace: jenkins
             idleMinutes: 60
-            instanceCap: 2
+            instanceCap: 1
             nodeUsageMode: EXCLUSIVE
             showRawYaml: false
             slaveConnectTimeout: 120
@@ -32,7 +32,7 @@ jenkins:
               metadata:
                 labels:
                   component: jenkins-agent
-                  workload: lab-ci-warm
+                  workload: lab-ci-build
               spec:
                 serviceAccountName: jenkins-agent
                 restartPolicy: Never
@@ -87,6 +87,42 @@ jenkins:
                       limits:
                         cpu: "1"
                         memory: 1Gi
+          - name: warm-deploy
+            label: lab-ci-deploy
+            namespace: jenkins
+            idleMinutes: 60
+            instanceCap: 1
+            nodeUsageMode: EXCLUSIVE
+            showRawYaml: false
+            slaveConnectTimeout: 120
+            yamlMergeStrategy: override
+            yaml: |-
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                labels:
+                  component: jenkins-agent
+                  workload: lab-ci-deploy
+              spec:
+                serviceAccountName: jenkins-agent
+                restartPolicy: Never
+                nodeSelector:
+                  kubernetes.io/hostname: node-3
+                imagePullSecrets:
+                  - name: dockerhub-registry
+                containers:
+                  - name: ci-tools
+                    image: docker.io/atakangul/lab-ci-agent@sha256:7ffa97e62c587bb1b8884b2512265e47bba87ae80bd6f61cfa2e41dcc0d6c5de
+                    imagePullPolicy: IfNotPresent
+                    command: ["sh", "-c", "sleep infinity"]
+                    tty: true
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 256Mi
+                      limits:
+                        cpu: "1"
+                        memory: 768Mi
 
 credentials:
   system:
