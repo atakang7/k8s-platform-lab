@@ -45,10 +45,10 @@ pipeline {
 
                     def checks = [:]
 
-                    checks['Maven Validate'] = {
-                        timed('Test.MavenValidate') {
+                    checks['Unit Tests'] = {
+                        timed('Test.UnitTests') {
                             container('ci-tools') {
-                                sh 'mvn -B -ntp validate -f app/pom.xml'
+                                sh 'delivery/ci/test.sh'
                             }
                         }
                     }
@@ -82,15 +82,9 @@ pipeline {
                         }
                     }
 
-                    def parallelStarted = System.currentTimeMillis()
+                    def checksStarted = System.currentTimeMillis()
                     parallel checks
-                    echo "TIMING|Test.ParallelChecksWall|${System.currentTimeMillis() - parallelStarted}"
-
-                    timed('Test.UnitTests') {
-                        container('ci-tools') {
-                            sh 'delivery/ci/test.sh'
-                        }
-                    }
+                    echo "TIMING|Test.ChecksWall|${System.currentTimeMillis() - checksStarted}"
                 }
             }
         }
