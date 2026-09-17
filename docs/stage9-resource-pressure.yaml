@@ -1,0 +1,121 @@
+# Stage 9 sample manifest: fixed-capacity cluster resource pressure
+# The requirements state requests/limits are already set. Values below are illustrative;
+# the scheduling design relies on priority, preemption, HPA and disruption policy.
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: app-x-critical
+value: 100000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "Critical real-time workload; may preempt batch capacity when the cluster is full."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: app-y-batch
+value: 100
+globalDefault: false
+description: "Interruptible batch workload; yields capacity to App X under pressure."
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-x
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: app-x
+  template:
+    metadata:
+      labels:
+        app: app-x
+    spec:
+      priorityClassName: app-x-critical
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: app-x
+      containers:
+        - name: app-x
+          image: example/app-x:1.0.0
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: app-x
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: app-x
+  minReplicas: 4
+  maxReplicas: 8
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 65
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: app-x
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: app-x
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-y
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: app-y
+  template:
+    metadata:
+      labels:
+        app: app-y
+    spec:
+      priorityClassName: app-y-batch
+      containers:
+        - name: app-y
+          image: example/app-y:1.0.0
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
