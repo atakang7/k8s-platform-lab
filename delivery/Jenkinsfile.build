@@ -23,7 +23,6 @@ pipeline {
     }
     environment {
         IMAGE_REPOSITORY = 'docker.io/atakangul/sample-java-app'
-        CACHE_REF = 'docker.io/atakangul/sample-java-app:buildcache'
         CI_COMPLETE = 'false'
     }
     stages {
@@ -92,7 +91,7 @@ pipeline {
         stage('Build') {
             steps {
                 script {
-                    timed('Build.BuildKit') {
+                    timed('Build.BuildAndPush') {
                         container('buildkit') {
                             withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                                 sh '''
@@ -116,14 +115,8 @@ pipeline {
                 script {
                     timed('Publish.TrivyAndSBOM') {
                         container('ci-tools') {
-                            sh 'delivery/ci/scan-image.sh'
-                        }
-                    }
-
-                    timed('Publish.DockerHubPush') {
-                        container('ci-tools') {
                             withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                                sh 'delivery/ci/publish-image.sh'
+                                sh 'delivery/ci/scan-image.sh'
                             }
                         }
                     }
