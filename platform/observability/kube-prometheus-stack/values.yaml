@@ -19,6 +19,10 @@ prometheusOperator:
 
 prometheus:
   prometheusSpec:
+    serviceMonitorNamespaceSelector: {}
+    serviceMonitorSelector:
+      matchLabels:
+        release: observability
     replicas: 1
     retention: 1d
     retentionSize: 1500MB
@@ -47,7 +51,6 @@ alertmanager:
       group_by: [alertname, namespace]
     receivers:
       - name: lab-alerts
-      - name: 'null'
   alertmanagerSpec:
     replicas: 1
     resources:
@@ -74,6 +77,15 @@ grafana:
         timeField: '@timestamp'
         logMessageField: 'log'
         logLevelField: 'stream'
+    - name: Application Logs
+      type: elasticsearch
+      uid: application-logs
+      access: proxy
+      url: http://logs-es-http.observability.svc.cluster.local:9200
+      database: app-logs
+      jsonData:
+        timeField: '@timestamp'
+        logMessageField: log
   resources:
     requests: {cpu: 50m, memory: 96Mi}
     limits: {cpu: 500m, memory: 512Mi}

@@ -20,7 +20,7 @@ LOGS
 
 /var/log/containers/*.log ──► platform Fluent Bit · DaemonSet ──┐
                                                                   │
-application.log ────────────► Pod sidecar Fluent Bit ─────────────┼──► Elasticsearch
+app.log ────────────► Pod sidecar Fluent Bit ─────────────┼──► Elasticsearch
                                                                   │         │
                                                                   └─────────┘
                                                                             │
@@ -45,6 +45,8 @@ Prometheus is pinned to `node-2` with:
 - explicit CPU and memory requests/limits.
 
 The Prometheus Operator, Grafana, AlertManager, and kube-state-metrics are pinned to `node-3` with bounded resources.
+
+The application ServiceMonitor scrapes `/actuator/prometheus` from the stable Service. The Git-managed cluster dashboard includes HTTP request rate, p95 latency, and JVM heap use.
 
 ## Alerting
 
@@ -83,6 +85,8 @@ All three reuse the platform ingress and wildcard TLS path.
 
 Elasticsearch is the log store. Fluent Bit is the transport layer.
 
+Application file logs use the `app-logs` index and a separate Grafana `Application Logs` datasource. Kubernetes container logs retain the `kubernetes-*` datasource and dashboard path.
+
 The design deliberately separates log production from transport:
 
 ```text
@@ -92,7 +96,7 @@ application request thread
 async Logback appender
           │
           ▼
-rotating application.log
+rotating app.log
           │ shared emptyDir
           ▼
 Pod sidecar Fluent Bit

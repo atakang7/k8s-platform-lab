@@ -22,10 +22,11 @@ PrometheusRule ── configures alert rule ──► Prometheus
 ```text
 /var/log/containers/*.log ──► platform Fluent Bit ──┐
                                                       ├──► Elasticsearch ──► Grafana
-application.log ────────────► app Pod sidecar ───────┘
+app.log ────────────► app Pod sidecar ───────┘
 ```
 
 The platform DaemonSet and application sidecar are intentionally separate. The sidecar handles the explicit application file log; the platform collector covers normal Kubernetes container logs.
+Grafana provisions separate Elasticsearch datasources for `kubernetes-*` and `app-logs`, plus Git-managed metric and log panels.
 
 ## Reconcile
 

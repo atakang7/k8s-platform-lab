@@ -88,7 +88,7 @@ node-exporter / kube-state-metrics / targets
            Grafana  AlertManager
 
 container logs ──► platform Fluent Bit ──┐
-application.log ─► Pod sidecar Fluent Bit├──► Elasticsearch ──► Grafana
+app.log ─► Pod sidecar Fluent Bit├──► Elasticsearch ──► Grafana
                                          ┘
 ```
 
