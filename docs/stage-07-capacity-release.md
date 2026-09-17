@@ -51,7 +51,7 @@ cluster has free capacity?
      yes            no
       │             │
       ▼             ▼
-schedule       App X Pods Pending
+schedule       app Pods Pending
 replicas             │
                      ▼
              PriorityClass comparison
@@ -76,7 +76,7 @@ HPA alone cannot solve a full-cluster problem. It can request replicas, but with
 
 ## Availability controls
 
-The critical application uses three separate mechanisms with different jobs:
+The critical application uses separate mechanisms with different jobs:
 
 | Mechanism | Purpose |
 |---|---|
@@ -88,7 +88,7 @@ The critical application uses three separate mechanisms with different jobs:
 
 A PDB does not reserve CPU or memory. It protects availability during voluntary disruption such as maintenance or eviction APIs.
 
-Reference manifest: [`stage9-resource-pressure.yaml`](stage9-resource-pressure.yaml).
+Reference manifest: [`capacity-pressure.yaml`](capacity-pressure.yaml).
 
 ## Critical release model
 
@@ -120,7 +120,7 @@ The stable application remains live while a candidate version is introduced besi
 
 The canary is a separate Deployment and Service. A second ingress for the same host/path uses ingress-nginx canary annotations and starts with a small weight.
 
-Reference manifest: [`stage9-canary.yaml`](stage9-canary.yaml).
+Reference manifest: [`canary-release.yaml`](canary-release.yaml).
 
 ## Promotion strategy
 
@@ -162,7 +162,7 @@ The normal stable Deployment already uses a safe RollingUpdate. That protects re
 
 Canary adds a separate risk boundary: most users remain on the known-good version while a small share exercises the candidate with real traffic.
 
-Blue/green would also keep two versions, but the requirements require controlled traffic shifting. ingress-nginx canary weighting directly provides that behavior with the existing edge stack.
+Blue/green would also keep two versions, but controlled traffic shifting is the stronger fit here. ingress-nginx canary weighting provides that behavior with the existing edge stack.
 
 ## Capacity tradeoff during canary
 
@@ -170,4 +170,4 @@ Canary temporarily consumes capacity in addition to the stable workload. In this
 
 ## Source paths
 
-`docs/stage9-resource-pressure.yaml` is the scheduling/capacity reference. `docs/stage9-canary.yaml` is the canary reference. These are design manifests, not part of normal cluster reconciliation.
+`docs/capacity-pressure.yaml` is the scheduling/capacity reference. `docs/canary-release.yaml` is the canary reference. These are design manifests, not part of normal cluster reconciliation.
