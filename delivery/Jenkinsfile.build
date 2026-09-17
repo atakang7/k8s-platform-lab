@@ -1,3 +1,14 @@
+def timed(String label, Closure body) {
+    def started = System.currentTimeMillis()
+    echo "TIMING_START|${label}|${started}"
+    try {
+        body()
+    } finally {
+        def elapsed = System.currentTimeMillis() - started
+        echo "TIMING|${label}|${elapsed}"
+    }
+}
+
 pipeline {
     agent {
         kubernetes {
@@ -19,70 +30,88 @@ pipeline {
         stage('Test') {
             steps {
                 script {
-                    def scmVars = checkout scm
-                    env.COMMIT_SHA = scmVars.GIT_COMMIT
-                }
-
-                container('ci-tools') {
-                    withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                        sh 'sh delivery/ci/github-status.sh pending jenkins/ci "Jenkins CI running" "$COMMIT_SHA"'
+                    timed('Test.Checkout') {
+                        def scmVars = checkout scm
+                        env.COMMIT_SHA = scmVars.GIT_COMMIT
                     }
-                }
 
-                script {
+                    timed('Test.GitHubPending') {
+                        container('ci-tools') {
+                            withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                                sh 'sh delivery/ci/github-status.sh pending jenkins/ci "Jenkins CI running" "$COMMIT_SHA"'
+                            }
+                        }
+                    }
+
                     def checks = [:]
 
                     checks['Maven Validate'] = {
-                        container('ci-tools') {
-                            sh 'mvn -B -ntp validate -f app/pom.xml'
+                        timed('Test.MavenValidate') {
+                            container('ci-tools') {
+                                sh 'mvn -B -ntp validate -f app/pom.xml'
+                            }
                         }
                     }
 
                     checks['Dockerfile Lint'] = {
-                        container('ci-tools') {
-                            sh 'hadolint app/Dockerfile'
+                        timed('Test.DockerfileLint') {
+                            container('ci-tools') {
+                                sh 'hadolint app/Dockerfile'
+                            }
                         }
                     }
 
                     checks['Kubernetes Dry Run'] = {
-                        container('ci-tools') {
-                            sh '''
-                              kubectl apply --dry-run=server -f app/k8s/fluent-bit-config.yaml
-                              kubectl apply --dry-run=server -f app/k8s/service.yaml
-                              kubectl apply --dry-run=server -f app/k8s/ingress.yaml
-                              kubectl apply --dry-run=server -f app/k8s/deployment.yaml
-                            '''
+                        timed('Test.KubernetesDryRun') {
+                            container('ci-tools') {
+                                sh '''
+                                  kubectl apply --dry-run=server -f app/k8s/fluent-bit-config.yaml
+                                  kubectl apply --dry-run=server -f app/k8s/service.yaml
+                                  kubectl apply --dry-run=server -f app/k8s/ingress.yaml
+                                  kubectl apply --dry-run=server -f app/k8s/deployment.yaml
+                                '''
+                            }
                         }
                     }
 
                     checks['Ansible Syntax'] = {
-                        container('ci-tools') {
-                            sh 'ansible-playbook --syntax-check delivery/ansible/deploy.yml'
+                        timed('Test.AnsibleSyntax') {
+                            container('ci-tools') {
+                                sh 'ansible-playbook --syntax-check delivery/ansible/deploy.yml'
+                            }
                         }
                     }
 
+                    def parallelStarted = System.currentTimeMillis()
                     parallel checks
-                }
+                    echo "TIMING|Test.ParallelChecksWall|${System.currentTimeMillis() - parallelStarted}"
 
-                container('ci-tools') {
-                    sh 'delivery/ci/test.sh'
+                    timed('Test.UnitTests') {
+                        container('ci-tools') {
+                            sh 'delivery/ci/test.sh'
+                        }
+                    }
                 }
             }
         }
 
         stage('Build') {
             steps {
-                container('buildkit') {
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh '''
-                          set +x
-                          export DOCKER_CONFIG="$(mktemp -d)"
-                          trap 'rm -rf "$DOCKER_CONFIG"' EXIT
-                          AUTH="$(printf '%s:%s' "$DOCKER_USER" "$DOCKER_PASS" | base64 | tr -d '\\n')"
-                          printf '{"auths":{"docker.io":{"auth":"%s"},"https://index.docker.io/v1/":{"auth":"%s"}}}' "$AUTH" "$AUTH" > "$DOCKER_CONFIG/config.json"
-                          chmod 600 "$DOCKER_CONFIG/config.json"
-                          delivery/ci/build-image.sh
-                        '''
+                script {
+                    timed('Build.BuildKit') {
+                        container('buildkit') {
+                            withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                                sh '''
+                                  set +x
+                                  export DOCKER_CONFIG="$(mktemp -d)"
+                                  trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+                                  AUTH="$(printf '%s:%s' "$DOCKER_USER" "$DOCKER_PASS" | base64 | tr -d '\\n')"
+                                  printf '{"auths":{"docker.io":{"auth":"%s"},"https://index.docker.io/v1/":{"auth":"%s"}}}' "$AUTH" "$AUTH" > "$DOCKER_CONFIG/config.json"
+                                  chmod 600 "$DOCKER_CONFIG/config.json"
+                                  delivery/ci/build-image.sh
+                                '''
+                            }
+                        }
                     }
                 }
             }
@@ -90,23 +119,29 @@ pipeline {
 
         stage('Scan & Publish') {
             steps {
-                container('ci-tools') {
-                    sh 'delivery/ci/scan-image.sh'
-                }
-
-                container('ci-tools') {
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh 'delivery/ci/publish-image.sh'
-                    }
-                }
-
-                container('ci-tools') {
-                    withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                        sh 'sh delivery/ci/github-status.sh success jenkins/ci "Jenkins CI passed" "$COMMIT_SHA"'
-                    }
-                }
-
                 script {
+                    timed('Publish.TrivyAndSBOM') {
+                        container('ci-tools') {
+                            sh 'delivery/ci/scan-image.sh'
+                        }
+                    }
+
+                    timed('Publish.DockerHubPush') {
+                        container('ci-tools') {
+                            withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                                sh 'delivery/ci/publish-image.sh'
+                            }
+                        }
+                    }
+
+                    timed('Publish.GitHubSuccess') {
+                        container('ci-tools') {
+                            withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                                sh 'sh delivery/ci/github-status.sh success jenkins/ci "Jenkins CI passed" "$COMMIT_SHA"'
+                            }
+                        }
+                    }
+
                     env.CI_COMPLETE = 'true'
                 }
             }
@@ -120,11 +155,13 @@ pipeline {
         stage('Deploy') {
             steps {
                 script {
-                    def imageRef = readFile('image_ref.env').trim().split('=', 2)[1]
-                    build job: 'lab-deploy', parameters: [
-                        string(name: 'IMAGE_REF', value: imageRef),
-                        string(name: 'COMMIT_SHA', value: env.COMMIT_SHA)
-                    ], wait: true, propagate: true
+                    timed('Deploy.DownstreamJob') {
+                        def imageRef = readFile('image_ref.env').trim().split('=', 2)[1]
+                        build job: 'lab-deploy', parameters: [
+                            string(name: 'IMAGE_REF', value: imageRef),
+                            string(name: 'COMMIT_SHA', value: env.COMMIT_SHA)
+                        ], wait: true, propagate: true
+                    }
                 }
             }
         }
