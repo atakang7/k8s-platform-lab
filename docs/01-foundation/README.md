@@ -37,7 +37,8 @@ Vagrant
    ├─ creates node-2
    └─ creates node-3
             │
-            │ node-3 owns the single cluster-wide provisioner
+            │ host-side Ansible provisioner is attached to node-3
+            │ and starts after all three VMs exist
             ▼
         Ansible
             │
@@ -78,7 +79,7 @@ The asymmetric worker sizing is intentional. Jenkins and most control-plane-styl
 
 ### One cluster-wide provisioner
 
-The `node-3` Vagrant provisioner runs the Ansible cluster play once after all three machines exist. Kubernetes initialization is therefore ordered as one operation instead of three independent per-node provisioners racing each other.
+A single host-side Vagrant Ansible provisioner is attached to the `node-3` definition and runs the cluster play after all three machines exist. Kubernetes initialization is therefore ordered as one operation instead of three independent per-node provisioners racing each other.
 
 ### Custom cluster CIDRs
 
