@@ -25,13 +25,9 @@ pipeline {
         }
         stage('Report CI Pending') {
             steps {
-                container('ansible') {
+                container('ci-tools') {
                     withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                        sh '''
-                          set +x
-                          apk add --no-cache curl >/dev/null
-                          sh delivery/ci/github-status.sh pending jenkins/ci "Jenkins CI running" "$COMMIT_SHA"
-                        '''
+                        sh 'sh delivery/ci/github-status.sh pending jenkins/ci "Jenkins CI running" "$COMMIT_SHA"'
                     }
                 }
             }
@@ -40,21 +36,21 @@ pipeline {
             parallel {
                 stage('Maven Validate') {
                     steps {
-                        container('maven') {
+                        container('ci-tools') {
                             sh 'mvn -B -ntp validate -f app/pom.xml'
                         }
                     }
                 }
                 stage('Dockerfile Lint') {
                     steps {
-                        container('hadolint') {
+                        container('ci-tools') {
                             sh 'hadolint app/Dockerfile'
                         }
                     }
                 }
                 stage('Kubernetes Dry Run') {
                     steps {
-                        container('kubectl') {
+                        container('ci-tools') {
                             sh '''
                               kubectl apply --dry-run=server -f app/k8s/fluent-bit-config.yaml
                               kubectl apply --dry-run=server -f app/k8s/service.yaml
@@ -66,11 +62,8 @@ pipeline {
                 }
                 stage('Ansible Syntax') {
                     steps {
-                        container('ansible') {
-                            sh '''
-                              apk add --no-cache ansible >/dev/null
-                              ansible-playbook --syntax-check delivery/ansible/deploy.yml
-                            '''
+                        container('ci-tools') {
+                            sh 'ansible-playbook --syntax-check delivery/ansible/deploy.yml'
                         }
                     }
                 }
@@ -78,7 +71,7 @@ pipeline {
         }
         stage('Unit Tests') {
             steps {
-                container('maven') {
+                container('ci-tools') {
                     sh 'delivery/ci/test.sh'
                 }
             }
@@ -102,7 +95,7 @@ pipeline {
         }
         stage('Security Scan + SBOM') {
             steps {
-                container('trivy') {
+                container('ci-tools') {
                     sh 'delivery/ci/scan-image.sh'
                 }
             }
@@ -114,7 +107,7 @@ pipeline {
         }
         stage('Publish Image') {
             steps {
-                container('skopeo') {
+                container('ci-tools') {
                     withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                         sh 'delivery/ci/publish-image.sh'
                     }
@@ -123,13 +116,9 @@ pipeline {
         }
         stage('Report CI Success') {
             steps {
-                container('ansible') {
+                container('ci-tools') {
                     withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                        sh '''
-                          set +x
-                          apk add --no-cache curl >/dev/null
-                          sh delivery/ci/github-status.sh success jenkins/ci "Jenkins CI passed" "$COMMIT_SHA"
-                        '''
+                        sh 'sh delivery/ci/github-status.sh success jenkins/ci "Jenkins CI passed" "$COMMIT_SHA"'
                     }
                 }
                 script {
@@ -153,13 +142,9 @@ pipeline {
         failure {
             script {
                 if (env.COMMIT_SHA && env.CI_COMPLETE != 'true') {
-                    container('ansible') {
+                    container('ci-tools') {
                         withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                            sh '''
-                              set +x
-                              apk add --no-cache curl >/dev/null
-                              sh delivery/ci/github-status.sh failure jenkins/ci "Jenkins CI failed" "$COMMIT_SHA" || true
-                            '''
+                            sh 'sh delivery/ci/github-status.sh failure jenkins/ci "Jenkins CI failed" "$COMMIT_SHA" || true'
                         }
                     }
                 }
