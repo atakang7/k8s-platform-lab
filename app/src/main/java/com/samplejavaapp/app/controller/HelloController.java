@@ -12,6 +12,7 @@ public class HelloController {
 
     private static final Logger logger = LoggerFactory.getLogger(HelloController.class);
 
+    // Echo endpoint used by the deployment smoke checks.
     @GetMapping("/api/foos")
     @ResponseBody
     public String getFoos(@RequestParam String val) {
