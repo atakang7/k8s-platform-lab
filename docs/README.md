@@ -3,25 +3,40 @@
 The documentation is organized by operational layer, not by repository history. Read top to bottom for the full build path; open one layer in isolation when changing or debugging that subsystem.
 
 ```text
-01 Foundation
-      │
-      ▼
-02 Edge + trust
-      │
-      ▼
-03 Platform services
-      │
-      ▼
-04 Application runtime
-      │
-      ▼
-05 Delivery
-      │
-      ▼
-06 Governance + resilience
-      │
-      ▼
-07 Operations + validation
+┌──────────────────────────────────────────────┐
+│ 01 · Foundation                              │
+│ VMs · kubeadm · containerd · Calico · PVCs │
+└──────────────────────┬───────────────────────┘
+                       ▼
+┌──────────────────────────────────────────────┐
+│ 02 · Edge + trust                            │
+│ Vault · DNS · TLS · MetalLB · ingress · VSO │
+└──────────────────────┬───────────────────────┘
+                       ▼
+┌──────────────────────────────────────────────┐
+│ 03 · Platform services                       │
+│ Jenkins · metrics · alerts · logs            │
+└──────────────────────┬───────────────────────┘
+                       ▼
+┌──────────────────────────────────────────────┐
+│ 04 · Application runtime                     │
+│ image · probes · placement · rollout · logs  │
+└──────────────────────┬───────────────────────┘
+                       ▼
+┌──────────────────────────────────────────────┐
+│ 05 · Delivery                                │
+│ test · build · scan · digest · deploy        │
+└──────────────────────┬───────────────────────┘
+                       ▼
+┌──────────────────────────────────────────────┐
+│ 06 · Governance + resilience                 │
+│ admission · capacity · preemption · canary   │
+└──────────────────────┬───────────────────────┘
+                       ▼
+┌──────────────────────────────────────────────┐
+│ 07 · Operations + validation                 │
+│ bootstrap · recovery · checks · clean rebuild│
+└──────────────────────────────────────────────┘
 ```
 
 ## Layers
@@ -42,17 +57,23 @@ Each layer follows the same order:
 
 ```text
 scope
-  ↓
+  │
+  ▼
 architecture / data flow
-  ↓
+  │
+  ▼
 implementation
-  ↓
-engineering choices and optimizations
-  ↓
+  │
+  ▼
+engineering choices / optimizations
+  │
+  ▼
 operator interface
-  ↓
+  │
+  ▼
 validation / failure boundary
-  ↓
+  │
+  ▼
 source paths
 ```
 
