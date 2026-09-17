@@ -1,41 +1,78 @@
 # Platform
 
-`platform/` contains Kubernetes-resident shared services. Host services remain under [`infra/`](../infra/README.md).
+`platform/` owns Kubernetes-resident shared services. Host services stay under [`infra/`](../infra/README.md).
+
+Detailed stage: [`docs/stage-03-platform-services.md`](../docs/stage-03-platform-services.md).
+
+## Platform planes
 
 ```text
                          Kubernetes
-┌────────────────────────────────────────────────────────────────────┐
-│                                                                    │
-│  Edge                         Delivery control                     │
-│  MetalLB                      Jenkins controller                   │
-│  ingress-nginx                CI/CD agents                         │
-│  ExternalDNS                  Vault-sourced credentials            │
-│  Vault Secrets Operator                                           │
-│                                                                    │
-│  Observability                                                     │
-│  Prometheus · AlertManager · Grafana · Fluent Bit · Elasticsearch │
-│                                                                    │
-└────────────────────────────────────────────────────────────────────┘
+
+       ╔══════════════════════════════════════════════════════╗
+      ╱  Edge                                               ╱│
+     ║  MetalLB · ingress-nginx · ExternalDNS · VSO          ║
+     ╚═══════════════════════╤═══════════════════════════════╝
+                             │
+                             ▼
+       ╔══════════════════════════════════════════════════════╗
+      ╱  Delivery control                                  ╱│
+     ║  Jenkins controller · CI runner · CD runner           ║
+     ╚═══════════════════════╤═══════════════════════════════╝
+                             │
+                             ▼
+       ╔══════════════════════════════════════════════════════╗
+      ╱  Observability                                     ╱│
+     ║  Prometheus · AlertManager · Grafana                  ║
+     ║  Fluent Bit · Elasticsearch                           ║
+     ╚═══════════════════════════════════════════════════════╝
 ```
+
+These are shared services. The application itself remains under `app/`.
 
 ## Edge
 
-`edge/` provides the cluster side of the ingress, DNS, and secrets path.
+Cluster-side edge control flow:
 
 ```text
-BIND9 ← RFC2136 ← ExternalDNS
-                      │
-Vault ── VSO ── TLS / TSIG Secrets
-                      │
-MetalLB ── 192.168.56.200 ── ingress-nginx ×2
+Ingress / Service metadata
+          │
+          ▼
+      ExternalDNS
+          │ RFC2136 + TSIG
+          ▼
+         BIND9
+
+Vault
+  │ AppRole
+  ▼
+VSO
+  │
+  ├──► TLS Secret
+  ├──► ExternalDNS TSIG Secret
+  ├──► Jenkins credentials
+  └──► registry pull Secret
 ```
 
-- MetalLB uses the explicit `192.168.56.200-220` pool.
-- ingress-nginx runs two replicas across workers and owns `192.168.56.200`.
-- ExternalDNS writes `lab.test` records through authenticated RFC2136 updates.
-- VSO reads narrowly scoped values from the host Vault and creates runtime Kubernetes Secrets.
+Traffic path:
 
-Lifecycle is orchestrated by the infrastructure entry point:
+```text
+host client
+    │
+    ▼
+192.168.56.200
+    │ MetalLB
+    ▼
+ingress-nginx ×2
+    │
+    ├──► app
+    ├──► Jenkins
+    └──► observability
+```
+
+MetalLB uses the explicit `192.168.56.200-220` pool with automatic allocation disabled. ingress-nginx owns `192.168.56.200` and is spread across workers.
+
+Reconcile through the owning infrastructure entry point:
 
 ```bash
 make edge-up
@@ -43,68 +80,99 @@ make edge-smoke
 make edge-validate
 ```
 
-Do not install or upgrade individual edge charts manually unless diagnosing a failed reconciliation. Version pins and values in Git define the expected state.
+Do not retain one-off Helm changes to individual edge components.
 
 ## Jenkins
 
-`jenkins/` defines the controller through the official Helm chart and JCasC.
-
 ```text
-jenkins.lab.test
-          │
-     ingress-nginx
-          │
-   Jenkins controller
-   node-3 · 0 executors
-      ┌───┴───────────────┐
-      │                   │
- lab-ci-runner     lab-cd-runner
- node-3              node-3
+                       GitHub
+                          │
+                          ▼
+              ┌──────────────────────┐
+              │ Jenkins controller   │
+              │ node-3              │
+              │ 0 executors         │
+              └──────────┬───────────┘
+                         │ schedules
+                 ┌───────┴───────┐
+                 ▼               ▼
+      ┌──────────────────┐  ┌──────────────────┐
+      │ lab-ci-runner  │  │ lab-cd-runner  │
+      │ node-3           │  │ node-3           │
+      │ ci-tools         │  │ deployment tools │
+      │ BuildKit         │  │ kubeconfig       │
+      └──────────────────┘  └──────────────────┘
 ```
 
-The controller is intentionally not a build worker. JCasC creates two exclusive Kubernetes agent templates:
+JCasC owns controller configuration, credentials, Kubernetes cloud configuration, both agent templates, and the `lab-build` / `lab-deploy` jobs.
 
-- `lab-ci-runner`: CI tools + BuildKit, with host-backed Maven, Trivy, and BuildKit caches.
-- `lab-cd-runner`: deployment tooling and cluster credentials.
+The CI runner keeps Maven, Trivy, and BuildKit caches under `/var/lib/lab-ci/` on `node-3`. Cache state improves speed but is disposable; a cold build must still work.
 
-Both templates are pinned to `node-3`, matching the controller placement requirement while keeping build execution outside the controller container.
-
-JCasC also creates `lab-build` and `lab-deploy`. Credentials are sourced from Vault through VSO.
+Reconcile:
 
 ```bash
 make jenkins-up
 ```
 
-The controller URL is `https://jenkins.lab.test`.
+Endpoint: `https://jenkins.lab.test`.
+
+Do not create durable Jenkins jobs or credentials in the UI. If it must survive rebuild, it belongs in JCasC/Vault.
 
 ## Observability
 
-`observability/` installs the metrics and logging stack.
+Metrics path:
 
 ```text
-Kubernetes metrics ── Prometheus ── Grafana
-Pod restarts ──────── PrometheusRule ── AlertManager
-
-container logs ── Fluent Bit ──┐
-application file logs ─ sidecar ├── Elasticsearch ── Grafana logs dashboard
-                               ┘
+Kubernetes / workloads
+        │ scrape
+        ▼
+Prometheus
+   │
+   ├──► Grafana dashboards
+   │
+   └──► PrometheusRule ──► AlertManager
 ```
 
-Reconcile and verify:
+Logging path:
+
+```text
+container stdout/stderr ──► node Fluent Bit ──┐
+                                               ├──► Elasticsearch ──► Grafana
+application.log ──► Pod Fluent Bit sidecar ───┘
+```
+
+The node daemon covers general Kubernetes container logs. The application sidecar specifically handles the application's asynchronous file log.
+
+Reconcile and check:
 
 ```bash
 make observability-up
 make observability-smoke
 ```
 
-The stack is exposed behind the existing ingress and wildcard TLS certificate:
+Endpoints:
 
-- `https://observability.lab.test/grafana/`
-- `https://observability.lab.test/prometheus/`
-- `https://observability.lab.test/elasticsearch/`
+| Path | Service |
+|---|---|
+| `https://observability.lab.test/grafana/` | Grafana |
+| `https://observability.lab.test/prometheus/` | Prometheus |
+| `https://observability.lab.test/elasticsearch/` | Elasticsearch |
 
-Prometheus and Elasticsearch use local-path PVCs. They survive Pod recreation but are not protected from loss of the node holding the local volume.
+Prometheus and Elasticsearch use local-path PVCs. Jenkins does as well. These volumes survive Pod recreation; they do not provide cross-node storage HA.
 
 ## Change model
 
-Change chart versions, values, JCasC, alerts, dashboards, or resources in Git first. Re-run the corresponding reconciliation command. Avoid retaining manual Helm or `kubectl edit` changes as operational state.
+```text
+change Git
+   │
+   ▼
+run owning reconciliation command
+   │
+   ▼
+observe rollout
+   │
+   ▼
+run smoke / validation
+```
+
+Manual Helm upgrades and `kubectl edit` are diagnostic actions only. If a change is meant to persist, capture it under `platform/` and reconcile from Git.
