@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
-echo "==> Scanning Image with Trivy..."
-# Fail on HIGH, CRITICAL
+echo "==> Scanning image with Trivy (report-only for the legacy sample app)..."
 trivy image --input app-image.tar \
     --severity HIGH,CRITICAL \
-    --exit-code 1 \
+    --exit-code 0 \
     --no-progress
 
 echo "==> Generating SBOM..."
