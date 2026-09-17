@@ -66,6 +66,7 @@ jobs:
         description('Lab deployment pipeline')
         parameters {
           stringParam('IMAGE_REF', '', 'Immutable image reference repository@sha256:...')
+          stringParam('COMMIT_SHA', '', 'Exact Git commit SHA associated with this deployment')
         }
         definition {
           cpsScm {
