@@ -1,78 +1,74 @@
-# Production documentation
+# Documentation map
 
-The root [`README.md`](../README.md) is the entry point. This directory explains how the platform is built, operated, validated, and changed.
-
-The documentation is ordered by dependency. Each stage owns one operational layer and points to the Git paths that implement it.
-
-| Stage | Layer | Document |
-|---:|---|---|
-| 1 | VM and Kubernetes foundation | [`stage-01-foundation.md`](stage-01-foundation.md) |
-| 2 | Edge, DNS, TLS, and secrets | [`stage-02-edge-trust.md`](stage-02-edge-trust.md) |
-| 3 | Shared platform services | [`stage-03-platform-services.md`](stage-03-platform-services.md) |
-| 4 | Application runtime | [`stage-04-application-runtime.md`](stage-04-application-runtime.md) |
-| 5 | CI/CD and artifact flow | [`stage-05-delivery.md`](stage-05-delivery.md) |
-| 6 | Admission policy | [`stage-06-admission-policy.md`](stage-06-admission-policy.md) |
-| 7 | Capacity and release strategy | [`stage-07-capacity-release.md`](stage-07-capacity-release.md) |
-| 8 | Validation and clean rebuild | [`stage-08-validation-rebuild.md`](stage-08-validation-rebuild.md) |
-
-## Build dependency
+The documentation is organized by operational layer, not by repository history. Read top to bottom for the full build path; open one layer in isolation when changing or debugging that subsystem.
 
 ```text
-┌──────────────────────┐
-│ 1. Foundation        │  VMs · containerd · kubeadm · Calico · storage
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│ 2. Edge + trust      │  Vault · BIND9 · CA · MetalLB · ingress · VSO
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│ 3. Platform services │  Jenkins · Prometheus · Grafana · logs
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│ 4. Application       │  image · probes · 4 replicas · sidecar logging
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│ 5. Delivery          │  CI → digest → CD → rollout verification
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│ 6. Admission policy  │  Deployment CPU + memory request enforcement
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│ 7. Capacity/release  │  priority · preemption · HPA · canary
-└──────────┬───────────┘
-           │
-           ▼
-┌──────────────────────┐
-│ 8. Validation        │  outcome checks · clean-room rebuild proof
-└──────────────────────┘
+01 Foundation
+      │
+      ▼
+02 Edge + trust
+      │
+      ▼
+03 Platform services
+      │
+      ▼
+04 Application runtime
+      │
+      ▼
+05 Delivery
+      │
+      ▼
+06 Governance + resilience
+      │
+      ▼
+07 Operations + validation
 ```
 
-Stages 1-6 are implemented platform state. Stage 7 documents production scheduling and release behavior. Stage 8 defines how the repository is proven reproducible.
+## Layers
 
-## Documentation roles
+| Layer | Owns | Page |
+|---|---|---|
+| 01 | VMs, kubeadm, containerd, Calico, storage, cluster CIDRs | [`01-foundation/`](01-foundation/README.md) |
+| 02 | Vault, BIND9, CA, MetalLB, ingress, ExternalDNS, VSO | [`02-edge-trust/`](02-edge-trust/README.md) |
+| 03 | Jenkins, Prometheus, AlertManager, Grafana, Fluent Bit, Elasticsearch | [`03-platform-services/`](03-platform-services/README.md) |
+| 04 | Java image, Kubernetes workload, probes, resources, logging | [`04-application-runtime/`](04-application-runtime/README.md) |
+| 05 | CI checks, BuildKit, Trivy/SBOM, immutable digest, Ansible CD | [`05-delivery/`](05-delivery/README.md) |
+| 06 | validating webhook, resource policy, priority/preemption, HPA, canary | [`06-governance-resilience/`](06-governance-resilience/README.md) |
+| 07 | bootstrap, secret entry, recovery, validation, clean rebuild | [`07-operations-validation/`](07-operations-validation/README.md) |
 
-[`architecture.md`](architecture.md) is the system map. [`design.md`](design.md) records the important engineering choices and tradeoffs. [`operations.md`](operations.md) contains operator procedures, secrets bootstrap, recovery, and day-two commands.
+## Page contract
 
-Folder-level README files explain local ownership and commands:
+Each layer follows the same order:
 
-- [`../infra/README.md`](../infra/README.md)
-- [`../platform/README.md`](../platform/README.md)
-- [`../app/README.md`](../app/README.md)
-- [`../delivery/README.md`](../delivery/README.md)
-- [`../policies/README.md`](../policies/README.md)
-- [`../validation/README.md`](../validation/README.md)
+```text
+scope
+  ↓
+architecture / data flow
+  ↓
+implementation
+  ↓
+engineering choices and optimizations
+  ↓
+operator interface
+  ↓
+validation / failure boundary
+  ↓
+source paths
+```
 
-## Operating principle
+This keeps implementation facts beside the reason they exist. A cache, topology constraint, rollout setting, secret boundary, or scheduling rule is documented where that technology is introduced instead of being repeated later in a separate "design decisions" document.
 
-The repository is desired state. A working cluster is evidence, not the source of truth. Permanent changes are made in Git, reconciled through the documented entry points, and then validated from observable outcomes.
+## Ownership
+
+The documentation explains the system. The implementation remains in the owning repository folders:
+
+| Path | Owns |
+|---|---|
+| [`../infra/`](../infra/) | machine, cluster, host edge |
+| [`../platform/`](../platform/) | Kubernetes-resident shared services |
+| [`../app/`](../app/) | application source, image, runtime manifests |
+| [`../delivery/`](../delivery/) | build, scan, publish, deployment automation |
+| [`../policies/`](../policies/) | admission control implementation |
+| [`../validation/`](../validation/) | observable system checks |
+
+The repository is desired state. A working cluster is evidence, not the source of truth.
