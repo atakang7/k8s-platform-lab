@@ -5,6 +5,7 @@ pipeline {
         }
     }
     options {
+        skipDefaultCheckout(true)
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timeout(time: 30, unit: 'MINUTES')
@@ -15,41 +16,35 @@ pipeline {
         CI_COMPLETE = 'false'
     }
     stages {
-        stage('Checkout') {
+        stage('Test') {
             steps {
                 checkout scm
-                script {
-                    env.COMMIT_SHA = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
-                }
-            }
-        }
-        stage('Report CI Pending') {
-            steps {
+
                 container('ci-tools') {
+                    script {
+                        env.COMMIT_SHA = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+                    }
                     withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
                         sh 'sh delivery/ci/github-status.sh pending jenkins/ci "Jenkins CI running" "$COMMIT_SHA"'
                     }
                 }
-            }
-        }
-        stage('Quality Gates') {
-            parallel {
-                stage('Maven Validate') {
-                    steps {
+
+                script {
+                    def checks = [:]
+
+                    checks['Maven Validate'] = {
                         container('ci-tools') {
                             sh 'mvn -B -ntp validate -f app/pom.xml'
                         }
                     }
-                }
-                stage('Dockerfile Lint') {
-                    steps {
+
+                    checks['Dockerfile Lint'] = {
                         container('ci-tools') {
                             sh 'hadolint app/Dockerfile'
                         }
                     }
-                }
-                stage('Kubernetes Dry Run') {
-                    steps {
+
+                    checks['Kubernetes Dry Run'] = {
                         container('ci-tools') {
                             sh '''
                               kubectl apply --dry-run=server -f app/k8s/fluent-bit-config.yaml
@@ -59,24 +54,23 @@ pipeline {
                             '''
                         }
                     }
-                }
-                stage('Ansible Syntax') {
-                    steps {
+
+                    checks['Ansible Syntax'] = {
                         container('ci-tools') {
                             sh 'ansible-playbook --syntax-check delivery/ansible/deploy.yml'
                         }
                     }
+
+                    parallel checks
                 }
-            }
-        }
-        stage('Unit Tests') {
-            steps {
+
                 container('ci-tools') {
                     sh 'delivery/ci/test.sh'
                 }
             }
         }
-        stage('Build Image') {
+
+        stage('Build') {
             steps {
                 container('buildkit') {
                     withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
@@ -93,10 +87,27 @@ pipeline {
                 }
             }
         }
-        stage('Security Scan + SBOM') {
+
+        stage('Scan & Publish') {
             steps {
                 container('ci-tools') {
                     sh 'delivery/ci/scan-image.sh'
+                }
+
+                container('ci-tools') {
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        sh 'delivery/ci/publish-image.sh'
+                    }
+                }
+
+                container('ci-tools') {
+                    withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                        sh 'sh delivery/ci/github-status.sh success jenkins/ci "Jenkins CI passed" "$COMMIT_SHA"'
+                    }
+                }
+
+                script {
+                    env.CI_COMPLETE = 'true'
                 }
             }
             post {
@@ -105,27 +116,7 @@ pipeline {
                 }
             }
         }
-        stage('Publish Image') {
-            steps {
-                container('ci-tools') {
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh 'delivery/ci/publish-image.sh'
-                    }
-                }
-            }
-        }
-        stage('Report CI Success') {
-            steps {
-                container('ci-tools') {
-                    withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                        sh 'sh delivery/ci/github-status.sh success jenkins/ci "Jenkins CI passed" "$COMMIT_SHA"'
-                    }
-                }
-                script {
-                    env.CI_COMPLETE = 'true'
-                }
-            }
-        }
+
         stage('Deploy') {
             steps {
                 script {
