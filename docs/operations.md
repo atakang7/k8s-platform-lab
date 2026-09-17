@@ -1,98 +1,343 @@
 # Operations
 
-Run commands from the repository root.
+Run commands from the repository root. Permanent fixes belong in Git. Operator actions are limited to bootstrap, secret entry, recovery, and validation.
 
-## Required Secrets
+## Bootstrap sequence
 
-Store values in Vault outside Git. The VSO definitions in `app/k8s/registry-secret.yaml` and `platform/jenkins/resources/ci-secrets.yaml` declare these inputs and their Kubernetes Secret destinations.
+```text
+fresh checkout
+     │
+     ▼
+┌──────────────────────┐
+│ 1. cluster           │
+│ make cluster-up      │
+│ validate             │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 2. edge + Vault     │
+│ configure host       │
+│ initialize/unseal    │
+│ reconcile            │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 3. operator secrets  │
+│ SCM + registry       │
+│ values into Vault    │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 4. Jenkins          │
+│ JCasC + agents       │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 5. observability    │
+│ metrics + logs       │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 6. application      │
+│ CI → digest → CD     │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 7. admission policy │
+│ install + verify     │
+└──────────┬───────────┘
+           ▼
+      final validation
+```
 
-| Vault path | Fields | Consumer | Purpose |
-|---|---|---|---|
-| `secret/runtime/dockerhub` | `username`, `token` | Application runtime | DockerHub authentication for private image pulls |
-| `secret/ci/dockerhub` | `username`, `token` | Jenkins | DockerHub authentication for CI/CD |
-| `secret/ci/github` | `username`, `token` | Jenkins | Private GitHub SCM polling and checkout |
+Detailed architecture and reasoning are in the staged documents under [`docs/`](README.md).
 
-## Stage 5 observability
+## 1. Cluster
 
-Run `make observability-up` after Stage 3 is healthy, then `make observability-smoke`. The endpoints are `https://observability.lab.test/grafana/`, `/prometheus/`, and `/elasticsearch/`. Grafana's generated admin password is in the `observability-grafana` Kubernetes Secret. The smoke check verifies trusted HTTPS and a Fluent Bit index. Elasticsearch runs without authentication on the host-only lab network.
+```bash
+make cluster-up
+make cluster-validate
+```
 
-The deployment requires each worker to have at least 1,450,000 Ki allocatable memory. The initial 1 GB / 1.5 GB worker configuration was below that floor and drove both workers NotReady. The lab now targets 2048 MB per worker and 1792 MB on the control plane; the install command checks worker capacity before creating resources.
+Inspect nodes:
 
-The single-node Elasticsearch pod runs on node-2 with Prometheus; Grafana, the Prometheus operator, and AlertManager run on node-3. Prometheus retains one day on a 2 GiB local-path PVC; Elasticsearch has a 4 GiB local-path PVC. Neither volume is highly available. AlertManager keeps restart alerts in its UI without an external notification receiver.
+```bash
+vagrant ssh node-1 -c 'kubectl get nodes -o wide'
+```
 
-## Stage 4 Jenkins
+Reapply the Git-managed cluster configuration when required:
 
-Run `make jenkins-up` after Stage 3 is healthy and Vault is unsealed. It uses the existing Vault bootstrap token at a hidden prompt, creates a narrow Jenkins VSO identity and Vault-held admin password, then installs the pinned official chart. Jenkins is at `https://jenkins.lab.test`; its admin password remains in Vault. The controller has no executors, and its home is on a node-3 local-path PVC.
+```bash
+vagrant provision node-3
+```
 
-## Stage 3 edge lifecycle
+Do not use `kubectl` or SSH repairs as permanent configuration. If a repair is required after rebuild, encode it in the owning Ansible role.
 
-The host runs Vault, Vault Agent, BIND, the local CA, and scoped DNS resolution. Ansible owns their configuration in `infra/ansible/playbooks/edge-host.yml`; `infra/edge/bin/up` coordinates Vault bootstrap and the declarative Kubernetes resources in `platform/edge/`. The root Makefile delegates each operator action.
+## 2. Edge and Vault
 
-| Action | Command | Why / tradeoff |
+First run:
+
+```bash
+make edge-up
+```
+
+The first reconciliation prepares host services and stops when Vault requires explicit operator initialization.
+
+Initialize Vault once:
+
+```bash
+VAULT_INIT_OUTPUT=/secure/absolute/path/vault-init.json make vault-init
+```
+
+The output file contains root-of-trust material. Keep it outside the repository with restrictive permissions and move it to protected operator storage.
+
+Unseal Vault:
+
+```bash
+make vault-unseal
+```
+
+Then reconcile again:
+
+```bash
+make edge-up
+make edge-smoke
+```
+
+Deep integration validation:
+
+```bash
+make edge-validate
+```
+
+After a host reboot, Vault is sealed again. Run `make vault-unseal`, then `make edge-up`.
+
+## 3. External credentials
+
+The repository defines consumers and Vault paths. The operator supplies the external account values.
+
+| Vault path | Fields | Used by |
 |---|---|---|
-| Start the private cluster | `vagrant up` | The edge depends on three running nodes. Node-1 has no edge NIC. |
-| Configure the edge | `make edge-up` | Reconciles host and platform state; stops for explicit Vault initialization or unseal. |
-| Initialize Vault once | `VAULT_INIT_OUTPUT=/protected/absolute/path make vault-init` | Writes the unseal key and root token to a new `0600` operator file outside the repository. Move it to protected storage. |
-| Unseal Vault | `make vault-unseal` | Enter an operator-held key after initialization or host reboot. |
-| Check normal health | `make edge-smoke` | Checks nodes, host services, workloads, DNS, and trusted HTTPS quickly. |
-| Run full validation | `make edge-validate` | Exercises security boundaries and DNS creation/deletion; retains the HTTPS test backend for smoke tests. |
-| Stop the edge | `make edge-down` | Removes edge releases and scoped resolution, while retaining Vault Raft data and the dynamic BIND zone. |
+| `secret/ci/github` | `username`, `token` | Jenkins private SCM checkout/status |
+| `secret/ci/dockerhub` | `username`, `token` | Jenkins image push |
+| `secret/runtime/dockerhub` | `username`, `token` | application/private image pull |
 
-First use: run `vagrant up`, `make edge-up`, `make vault-init`, `make vault-unseal`, then `make edge-up` again. The second `edge-up` prompts for the root token only when AppRole bootstrap is missing. It creates narrow DNS and TLS identities, then Vault Agent and VSO deliver the relevant secrets. Do not put the token in shell history. Subsequent runs reuse the CA, TLS certificate, TSIG, SecretIDs, Vault storage, BIND zone, and Helm releases.
+With Vault unsealed and an authorized operator token active:
 
-The host-only network is `192.168.56.0/24` on `vboxnet0`, with the host at `192.168.56.1/24`. The Vagrantfile checks subnet and DHCP conflicts. This lab uses static edge addresses; disable DHCP on the dedicated interface with `VBoxManage dhcpserver modify --network=HostInterfaceNetworking-vboxnet0 --disable` before bringing up the workers. The public CA is installed through the standard host system trust store at `/usr/local/share/ca-certificates/lab.crt`; keep `/etc/lab-ca/rootCA-key.pem` private.
+```bash
+export VAULT_ADDR=https://127.0.0.1:8200
 
-Architecture values are in `infra/edge/config.env`; pinned versions are in `infra/edge/versions.env`. Kubernetes values and resources remain declarative in `platform/edge/`. The host reaches the private Kubernetes API through a short-lived SSH tunnel. For diagnosis, use `systemctl status vault vault-agent named`, `vault status`, `dig @192.168.56.1 edge.lab.test A`, and `resolvectl query edge.lab.test`. `edge.lab.test` points to the ingress VIP; HTTP 404 is expected without a matching Ingress rule. After a reboot, unseal Vault and rerun `make edge-up`.
+vault kv put secret/ci/github \
+  username="$GITHUB_USERNAME" \
+  token="$GITHUB_TOKEN"
 
-## Cluster lifecycle
+vault kv put secret/ci/dockerhub \
+  username="$DOCKERHUB_USERNAME" \
+  token="$DOCKERHUB_TOKEN"
 
-| Action | Command |
+vault kv put secret/runtime/dockerhub \
+  username="$DOCKERHUB_USERNAME" \
+  token="$DOCKERHUB_TOKEN"
+```
+
+Do not place token literals in shell history. Prefer environment injection from the operator's local secret manager.
+
+Jenkins admin credentials are generated by the Jenkins reconciliation path and stored at `secret/jenkins/admin` when absent.
+
+## 4. Jenkins
+
+```bash
+make jenkins-up
+```
+
+`platform/jenkins/bin/up` creates the narrow Vault identity, applies VSO objects, waits for Jenkins/CI Secrets to exist, and reconciles the pinned Helm release with JCasC.
+
+Expected result:
+
+```text
+Vault values
+    │
+    ▼
+VSO Secrets in jenkins namespace
+    │
+    ▼
+Jenkins Helm + JCasC
+    │
+    ├── controller on node-3 · 0 executors
+    ├── lab-ci-runner
+    ├── lab-cd-runner
+    ├── lab-build
+    └── lab-deploy
+```
+
+Endpoint: `https://jenkins.lab.test`.
+
+Do not create persistent jobs or credentials manually in the Jenkins UI. JCasC owns them.
+
+## 5. Observability
+
+```bash
+make observability-up
+make observability-smoke
+```
+
+Endpoints:
+
+| URL | Service |
 |---|---|
-| Start and provision | `vagrant up` or `make cluster-up` |
-| Validate outcomes | `make cluster-validate` |
-| Reapply configuration | `vagrant provision node-3` |
-| Inspect nodes | `vagrant ssh node-1 -c 'kubectl get nodes -o wide'` |
-| Destroy lab | `make destroy` |
+| `https://observability.lab.test/grafana/` | Grafana |
+| `https://observability.lab.test/prometheus/` | Prometheus |
+| `https://observability.lab.test/elasticsearch/` | Elasticsearch |
 
-Vagrant provisions the cluster once, from `node-3`, using `infra/ansible/site.yml`. Cluster validation runs `infra/ansible/validate.yml` against Vagrant's generated inventory. Run `vagrant up` first so the inventory exists.
+The install checks worker allocatable memory before creating the stack. Prometheus and Elasticsearch use local-path volumes; they are persistent across Pod recreation but not worker-loss HA.
 
-For a memory-constrained host:
+Grafana admin credentials are generated by the chart and stored in its Kubernetes Secret.
 
-```bash
-MASTER_MEMORY=2048 NODE_2_MEMORY=1024 WORKER_MEMORY=1536 vagrant up
-```
+## 6. Application registry pull identity
 
-## Container validation
+Before the application can pull from the private registry, bootstrap its VSO identity:
 
 ```bash
-make container-validate
+export VAULT_ADDR=https://127.0.0.1:8200
+./app/k8s/bootstrap-registry-auth.sh
 ```
 
-The validator uses the current Git commit and `origin` URL for the image tag and OCI labels. For an unpacked working copy without Git metadata, provide both values:
+This creates the Vault policy/AppRole and Kubernetes `VaultAuth` required by `app/k8s/registry-secret.yaml`. VSO then materializes the `dockerhub-registry` pull Secret in `default` from `secret/runtime/dockerhub`.
+
+```text
+secret/runtime/dockerhub
+          │
+          ▼
+Vault AppRole
+          │
+          ▼
+VSO
+          │
+          ▼
+dockerhub-registry Secret
+          │
+          ▼
+application imagePullSecrets
+```
+
+## 7. Application release
+
+Normal releases go through Jenkins.
+
+```text
+Git push
+   │
+   ▼
+lab-build
+   │ tests / config checks / BuildKit / Trivy / SBOM
+   ▼
+immutable image digest
+   │
+   ▼
+lab-deploy
+   │ exact commit checkout / Ansible / rollout
+   ▼
+live digest assertion
+```
+
+Do not manually replace the production image as the normal release procedure.
+
+A release is identified by the full source commit SHA and the immutable image digest. Keep both values together during diagnosis or rollback.
+
+## 8. Admission policy
+
+The policy image must exist in the registry before Helm installation. The `policy-system` namespace also needs private-registry pull auth.
+
+Chart location:
+
+```text
+policies/resource-requests-webhook/helm/resource-requests-webhook/
+```
+
+Reconcile with the published image:
 
 ```bash
-STAGE2_GIT_SHA=dc11042a28e30a85fc986878a83d7d7cefc30493 \
-STAGE2_SOURCE_REPOSITORY='https://github.com/<owner>/<submission-repository>' \
-  make container-validate
+helm upgrade --install resource-requests-webhook \
+  policies/resource-requests-webhook/helm/resource-requests-webhook \
+  --namespace policy-system \
+  --create-namespace \
+  --set image.repository=docker.io/atakangul/resource-requests-webhook \
+  --set image.tag=<published-tag>
 ```
 
-The validator builds and tests with the Maven Wrapper, builds the runtime image, starts it on an ephemeral localhost port, checks the HTTP response and log output, verifies the non-root UID and OCI labels, and checks that build tools and source are absent. It reports `PASS`, `FAIL`, or `SKIP`.
+Verification is server-side dry-run: a Deployment with both requests must pass; missing CPU or missing memory must be rejected. See [`stage-06-admission-policy.md`](stage-06-admission-policy.md).
 
-## Optional private Docker Hub push
-
-Create a private repository. Supply an access token through local secure tooling, then use Docker's standard-input login:
+## Normal health checks
 
 ```bash
-export DOCKERHUB_USERNAME='<docker-hub-user>'
-export DOCKERHUB_TOKEN='<docker-hub-access-token>'
-printf '%s' "${DOCKERHUB_TOKEN}" |
-  docker login --username "${DOCKERHUB_USERNAME}" --password-stdin
+make cluster-validate
+make edge-smoke
+make observability-smoke
 ```
+
+Then verify the application, delivery identity, and admission behavior described in [`stage-08-validation-rebuild.md`](stage-08-validation-rebuild.md).
+
+## Recovery
+
+### Vault sealed
 
 ```bash
-DOCKERHUB_REPOSITORY='<docker-hub-user>/<private-repository>' \
-STAGE2_PUSH=true \
-  make container-validate
+make vault-unseal
+make edge-up
 ```
 
-The script reports `user/repository@sha256:<digest>` after the push. Keep the digest for later deployment work.
+### Edge drift
+
+```bash
+make edge-up
+make edge-smoke
+```
+
+### Jenkins drift
+
+```bash
+make jenkins-up
+```
+
+JCasC and Helm are the recovery path. Do not preserve a UI-only fix.
+
+### Observability drift
+
+```bash
+make observability-up
+make observability-smoke
+```
+
+### Application rollout failure
+
+Inspect the Deployment and Pods first:
+
+```bash
+vagrant ssh node-1 -c 'kubectl -n default get deploy,pod -o wide'
+vagrant ssh node-1 -c 'kubectl -n default describe deployment sample-java-app'
+```
+
+Use the CI/CD release identity to determine the last known-good commit and digest. Rollback should use the delivery path with an immutable known-good artifact rather than an ad-hoc mutable tag.
+
+## Destruction and clean rebuild
+
+Destroy only after repository cleanup and documentation are committed:
+
+```bash
+make destroy
+```
+
+A clean-room reproduction starts from a fresh checkout and the documented operator-held credentials. If rebuilding requires an undocumented cluster edit, package install, copied secret, or one-off node command, capture that missing requirement in Git/docs and rerun the rebuild.
+
+## Host diagnosis
+
+Useful host checks:
+
+```bash
+systemctl status vault vault-agent named
+vault status
+dig @192.168.56.1 app.lab.test A
+resolvectl query app.lab.test
+```
+
+`infra/edge/config.env` is the source of shared edge addresses. `infra/edge/versions.env`, `platform/jenkins/versions.env`, and `platform/observability/versions.env` carry version pins.

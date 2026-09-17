@@ -1,9 +1,6 @@
-# Stage 9 sample: canary release for the existing sample-java-app.
-#
-# The current sample-java-app Deployment, Service, and primary Ingress remain
-# the stable path. This file only represents the temporary candidate side of
-# the release. The candidate should otherwise keep the same production pod
-# conventions as the stable app (security, logging, probes, image auth, etc.).
+# Reference manifest for a canary release of sample-java-app.
+# This is a design reference, not part of baseline reconciliation.
+# The stable Deployment, Service, and primary Ingress remain unchanged.
 
 apiVersion: apps/v1
 kind: Deployment
@@ -26,7 +23,7 @@ spec:
         - name: dockerhub-registry
       containers:
         - name: app
-          image: docker.io/atakangul/sample-java-app:canary-candidate
+          image: docker.io/atakangul/sample-java-app:<candidate-digest-or-tag>
           ports:
             - containerPort: 9001
           resources:

@@ -1,107 +1,214 @@
 # Architecture
 
-## Stage 3 edge
+This document describes the deployed system and the control flows that create it. Build order and operating procedures are documented separately in [`docs/README.md`](README.md) and [`operations.md`](operations.md).
+
+## Physical and network planes
 
 ```text
-                       Host
-              Vault 2.0.4      BIND9
-                 │               ▲ TSIG/RFC2136
-                 │ VSO        ExternalDNS
-═════════════════╪════ host-only 192.168.56.0/24 ════════
-                 │      VIP 192.168.56.200
-                 │               │ MetalLB Layer 2
-                 └──────────► ingress-nginx (2 replicas)
-                                 │
-══════════════════ private 10.50.0.0/24 ══════════════════
-              node-1 API         │ Services → Pods
-              (no edge NIC)     node-2 / node-3
+                                      HOST
+
+          ╔════════════════════════════════════════════════════════════╗
+         ╱  192.168.56.1                                             ╱│
+        ╱  Vault · BIND9 · local CA · scoped resolver               ╱ │
+       ╚═══════════════════════════════╤══════════════════════════════╝  │
+                                       │ host-only edge
+                                       │ 192.168.56.0/24
+                  ┌────────────────────┴────────────────────┐
+                  │                                         │
+                  ▼                                         ▼
+        ┌──────────────────┐                       ┌──────────────────┐
+        │ node-2           │                       │ node-3           │
+        │ worker           │                       │ worker           │
+        │ 10.50.0.11       │                       │ 10.50.0.12       │
+        │ 192.168.56.11    │                       │ 192.168.56.12    │
+        └─────────┬────────┘                       └─────────┬────────┘
+                  │                                         │
+                  └────────────────────┬────────────────────┘
+                                       │ private VM network
+                                       │ 10.50.0.0/24
+                                       ▼
+                             ┌──────────────────┐
+                             │ node-1           │
+                             │ control plane    │
+                             │ 10.50.0.10       │
+                             │ no edge NIC      │
+                             └──────────────────┘
 ```
 
-Vault and BIND bind to loopback and the host edge address only. Vault Agent reads the DNS key into a protected runtime file for BIND; VSO authenticates with separate AppRoles and creates the ExternalDNS TSIG and ingress TLS Kubernetes Secrets. Host requests for `lab.test` go to BIND through scoped systemd-resolved routing. Deep edge validation retains a small test backend for subsequent smoke tests.
-
-## Stage 4 Jenkins
-
-```text
-jenkins.lab.test → ingress-nginx LoadBalancer (192.168.56.200)
-                       → Jenkins ClusterIP → controller on node-3 → local-path PVC
-```
-
-ExternalDNS creates the hostname from the Ingress. The ingress controller serves its VSO-managed wildcard TLS certificate. VSO also delivers Jenkins admin credentials from Vault; JCasC defines Jenkins configuration.
-
-## Stage 5 observability
-
-```text
-Kubernetes metrics → Prometheus → Grafana dashboard
-Pod restart → PrometheusRule → AlertManager
-Kubernetes container logs → Fluent Bit → Elasticsearch
-
-observability.lab.test → existing ingress-nginx / wildcard TLS
-                              ├─ /grafana
-                              ├─ /prometheus
-                              └─ /elasticsearch
-```
-
-ExternalDNS creates the single hostname. Prometheus and Elasticsearch use local-path PVCs. The Git-managed dashboard is provisioned through a labeled ConfigMap. Application file logging remains a later stage.
-
-## Running foundation
-
-```text
-Host
-  Vagrant / VirtualBox
-       ↓
-  node-1 (control plane) ── node-2 (worker)
-       │                    node-3 (worker)
-       ↓
-  Ansible → containerd + kubeadm
-       ↓
-  Calico networking + local-path storage
-       ↓
-  validation/cluster
-```
-
-| Node | Role | VM address |
+| Network | CIDR | Purpose |
 |---|---|---|
-| `node-1` | Control plane | `10.50.0.10` |
-| `node-2` | Worker | `10.50.0.11` |
-| `node-3` | Worker | `10.50.0.12` |
+| VM | `10.50.0.0/24` | kubelet/API/node traffic |
+| Pod | `10.244.0.0/16` | Calico workload network |
+| Service | `10.96.0.0/12` | Kubernetes virtual services |
+| edge | `192.168.56.0/24` | host-to-worker ingress/DNS path |
 
-Only workers have edge NICs: `node-2` → `192.168.56.11`, `node-3` → `192.168.56.12`. The host is `192.168.56.1`; MetalLB reserves `.200–.220` with automatic allocation disabled.
+MetalLB reserves `192.168.56.200-220`; ingress-nginx explicitly owns `192.168.56.200`.
 
-| Network | CIDR | Owner |
-|---|---|---|
-| VM | `10.50.0.0/24` | Vagrant |
-| Pod | `10.244.0.0/16` | kubeadm and Calico |
-| Service | `10.96.0.0/12` | Kubernetes |
-| Edge | `192.168.56.0/24` | VirtualBox host-only + MetalLB |
-
-The VM range is a VirtualBox internal network. Vagrant reaches guests through managed NAT SSH forwards; Calico uses VM addresses rather than NAT addresses.
-
-## Application artifact
+## Edge data path
 
 ```text
-Supplied Java source
-       ↓
-Maven Wrapper build and tests
-       ↓
-Java 11 JAR
-       ↓
-non-root Java 11 runtime image
-       ↓
-Git SHA tag → registry digest when pushed
+client
+  │
+  │ resolve app.lab.test
+  ▼
+┌─────────────────────┐
+│ BIND9               │
+│ 192.168.56.1        │
+└──────────┬──────────┘
+           │ A = 192.168.56.200
+           ▼
+┌─────────────────────┐
+│ MetalLB             │
+│ ingress VIP         │
+└──────────┬──────────┘
+           ▼
+┌─────────────────────┐
+│ ingress-nginx ×2    │
+│ worker-spread       │
+└──────────┬──────────┘
+           │ TLS + host/path routing
+           ├────────────► application Service
+           ├────────────► Jenkins Service
+           └────────────► observability Services
 ```
 
-The application listens on port `9001`. `GET /api/foos?val=...` returns and logs the supplied value. This repository does not yet deploy the application to Kubernetes.
+The Kubernetes API is not part of this request path and remains on the private network.
+
+## DNS control path
+
+```text
+Ingress / LoadBalancer metadata
+             │
+             ▼
+       ExternalDNS
+             │
+             │ RFC2136 + TSIG
+             ▼
+           BIND9
+             │
+             ▼
+      lab.test zone
+```
+
+ExternalDNS receives its TSIG credential through Vault Secrets Operator. DNS records are generated from Kubernetes desired state rather than maintained by hand.
+
+## Secret control path
+
+```text
+                         Vault
+                           │
+          ┌────────────────┼───────────────────┐
+          │                │                   │
+          ▼                ▼                   ▼
+     edge DNS/TLS       Jenkins CI         application
+          │                │                   │
+          ▼                ▼                   ▼
+  Vault Agent / VSO       VSO                  VSO
+          │                │                   │
+          ▼                ▼                   ▼
+   BIND TSIG file     Jenkins Secrets    registry pull Secret
+                       + admin creds
+```
+
+Vault is the value authority. Kubernetes Secrets are runtime materializations. The repository contains paths, policies, and delivery objects, not secret values.
+
+## Application plane
+
+```text
+                          Service :80
+                              │
+                              ▼
+             ┌────────────────────────────────┐
+             │ sample-java-app Deployment     │
+             │ replicas: 4                    │
+             │ topology maxSkew: 1            │
+             │ control plane excluded         │
+             └──────────────┬─────────────────┘
+                            │
+               ┌────────────┴────────────┐
+               ▼                         ▼
+      ┌──────────────────┐      ┌──────────────────┐
+      │ node-2           │      │ node-3           │
+      │ app + sidecar    │      │ app + sidecar    │
+      │ app + sidecar    │      │ app + sidecar    │
+      └──────────────────┘      └──────────────────┘
+```
+
+Each Pod has a Java container and Fluent Bit sidecar. The application writes an asynchronous file log to a shared `emptyDir`; the sidecar sends that file to Elasticsearch.
+
+## Delivery control plane
+
+```text
+GitHub main
+    │
+    ▼
+Jenkins controller · node-3 · 0 executors
+    │
+    ├──────────────────────┐
+    ▼                      ▼
+lab-ci-runner       lab-cd-runner
+    │                      │
+    │ tests                │ validate digest/SHA
+    │ config checks        │ exact commit checkout
+    │ BuildKit             │ Ansible deployment
+    │ Trivy + SBOM         │ rollout wait
+    │ registry push        │ live digest assertion
+    ▼                      │
+image digest ──────────────┘
+```
+
+The CI/CD handoff is immutable: full Git SHA plus `repository@sha256:<digest>`.
+
+## Observability plane
+
+```text
+Kubernetes metrics ─────────────► Prometheus ─────► Grafana
+                                      │
+                                      └────────────► AlertManager
+
+container stdout/stderr ─► node Fluent Bit ─┐
+                                             ├─► Elasticsearch ─► Grafana logs
+application.log ─► Pod sidecar Fluent Bit ──┘
+```
+
+Prometheus, Elasticsearch, and Jenkins use local-path volumes. They survive Pod recreation but do not provide storage HA across worker loss.
+
+## Admission plane
+
+```text
+Deployment CREATE/UPDATE
+          │
+          ▼
+ Kubernetes API
+          │ AdmissionReview HTTPS
+          ▼
+resource-requests-webhook
+          │
+          ├── CPU + memory request on every regular container → allow
+          └── either missing                               → deny
+```
+
+The webhook fails closed for in-scope Deployments. System namespaces and the policy namespace are excluded to avoid bootstrapping deadlocks.
+
+## Capacity and release overlays
+
+The baseline application keeps four scheduled replicas. HPA can request additional replicas. When fixed cluster capacity is exhausted, higher application priority allows lower-priority restartable batch Pods to be preempted.
+
+Critical releases use a second candidate Deployment/Service and ingress-nginx canary weighting. Traffic progresses through controlled percentages while the stable version remains available.
+
+See [`stage-07-capacity-release.md`](stage-07-capacity-release.md).
 
 ## Ownership boundaries
 
-| Area | Owns |
+| Layer | Source of truth |
 |---|---|
-| Vagrant | VM creation, networking, CPU, RAM |
-| `infra/ansible/` | OS setup, container runtime, Kubernetes, CNI, storage |
-| `app/` | Source, image build, future app-specific manifests |
-| `infra/ansible/roles/` | Host BIND, Vault, Vault Agent, local CA, and resolver |
-| `infra/edge/` | Edge lifecycle orchestration and shared configuration |
-| `platform/edge/` | MetalLB, ingress-nginx, ExternalDNS, VSO |
-| `delivery/` | Future delivery automation |
-| `policies/` | Future admission and security policy |
-| `validation/` | Outcome checks by capability |
+| VM lifecycle/network | `Vagrantfile` |
+| Kubernetes foundation | `infra/ansible/` |
+| host Vault/BIND/CA/resolver | `infra/` |
+| cluster edge | `platform/edge/` |
+| Jenkins | `platform/jenkins/` |
+| observability | `platform/observability/` |
+| application runtime | `app/` |
+| release automation | `delivery/` |
+| admission control | `policies/` |
+| outcome checks | `validation/` |
