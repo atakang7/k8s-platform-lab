@@ -22,10 +22,13 @@ https://jenkins.lab.test
 ┌──────────────────┐  ┌──────────────────┐
 │ lab-ci-runner  │  │ lab-cd-runner  │
 │ Pod · node-3     │  │ Pod · node-3     │
-│                  │  │                  │
 │ ci-tools         │  │ ci-tools         │
 │ BuildKit         │  │ deployment tools │
-└──────────────────┘  └──────────────────┘
+└────────┬─────────┘  └────────┬─────────┘
+         │                     │
+         └──────────┬──────────┘
+                    ▼
+        serviceAccount: jenkins-agent
 ```
 
 The controller never builds or deploys application code itself. `numExecutors: 0` keeps controller CPU, memory, and filesystem state out of the workload execution path.
@@ -77,12 +80,12 @@ Jenkins configuration contains credential references, not credential values. Vau
 
 CI and CD use separate labels and templates even though both are pinned to `node-3`.
 
-| Agent | Owns | Important state |
+| Agent | Owns | Runtime inputs/state |
 |---|---|---|
-| `lab-ci-runner` | tests, lint, BuildKit, Trivy, publication | Maven, Trivy, BuildKit caches |
-| `lab-cd-runner` | exact-commit checkout and Kubernetes deployment | kubeconfig credential only |
+| `lab-ci-runner` | tests, lint, server dry-run, BuildKit, Trivy, publication | GitHub/Docker Hub bindings; Maven, Trivy, BuildKit caches |
+| `lab-cd-runner` | exact-commit checkout and Kubernetes deployment | GitHub binding; kubeconfig bound only during deployment |
 
-The split keeps deployment capability out of the image-build path and makes the execution intent visible in Jenkins scheduling.
+The split separates scheduling, tooling, caches, and pipeline intent. It is **not** an RBAC isolation boundary in the current reference configuration: both Pod templates use the same `jenkins-agent` ServiceAccount. CI uses that in-cluster identity for server-side Kubernetes dry-runs; CD additionally binds the explicit kubeconfig credential for deployment.
 
 ## CI warm state
 
