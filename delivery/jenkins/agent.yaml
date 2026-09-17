@@ -1,31 +1,87 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: jenkins-agent
   labels:
     component: jenkins-agent
 spec:
+  serviceAccountName: jenkins-agent
+  restartPolicy: Never
   containers:
-    - name: tools
-      image: alpine:3.18
-      command: ["cat"]
-      tty: true
-      # Alpine with git, jq, bash, skopeo, docker etc. expected to be installed or present in CI image.
     - name: maven
       image: maven:3.9.4-eclipse-temurin-17
       command: ["cat"]
       tty: true
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 768Mi
+    - name: hadolint
+      image: hadolint/hadolint:v2.14.0-alpine
+      command: ["cat"]
+      tty: true
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+    - name: kubectl
+      image: bitnami/kubectl:1.36
+      command: ["sh", "-c", "sleep infinity"]
+      tty: true
+      resources:
+        requests:
+          cpu: 20m
+          memory: 32Mi
+        limits:
+          cpu: 200m
+          memory: 128Mi
     - name: buildkit
       image: moby/buildkit:v0.12.2
-      command: ["cat"]
-      tty: true
+      args: ["--addr", "unix:///run/buildkit/buildkitd.sock"]
       securityContext:
         privileged: true
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
     - name: trivy
       image: aquasec/trivy:0.45.0
-      command: ["cat"]
+      command: ["sh", "-c", "sleep infinity"]
       tty: true
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+    - name: skopeo
+      image: quay.io/skopeo/stable:v1.16.1
+      command: ["sh", "-c", "sleep infinity"]
+      tty: true
+      resources:
+        requests:
+          cpu: 20m
+          memory: 32Mi
+        limits:
+          cpu: 300m
+          memory: 256Mi
     - name: ansible
-      image: cytopia/ansible:2.15-tools
-      command: ["cat"]
+      image: alpine:3.20
+      command: ["sh", "-c", "sleep infinity"]
       tty: true
+      resources:
+        requests:
+          cpu: 20m
+          memory: 64Mi
+        limits:
+          cpu: 500m
+          memory: 384Mi

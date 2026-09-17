@@ -9,6 +9,75 @@ jenkins:
   authorizationStrategy:
     loggedInUsersCanDoAnything:
       allowAnonymousRead: false
+  clouds:
+    - kubernetes:
+        name: kubernetes
+        namespace: jenkins
+        serverUrl: https://kubernetes.default.svc.cluster.local
+        jenkinsUrl: http://jenkins.jenkins.svc.cluster.local:8080
+        webSocket: true
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: github-creds
+              description: GitHub private repository credential
+              username: "${GITHUB_USERNAME}"
+              password: "${GITHUB_TOKEN}"
+          - usernamePassword:
+              scope: GLOBAL
+              id: dockerhub-creds
+              description: DockerHub CI credential
+              username: "${DOCKERHUB_USERNAME}"
+              password: "${DOCKERHUB_TOKEN}"
+
+jobs:
+  - script: >
+      pipelineJob('lab-build') {
+        description('Lab CI pipeline')
+        triggers { scm('H/2 * * * *') }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/atakang7/k8s-platform-lab.git')
+                  credentials('github-creds')
+                }
+                branch('*/main')
+              }
+            }
+            scriptPath('delivery/Jenkinsfile.build')
+            lightweight(true)
+          }
+        }
+      }
+  - script: >
+      pipelineJob('lab-deploy') {
+        description('Lab deployment pipeline')
+        parameters {
+          stringParam('IMAGE_REF', '', 'Immutable image reference repository@sha256:...')
+        }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/atakang7/k8s-platform-lab.git')
+                  credentials('github-creds')
+                }
+                branch('*/main')
+              }
+            }
+            scriptPath('delivery/Jenkinsfile.deploy')
+            lightweight(true)
+          }
+        }
+      }
+
 unclassified:
   location:
     url: https://jenkins.lab.test/

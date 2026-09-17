@@ -67,12 +67,18 @@ spec:
     roleId: ${role_id}
     secretRef: approle-id
 EOF
+
 kubectl apply -f "${root}/platform/jenkins/resources/admin-secret.yaml" >/dev/null
-for _ in {1..60}; do
-  if kubectl -n jenkins get secret jenkins-admin >/dev/null 2>&1; then break; fi
-  sleep 2
-done
-kubectl -n jenkins get secret jenkins-admin >/dev/null
+kubectl apply -f "${root}/platform/jenkins/resources/ci-secrets.yaml" >/dev/null
+kubectl apply -f "${root}/platform/jenkins/resources/agent-rbac.yaml" >/dev/null
+
+for secret in jenkins-admin github-creds dockerhub-creds; do
+  for _ in {1..60}; do
+    if kubectl -n jenkins get secret "${secret}" >/dev/null 2>&1; then break; fi
+    sleep 2
+  done
+  kubectl -n jenkins get secret "${secret}" >/dev/null
+ done
 
 helm repo add jenkins https://charts.jenkins.io --force-update >/dev/null
 helm repo update jenkins >/dev/null

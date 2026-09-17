@@ -4,8 +4,34 @@ controller:
   serviceType: ClusterIP
   agentListenerEnabled: false
   installPlugins:
+    - kubernetes:4547.v52f3080db_8cd
+    - workflow-aggregator:608.v67378e9d3db_1
+    - git:5.10.1
     - configuration-as-code:2121.v86fe99d4b_b_a_b_
+    - credentials-binding:728.v902a_273b_8947
+    - job-dsl:3732.v9a_c49a_61a_313
   installLatestPlugins: false
+  containerEnv:
+    - name: GITHUB_USERNAME
+      valueFrom:
+        secretKeyRef:
+          name: github-creds
+          key: username
+    - name: GITHUB_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: github-creds
+          key: token
+    - name: DOCKERHUB_USERNAME
+      valueFrom:
+        secretKeyRef:
+          name: dockerhub-creds
+          key: username
+    - name: DOCKERHUB_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: dockerhub-creds
+          key: token
   resources:
     requests:
       cpu: 100m

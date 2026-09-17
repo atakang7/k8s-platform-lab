@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -euo pipefail
 
-COMMIT_SHA=$(git rev-parse --short HEAD)
+: "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
+: "${DOCKER_USER:?DOCKER_USER is required}"
+: "${DOCKER_PASS:?DOCKER_PASS is required}"
+
+COMMIT_SHA="$(git rev-parse --short=12 HEAD)"
 IMAGE_TAG="sha-${COMMIT_SHA}"
-IMAGE_REF="${DOCKER_REGISTRY}/lab-app:${IMAGE_TAG}"
+TAGGED_REF="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
 
-echo "==> Publishing Image..."
-skopeo copy docker-archive:app-image.tar docker://${IMAGE_REF}
+echo "==> Authenticating to DockerHub"
+printf '%s' "$DOCKER_PASS" | skopeo login --username "$DOCKER_USER" --password-stdin docker.io >/dev/null
 
-# Publish SemVer tag if it's a tag build
-if [[ "$GIT_BRANCH" == refs/tags/v* ]]; then
-    SEMVER_TAG="${GIT_BRANCH#refs/tags/}"
-    SEMVER_REF="${DOCKER_REGISTRY}/lab-app:${SEMVER_TAG}"
-    echo "==> Publishing SemVer tag: ${SEMVER_TAG}"
-    skopeo copy docker-archive:app-image.tar docker://${SEMVER_REF}
-fi
+echo "==> Publishing ${IMAGE_TAG}"
+skopeo copy docker-archive:app-image.tar "docker://${TAGGED_REF}" >/dev/null
 
-echo "==> Resolving Immutable Digest..."
-DIGEST=$(skopeo inspect docker://${IMAGE_REF} --format '{{.Digest}}')
-echo "IMAGE_REF=${DOCKER_REGISTRY}/lab-app@${DIGEST}" > image_ref.env
+echo "==> Resolving immutable digest"
+DIGEST="$(skopeo inspect "docker://${TAGGED_REF}" --format '{{.Digest}}')"
+printf 'IMAGE_REF=%s@%s\n' "$IMAGE_REPOSITORY" "$DIGEST" > image_ref.env
+printf 'IMAGE_TAG=%s\n' "$IMAGE_TAG" > image_tag.env
 
-echo "Resolved Digest: ${DIGEST}"
+echo "Published ${IMAGE_TAG}"
+echo "Resolved immutable digest"

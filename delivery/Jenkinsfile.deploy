@@ -5,23 +5,37 @@ pipeline {
         }
     }
     parameters {
-        string(name: 'IMAGE_REF', description: 'Immutable image reference (e.g. repository/image@sha256:...)')
+        string(name: 'IMAGE_REF', description: 'Immutable image reference repository@sha256:...')
+    }
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 15, unit: 'MINUTES')
     }
     stages {
+        stage('Validate Input') {
+            steps {
+                script {
+                    if (!(params.IMAGE_REF ==~ /^.+@sha256:[0-9a-f]{64}$/)) {
+                        error('IMAGE_REF must be an immutable sha256 digest reference')
+                    }
+                }
+            }
+        }
         stage('Checkout') {
             steps {
                 checkout scm
             }
         }
-        stage('Deploy to Kubernetes') {
+        stage('Deploy with Ansible') {
             steps {
                 container('ansible') {
-                    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-                        sh '''
-                        export K8S_AUTH_KUBECONFIG=$KUBECONFIG
-                        ansible-playbook delivery/ansible/deploy.yml -e "image_ref=${IMAGE_REF}"
-                        '''
-                    }
+                    sh '''
+                      set -eu
+                      apk add --no-cache ansible curl python3 >/dev/null
+                      curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl
+                      chmod +x /usr/local/bin/kubectl
+                      ansible-playbook delivery/ansible/deploy.yml -e "image_ref=${IMAGE_REF}"
+                    '''
                 }
             }
         }
