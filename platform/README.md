@@ -57,7 +57,7 @@ Jenkins controller · node-3 · 0 executors
          ┌────────────────┼────────────────┐
          ▼                ▼                ▼
 lab-ci-runner     lab-ci-light      lab-cd-runner
-node-3, 1 Pod       any worker, 2 Pods  node-3
+node-3, 1 Pod       node-2, 2 Pods      node-3
 image builds        lint, verification  deployment tools
 ```
 
