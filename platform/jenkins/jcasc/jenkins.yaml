@@ -40,8 +40,6 @@ jenkins:
                 restartPolicy: Never
                 nodeSelector:
                   kubernetes.io/hostname: node-3
-                imagePullSecrets:
-                  - name: dockerhub-registry
                 volumes:
                   - name: trivy-cache
                     hostPath:
@@ -163,8 +161,6 @@ jenkins:
                 restartPolicy: Never
                 nodeSelector:
                   kubernetes.io/hostname: node-3
-                imagePullSecrets:
-                  - name: dockerhub-registry
                 containers:
                   - name: ci-tools
                     image: docker.io/atakangul/lab-ci-agent@sha256:da753bea05c1d34e390a847ee44d562fd2cc2db6e4abd8d395d73111fa819e72
