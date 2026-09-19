@@ -1,45 +1,59 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
-readonly root
-source "${root}/infra/edge/config.env"
-source "${root}/infra/edge/versions.env"
-source "${root}/infra/edge/lib/operator-state.sh"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly ROOT
+readonly EDGE_PLAYBOOK="${ROOT}/infra/ansible/playbooks/edge-host.yml"
+
+source "${ROOT}/infra/edge/config.env"
+source "${ROOT}/infra/edge/versions.env"
+source "${ROOT}/infra/edge/lib/operator-state.sh"
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
   exit 1
 }
 
-configure_host() {
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+reconcile_host_foundation() {
+  phase 'reconciling host Vault, CA, and edge prerequisites'
+
   sudo -n true ||
     fail 'passwordless sudo is required for non-interactive edge bootstrap'
 
   sudo -n \
     PYTHONNOUSERSITE=1 \
-    ANSIBLE_CONFIG="${root}/infra/ansible/ansible.cfg" \
+    ANSIBLE_CONFIG="${ROOT}/infra/ansible/ansible.cfg" \
     VAULT_VERSION="${VAULT_VERSION}" \
     VAULT_SHA256="${VAULT_SHA256}" \
     ansible-playbook \
       -i localhost, \
       -c local \
-      "${root}/infra/ansible/playbooks/edge-host.yml" \
+      "${EDGE_PLAYBOOK}" \
       --tags host \
       -e "edge_host_ip=${EDGE_HOST_IP}" \
       -e "edge_network_cidr=${EDGE_NETWORK_CIDR}" \
       -e "dns_zone=${DNS_ZONE}"
 }
 
-ensure_vault_ready() {
-  "${root}/infra/edge/bin/vault-init"
-  "${root}/infra/edge/bin/vault-unseal"
+ensure_vault_available() {
+  phase 'initializing and unsealing Vault when required'
+
+  "${ROOT}/infra/edge/bin/vault-init"
+  "${ROOT}/infra/edge/bin/vault-unseal"
 }
 
 wait_for_current_tsig() (
   set -Eeuo pipefail
 
+  local attempt
   local expected_tsig
+  local -r max_attempts=60
+  local -r poll_interval_seconds=0.5
+
   expected_tsig="$(mktemp)"
   trap 'rm -f -- "${expected_tsig}"' EXIT
 
@@ -51,55 +65,63 @@ wait_for_current_tsig() (
       "\n};"
     ' > "${expected_tsig}"
 
-  for _ in {1..60}; do
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     if sudo -n systemctl is-active --quiet vault-agent &&
       sudo -n cmp -s "${expected_tsig}" /run/lab-bind/tsig.key; then
       return
     fi
-    sleep 0.5
+    sleep "${poll_interval_seconds}"
   done
 
   sudo -n systemctl status vault-agent --no-pager -l >&2 || true
   fail 'Vault Agent did not render the current DNS TSIG within 30 seconds'
 )
 
-configure_vault_runtime() {
+reconcile_vault_runtime() {
+  phase 'reconciling Vault policies, identities, and runtime secrets'
+
   require_vault_operator_token
 
-  "${root}/infra/edge/lib/with-kubeconfig.sh" \
-    "${root}/infra/edge/lib/kubernetes.sh" vso
-  "${root}/infra/edge/lib/vault.sh"
+  # Install the Vault Secrets Operator and its CRDs before creating VaultAuth
+  # and VaultStaticSecret resources that depend on them.
+  "${ROOT}/infra/edge/lib/with-kubeconfig.sh" \
+    "${ROOT}/infra/edge/lib/kubernetes.sh" vso
 
+  "${ROOT}/infra/edge/lib/vault.sh"
   wait_for_current_tsig
 }
 
-configure_dns_host() {
+reconcile_dns_host() {
+  phase 'reconciling host DNS and resolver configuration'
+
   sudo -n \
     PYTHONNOUSERSITE=1 \
-    ANSIBLE_CONFIG="${root}/infra/ansible/ansible.cfg" \
+    ANSIBLE_CONFIG="${ROOT}/infra/ansible/ansible.cfg" \
     ansible-playbook \
       -i localhost, \
       -c local \
-      "${root}/infra/ansible/playbooks/edge-host.yml" \
+      "${EDGE_PLAYBOOK}" \
       --tags dns \
       -e "edge_host_ip=${EDGE_HOST_IP}" \
       -e "edge_network_cidr=${EDGE_NETWORK_CIDR}" \
       -e "dns_zone=${DNS_ZONE}"
 }
 
-configure_cluster_edge() {
-  "${root}/infra/edge/lib/with-kubeconfig.sh" \
-    "${root}/infra/edge/lib/kubernetes.sh" full
+reconcile_cluster_edge() {
+  phase 'reconciling Kubernetes edge controllers and health endpoint'
+
+  "${ROOT}/infra/edge/lib/with-kubeconfig.sh" \
+    "${ROOT}/infra/edge/lib/kubernetes.sh" full
 }
 
 main() {
-  cd "${root}"
+  cd "${ROOT}"
 
-  configure_host
-  ensure_vault_ready
-  configure_vault_runtime
-  configure_dns_host
-  configure_cluster_edge
+  reconcile_host_foundation
+  ensure_vault_available
+  reconcile_vault_runtime
+  reconcile_dns_host
+  reconcile_cluster_edge
 
   unset VAULT_TOKEN
   printf 'PASS | edge is configured; run make edge-smoke\n'
