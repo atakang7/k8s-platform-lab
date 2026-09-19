@@ -52,10 +52,10 @@ jenkins:
                       path: /var/lib/lab-ci/buildkit-rootless
                       type: DirectoryOrCreate
                 initContainers:
-                  # hostPath is created root-owned; rootless BuildKit runs as uid 1000.
-                  - name: buildkit-state-owner
+                  # hostPaths are created root-owned; BuildKit and ci-tools run as uid 1000.
+                  - name: cache-owner
                     image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
-                    command: ["chown", "1000:1000", "/state"]
+                    command: ["chown", "1000:1000", "/state", "/trivy"]
                     securityContext:
                       runAsUser: 0
                       runAsGroup: 0
@@ -68,6 +68,8 @@ jenkins:
                     volumeMounts:
                       - name: buildkit-state
                         mountPath: /state
+                      - name: trivy-cache
+                        mountPath: /trivy
                     resources:
                       requests:
                         cpu: 10m
@@ -81,9 +83,19 @@ jenkins:
                     imagePullPolicy: IfNotPresent
                     command: ["sh", "-c", "sleep infinity"]
                     tty: true
+                    # The Jenkins agent's user: both write the shared workspace, and
+                    # no delivery step needs root. HOME is the writable workspace.
+                    securityContext:
+                      runAsUser: 1000
+                      runAsGroup: 1000
+                    env:
+                      - name: HOME
+                        value: /home/jenkins/agent
+                      - name: TRIVY_CACHE_DIR
+                        value: /var/cache/trivy
                     volumeMounts:
                       - name: trivy-cache
-                        mountPath: /root/.cache/trivy
+                        mountPath: /var/cache/trivy
                     resources:
                       requests:
                         cpu: 150m
@@ -157,6 +169,14 @@ jenkins:
                     imagePullPolicy: IfNotPresent
                     command: ["sh", "-c", "sleep infinity"]
                     tty: true
+                    # The Jenkins agent's user: both write the shared workspace, and
+                    # no delivery step needs root. HOME is the writable workspace.
+                    securityContext:
+                      runAsUser: 1000
+                      runAsGroup: 1000
+                    env:
+                      - name: HOME
+                        value: /home/jenkins/agent
                     resources:
                       requests:
                         cpu: 100m
