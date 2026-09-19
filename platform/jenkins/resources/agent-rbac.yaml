@@ -1,69 +1,21 @@
+# lab-cd-runner identity. It holds no deploy rights of its own: each delivery
+# environment lets it mint short-lived tokens for that environment's
+# `deployer` only (delivery/environments/environment.yaml).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: jenkins-agent
   namespace: jenkins
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: jenkins-app-deployer
-  namespace: default
-# delete: Helm removes objects dropped from the chart and prunes release
-# history, which is stored as ConfigMaps (HELM_DRIVER=configmap in
-# delivery/ci/deploy.sh). No Secrets access: default holds registry and
-# Vault AppRole credentials.
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "services", "configmaps"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "replicasets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["monitoring.coreos.com"]
-    resources: ["servicemonitors"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: jenkins-app-deployer
-  namespace: default
-subjects:
-  - kind: ServiceAccount
-    name: jenkins-agent
-    namespace: jenkins
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: jenkins-app-deployer
----
-# lab-ci-runner identity. CI validates manifests with server-side dry-run,
-# which Kubernetes authorizes exactly like a real write, so it is bound to the
-# same Role as CD. jenkins-ci-dry-run-only below rejects every request from it
-# that is not a dry-run, so CI can validate production objects but never change them.
+# lab-ci-runner identity. Delivery environments bind it to their deployer
+# Role so CI can server-side dry-run releases, which Kubernetes authorizes like
+# real writes; jenkins-ci-dry-run-only below rejects every request from it
+# that is not a dry-run, so CI can validate environments but never change them.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: jenkins-ci
   namespace: jenkins
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: jenkins-ci-dry-run
-  namespace: default
-subjects:
-  - kind: ServiceAccount
-    name: jenkins-ci
-    namespace: jenkins
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: jenkins-app-deployer
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy

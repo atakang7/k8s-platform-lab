@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Provisions this repository's application environment (environment.yaml):
+# namespace, deployer identity, CI/CD access, Vault-backed image pull Secret.
+# Run after `make jenkins-up`, which creates the Jenkins ServiceAccounts.
+set -Eeuo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+export VAULT_ADDR="${VAULT_ADDR:-https://127.0.0.1:8200}"
+
+if [[ "${1:-}" != --cluster ]]; then
+  vault token lookup >/dev/null
+  vault policy write registry-pull-read "${root}/platform/environment/registry-pull-read.hcl" >/dev/null
+  vault write auth/approle/role/registry-pull-vso token_policies=registry-pull-read \
+    token_ttl=1h token_max_ttl=4h secret_id_ttl=0 secret_id_num_uses=0 >/dev/null
+  "${root}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+  exit
+fi
+
+read -r environment namespace < <(python3 -c 'import sys, yaml; e = yaml.safe_load(open(sys.argv[1])); print(e["name"], e["namespace"])' "${root}/environment.yaml")
+role_id="$(vault read -field=role_id auth/approle/role/registry-pull-vso/role-id)"
+sed -e "s/__NAMESPACE__/${namespace}/g" -e "s/__ENVIRONMENT__/${environment}/g" -e "s/__ROLE_ID__/${role_id}/g" \
+  "${root}/platform/environment/namespace.yaml" | kubectl apply -f - >/dev/null
+
+kubectl -n "${namespace}" create secret generic vault-ca \
+  --from-file=ca.crt=/usr/local/share/ca-certificates/lab.crt \
+  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+if ! kubectl -n "${namespace}" get secret registry-pull-approle >/dev/null 2>&1; then
+  vault write -field=secret_id -f auth/approle/role/registry-pull-vso/secret-id |
+    kubectl -n "${namespace}" create secret generic registry-pull-approle --from-file=id=/dev/stdin >/dev/null
+fi
+
+# Prove the access model: CD can only mint deployer tokens; CI's real writes are denied.
+cd_agent=system:serviceaccount:jenkins:jenkins-agent
+ci_agent=system:serviceaccount:jenkins:jenkins-ci
+[[ "$(kubectl auth can-i create serviceaccounts/deployer --subresource=token -n "${namespace}" --as="${cd_agent}")" == yes ]] ||
+  { echo 'FAIL | CD cannot mint deployer tokens' >&2; exit 1; }
+[[ "$(kubectl auth can-i create deployments -n "${namespace}" --as="${cd_agent}")" == no ]] ||
+  { echo 'FAIL | CD holds deploy rights directly' >&2; exit 1; }
+if output="$(kubectl -n "${namespace}" create configmap delivery-probe --from-literal=probe=1 --as="${ci_agent}" 2>&1)"; then
+  kubectl -n "${namespace}" delete configmap delivery-probe >/dev/null
+  echo 'FAIL | jenkins-ci can write to the cluster' >&2; exit 1
+fi
+[[ "${output}" == *jenkins-ci-dry-run-only* ]] || { echo "FAIL | unexpected CI denial: ${output}" >&2; exit 1; }
+
+for _ in {1..60}; do
+  kubectl -n "${namespace}" get secret registry-pull >/dev/null 2>&1 && break
+  sleep 2
+done
+kubectl -n "${namespace}" get secret registry-pull >/dev/null || { echo 'FAIL | registry-pull Secret missing' >&2; exit 1; }
+echo "PASS | environment ${environment} (${namespace})"

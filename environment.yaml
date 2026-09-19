@@ -1,0 +1,8 @@
+# This repository's delivery environment. A stage or prod copy of the
+# repository changes this file (and app values), nothing in delivery/.
+name: dev
+namespace: apps
+# true: every deploy waits for manual approval in Jenkins.
+approval: false
+# OCI registry for platform charts (charts/*).
+chartRegistry: oci://registry-1.docker.io/atakangul

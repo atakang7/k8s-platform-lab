@@ -1,6 +1,102 @@
+# Values for the platform base chart (charts/service). image.digest is set by
+# delivery for every release.
 image:
-  # The only repository the chart accepts. Must match IMAGE_REPOSITORY in
-  # delivery/Jenkinsfile.build.
   repository: docker.io/atakangul/sample-java-app
-  # Known-good reference release. CD overrides it with the digest CI published.
-  reference: docker.io/atakangul/sample-java-app@sha256:0c81155a4581e5affa528cce2e8d205d58236ded419ff4427e71d963d48cfe86
+
+replicas: 4
+containerPort: 9001
+# Zero-downtime rollout on the fixed-capacity cluster.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 4
+
+probes:
+  startup:
+    httpGet: {path: "/api/foos?val=startup", port: http}
+    failureThreshold: 60
+    periodSeconds: 2
+  readiness:
+    httpGet: {path: "/api/foos?val=ready", port: http}
+    periodSeconds: 2
+  liveness:
+    httpGet: {path: "/api/foos?val=liveness", port: http}
+    periodSeconds: 10
+
+resources:
+  requests: {cpu: 250m, memory: 256Mi}
+  limits: {cpu: 500m, memory: 512Mi}
+
+podSecurityContext:
+  fsGroup: 10001
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  allowPrivilegeEscalation: false
+
+nodeAffinity:
+  requiredDuringSchedulingIgnoredDuringExecution:
+    nodeSelectorTerms:
+      - matchExpressions:
+          - key: node-role.kubernetes.io/control-plane
+            operator: DoesNotExist
+
+ingress:
+  enabled: true
+  host: app.lab.test
+
+metrics:
+  enabled: true
+  path: /actuator/prometheus
+
+# The application writes a log file; the Fluent Bit sidecar ships it.
+configMaps:
+  fluent-bit:
+    fluent-bit.conf: |
+      [SERVICE]
+          Flush        1
+          Log_Level    info
+          Daemon       off
+
+      [INPUT]
+          Name         tail
+          Path         /var/log/app/*.log
+          Tag          app.logs
+          Read_from_Head True
+          DB           /var/log/app/fluent-bit.db
+          Mem_Buf_Limit 5MB
+
+      [OUTPUT]
+          Name         es
+          Match        *
+          Host         logs-es-http.observability.svc.cluster.local
+          Port         9200
+          Index        app-logs
+          Suppress_Type_Name On
+
+volumes:
+  - name: app-logs
+    emptyDir: {}
+  - name: fluent-bit-config
+    configMap:
+      name: "{{ .Release.Name }}-fluent-bit"
+volumeMounts:
+  - name: app-logs
+    mountPath: /var/log/app
+
+sidecars:
+  - name: fluent-bit
+    image: fluent/fluent-bit@sha256:d792375ca8e53be72fc25716c28f291f32c6fc6f4f31d12d0d14bc78cefe9226
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      allowPrivilegeEscalation: false
+    resources:
+      requests: {cpu: 50m, memory: 32Mi}
+      limits: {cpu: 100m, memory: 128Mi}
+    volumeMounts:
+      - name: app-logs
+        mountPath: /var/log/app
+      - name: fluent-bit-config
+        mountPath: /fluent-bit/etc/

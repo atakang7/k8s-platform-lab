@@ -27,7 +27,7 @@ Jenkins Secrets
 make jenkins-up
 ```
 
-The command creates/reuses the Vault identity, waits for VSO-managed Secrets, generates the namespace-scoped `jenkins-agent` kubeconfig Secret, checks its RBAC, proves the CI identity `jenkins-ci` is denied real writes, and reconciles the pinned Helm release with JCasC.
+The command creates/reuses the Vault identity, waits for VSO-managed Secrets, removes any legacy long-lived agent token, checks that neither agent identity has cluster-wide rights, and reconciles the pinned Helm release with JCasC.
 
 Endpoint: `https://jenkins.lab.test`.
 
@@ -38,8 +38,9 @@ Endpoint: `https://jenkins.lab.test`.
 - zero controller executors;
 - Kubernetes cloud configuration;
 - exclusive `lab-ci-runner` and `lab-cd-runner` templates;
-- GitHub, Docker Hub, and kubeconfig credentials;
-- `lab-build` and `lab-deploy` pipeline jobs.
+- GitHub and Docker Hub credentials (no cluster credential: CD mints short-lived tokens);
+- the `lab-delivery` shared library (`delivery/pipeline`);
+- one job per service, plus the `deploy` and `platform` jobs.
 
 Do not make durable job, agent, or credential changes in the UI. Put them in JCasC/Vault and reconcile.
 

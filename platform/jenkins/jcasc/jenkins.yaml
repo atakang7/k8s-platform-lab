@@ -158,52 +158,52 @@ credentials:
               description: DockerHub CI credential
               username: "${DOCKERHUB_USERNAME}"
               password: "${DOCKERHUB_TOKEN}"
-          - file:
-              scope: GLOBAL
-              id: kubeconfig
-              description: Cluster Kubeconfig
-              fileName: kubeconfig
-              secretBytes: "${KUBECONFIG_BASE64}"
 
 jobs:
-  - script: >
-      pipelineJob('lab-build') {
-        description('Lab CI pipeline')
-        triggers { scm('* * * * *') }
-        definition {
-          cpsScm {
-            scm {
-              git {
-                remote {
-                  url('https://github.com/atakang7/k8s-platform-lab.git')
-                  credentials('github-creds')
-                }
-                branch('*/main')
-              }
+  - script: |
+      // Onboarding a service: one entry here plus its chart and a two-line
+      // Jenkinsfile (delivery/README.md).
+      def services = [
+        [name: 'sample-java-app', jenkinsfile: 'app/Jenkinsfile'],
+      ]
+      def repository = 'https://github.com/atakang7/k8s-platform-lab.git'
+
+      services.each { service ->
+        pipelineJob(service.name) {
+          description("Service pipeline: build, scan, publish and promote ${service.name}")
+          triggers { scm('* * * * *') }
+          definition {
+            cpsScm {
+              scm { git { remote { url(repository); credentials('github-creds') }; branch('*/main') } }
+              scriptPath(service.jenkinsfile)
+              lightweight(true)
             }
-            scriptPath('delivery/Jenkinsfile.build')
-            lightweight(false)
           }
         }
       }
-  - script: >
-      pipelineJob('lab-deploy') {
-        description('Lab deployment pipeline')
+
+      pipelineJob('platform') {
+        description('Base chart release and platform/infra checks')
+        triggers { scm('* * * * *') }
+        definition {
+          cpsScm {
+            scm { git { remote { url(repository); credentials('github-creds') }; branch('*/main') } }
+            scriptPath('delivery/Jenkinsfile.platform')
+            lightweight(true)
+          }
+        }
+      }
+
+      pipelineJob('deploy') {
+        description('Deploy one published image of one service chart to this environment')
         parameters {
+          stringParam('CHART', '', 'Service chart path, e.g. app/chart')
           stringParam('IMAGE_REF', '', 'Immutable image reference repository@sha256:...')
-          stringParam('COMMIT_SHA', '', 'Exact Git commit SHA associated with this deployment')
+          stringParam('COMMIT_SHA', '', 'Full Git commit SHA the image was built from')
         }
         definition {
           cpsScm {
-            scm {
-              git {
-                remote {
-                  url('https://github.com/atakang7/k8s-platform-lab.git')
-                  credentials('github-creds')
-                }
-                branch('*/main')
-              }
-            }
+            scm { git { remote { url(repository); credentials('github-creds') }; branch('*/main') } }
             scriptPath('delivery/Jenkinsfile.deploy')
             lightweight(true)
           }
@@ -211,5 +211,20 @@ jobs:
       }
 
 unclassified:
+  # The platform delivery library (delivery/pipeline). Services cannot choose
+  # another version: the platform decides what runs in every pipeline.
+  globalLibraries:
+    libraries:
+      - name: lab-delivery
+        defaultVersion: main
+        implicit: false
+        allowVersionOverride: false
+        retriever:
+          modernSCM:
+            libraryPath: delivery/pipeline/
+            scm:
+              git:
+                remote: https://github.com/atakang7/k8s-platform-lab.git
+                credentialsId: github-creds
   location:
     url: https://jenkins.lab.test/

@@ -5,7 +5,7 @@ state="${1:?state required}"
 context="${2:?context required}"
 description="${3:?description required}"
 sha="${4:-${COMMIT_SHA:-}}"
-repo="${GITHUB_REPOSITORY:-atakang7/lab}"
+repo="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY (owner/name) is required}"
 target_url="${BUILD_URL:-}"
 
 case "$state" in

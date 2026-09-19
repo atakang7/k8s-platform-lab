@@ -43,11 +43,11 @@ make container-validate
 
 `Dockerfile` is multi-stage. The final image contains the application JAR and Java runtime, not Maven, source code, or compiler tooling. The runtime process uses UID/GID `10001` and does not require root.
 
-Production releases are identified by registry digest, not by the image value committed in `chart/values.yaml`. CI publishes the digest; CD releases the chart with that digest through Helm, which waits for readiness and rolls back on failure. See [`chart/`](chart/README.md).
+Releases are identified by registry digest. `chart/` inherits the platform base chart ([`charts/service`](../charts/service/README.md)); `chart/values.yaml` holds this app's settings, and delivery sets the digest on every release.
 
 ## Deployment contract
 
-`chart/templates/deployment.yaml` maintains four replicas.
+`chart/values.yaml` sets four replicas.
 
 ```text
 sample-java-app · replicas 4
@@ -107,29 +107,16 @@ Logback rotates daily and by size. Retained file history is capped at 1 GiB tota
 The platform-level Fluent Bit still collects normal Kubernetes container logs. This sidecar exists for the explicit application file log.
 Its tail offset database lives on the Pod's shared volume, so a sidecar restart resumes without replaying the file.
 
-## Private registry
-
-`k8s/registry-secret.yaml` tells Vault Secrets Operator to materialize `secret/runtime/dockerhub` as the `dockerhub-registry` pull Secret.
-
-Bootstrap the application Vault identity after Vault and VSO are healthy:
-
-```bash
-./app/k8s/bootstrap-registry-auth.sh
-```
-
-Do not commit registry credentials.
-
-## Manifests
+## Chart
 
 | File | Owns |
 |---|---|
-| `chart/templates/deployment.yaml` | replicas, placement, probes, resources, security, sidecar |
-| `chart/templates/service.yaml` | `:80` → application `:9001` |
-| `chart/templates/ingress.yaml` | `app.lab.test` + wildcard TLS |
-| `chart/templates/fluent-bit-config.yaml` | application file-log shipping |
-| `k8s/registry-secret.yaml` | Vault-backed Docker Hub pull Secret |
-| `k8s/vault-connection.yaml` | application namespace Vault connection |
+| `chart/Chart.yaml` | release name, base chart version |
+| `chart/values.yaml` | image repository, replicas, placement, probes, resources, security, ingress, metrics, Fluent Bit sidecar |
+| `Jenkinsfile` | the call into the platform delivery library |
+
+The image pull Secret is provisioned per environment by [`platform/environment`](../platform/environment/). Do not commit registry credentials.
 
 ## Release ownership
 
-Normal deployment is owned by [`delivery/`](../delivery/README.md). Avoid ad-hoc `kubectl set image` changes for production releases; they break the Git-SHA + image-digest release identity.
+Deployment is owned by [`delivery/`](../delivery/README.md). Avoid ad-hoc `kubectl` changes: the next release takes those fields back, and they break the commit + digest release identity.

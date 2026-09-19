@@ -15,7 +15,7 @@ if [[ "${1:-}" != --cluster ]]; then
 fi
 
 [[ "$(kubectl -n policy-system get validatingwebhookconfiguration resource-requests-webhook -o name)" != '' ]] || fail 'admission webhook is absent'
-for secret in jenkins-admin github-creds dockerhub-creds jenkins-kubeconfig; do
+for secret in jenkins-admin github-creds dockerhub-creds; do
   kubectl -n jenkins get secret "${secret}" >/dev/null || fail "Jenkins prerequisite ${secret} is missing"
 done
 kubectl -n jenkins rollout status deployment/jenkins --timeout=90s >/dev/null
@@ -36,28 +36,28 @@ with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, 
 PY
 pass 'Jenkins Secrets, placement, persistence, and LoadBalancer HTTPS path'
 
-kubectl -n default rollout status deployment/sample-java-app --timeout=90s >/dev/null
-app="$(kubectl -n default get deployment sample-java-app -o json)"
-jq -e '.status.readyReplicas == 4 and .spec.replicas == 4 and .spec.selector.matchLabels.track == "stable" and .spec.template.metadata.labels.track == "stable"' <<<"${app}" >/dev/null || fail 'stable application replicas or labels are wrong'
+namespace="$(python3 -c 'import yaml; print(yaml.safe_load(open("environment.yaml"))["namespace"])')"
+kubectl -n "${namespace}" rollout status deployment/sample-java-app --timeout=90s >/dev/null
+app="$(kubectl -n "${namespace}" get deployment sample-java-app -o json)"
+jq -e '.status.readyReplicas == 4 and .spec.replicas == 4' <<<"${app}" >/dev/null || fail 'application replicas are wrong'
 jq -e '.spec.template.spec.containers[] | select(.name == "app") | .image | test("@sha256:[0-9a-f]{64}$")' <<<"${app}" >/dev/null || fail 'application image is not immutable'
-[[ "$(kubectl -n default get service sample-java-app -o jsonpath='{.spec.selector.track}')" == stable ]] || fail 'stable Service can select canary Pods'
-pods="$(kubectl -n default get pods -l app=sample-java-app,track=stable -o json)"
+pods="$(kubectl -n "${namespace}" get pods -l app.kubernetes.io/name=sample-java-app -o json)"
 jq -e '[.items[] | select(.status.phase == "Running") | .spec.nodeName] | sort == ["node-2","node-2","node-3","node-3"]' <<<"${pods}" >/dev/null || fail 'application is not spread 2/2 across workers'
 [[ "$(dig +short @192.168.56.1 app.lab.test A | tail -1)" == 192.168.56.200 ]] || fail 'application DNS is wrong'
 unique="e2e-$(date +%s)-$$"
 [[ "$(curl --silent --show-error --fail --get --data-urlencode "val=${unique}" https://app.lab.test/api/foos)" == "QueryStringValue: ${unique}" ]] || fail 'application HTTPS response is wrong'
 logged=false
 for _ in {1..15}; do
-  for pod in $(kubectl -n default get pods -l app=sample-java-app,track=stable -o name); do
-    if kubectl -n default exec "${pod}" -c app -- grep -Fq "${unique}" /var/log/app/app.log; then logged=true; break; fi
+  for pod in $(kubectl -n "${namespace}" get pods -l app.kubernetes.io/name=sample-java-app -o name); do
+    if kubectl -n "${namespace}" exec "${pod}" -c app -- grep -Fq "${unique}" /var/log/app/app.log; then logged=true; break; fi
   done
   [[ "${logged}" == true ]] && break
   sleep 1
 done
 [[ "${logged}" == true ]] || fail 'request did not reach the asynchronous application file log'
-pass 'four stable replicas, immutable image, placement, DNS, and HTTPS'
+pass 'four replicas, immutable image, placement, DNS, and HTTPS'
 
-kubectl -n default get servicemonitor sample-java-app >/dev/null || fail 'application ServiceMonitor is absent'
+kubectl -n "${namespace}" get servicemonitor sample-java-app >/dev/null || fail 'application ServiceMonitor is absent'
 metrics="$(curl --silent --show-error --fail --get --data-urlencode 'query=up{service="sample-java-app"}' https://observability.lab.test/prometheus/api/v1/query)"
 jq -e '.status == "success" and (.data.result | any(.value[1] == "1"))' <<<"${metrics}" >/dev/null || fail 'application Prometheus target is not UP'
 metrics="$(curl --silent --show-error --fail --get --data-urlencode 'query=jvm_memory_used_bytes{area="heap"}' https://observability.lab.test/prometheus/api/v1/query)"
@@ -101,12 +101,4 @@ policy_check allow '{cpu: 10m, memory: 16Mi}'
 policy_check deny '{memory: 16Mi}'
 policy_check deny '{cpu: 10m}'
 pass 'admission accepts complete requests and rejects missing CPU or memory'
-python3 - <<'PY' || fail 'reference canary selector can overlap stable traffic'
-import yaml
-from pathlib import Path
-resources = list(yaml.safe_load_all(Path('docs/06-governance-resilience/canary-release.yaml').read_text()))
-service = next(item for item in resources if item['kind'] == 'Service')
-assert service['spec']['selector']['track'] == 'canary'
-assert service['spec']['selector']['app'] == 'sample-java-app'
-PY
 pass 'complete platform validation'

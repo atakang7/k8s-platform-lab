@@ -1,4 +1,4 @@
-.PHONY: cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up observability-up observability-smoke vault-init vault-unseal e2e-validate destroy
+.PHONY: cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up environment-up observability-up observability-smoke vault-init vault-unseal e2e-validate destroy
 
 cluster-up:
 	vagrant up
@@ -25,6 +25,9 @@ edge-down:
 
 jenkins-up:
 	./platform/jenkins/bin/up
+
+environment-up:
+	./platform/environment/bin/up
 
 observability-up:
 	./platform/observability/bin/up
