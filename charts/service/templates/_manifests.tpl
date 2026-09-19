@@ -5,6 +5,10 @@
 {{- include "service.deployment" $ctx }}
 ---
 {{ include "service.service" $ctx }}
+{{- if $values.podDisruptionBudget.enabled }}
+---
+{{ include "service.pdb" $ctx }}
+{{- end }}
 {{- if $values.ingress.enabled }}
 ---
 {{ include "service.ingress" $ctx }}
@@ -73,6 +77,9 @@ spec:
         checksum/config: {{ toYaml . | sha256sum }}
       {{- end }}
     spec:
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      enableServiceLinks: {{ .Values.enableServiceLinks }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- with .Values.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
@@ -104,6 +111,7 @@ spec:
       containers:
         - name: app
           image: {{ include "service.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
               containerPort: {{ .Values.containerPort }}
@@ -140,6 +148,21 @@ spec:
     - name: http
       port: {{ .Values.service.port }}
       targetPort: http
+{{- end }}
+
+{{- define "service.pdb" -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "service.selectorLabels" . | nindent 6 }}
 {{- end }}
 
 {{- define "service.ingress" -}}

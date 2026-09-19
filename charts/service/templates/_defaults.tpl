@@ -3,6 +3,7 @@
 image:
   repository: ""   # the app's image repository
   digest: ""       # set by delivery for every release
+  pullPolicy: IfNotPresent
 replicas: 1
 containerPort: 8080
 probes: {}         # startup / readiness / liveness, as Kubernetes probe specs (port: http)
@@ -12,11 +13,17 @@ podSecurityContext: {}
 securityContext:
   runAsNonRoot: true
   allowPrivilegeEscalation: false
+automountServiceAccountToken: false
+enableServiceLinks: false
+terminationGracePeriodSeconds: 30
 strategy: {}
 imagePullSecrets:
   - name: registry-pull   # provisioned per environment by platform/environment
 nodeAffinity: {}
 spreadAcrossNodes: true
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
 service:
   port: 80
 ingress:
