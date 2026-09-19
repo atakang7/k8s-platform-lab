@@ -2,8 +2,6 @@
 
 `platform/` owns Kubernetes-resident shared services. Host Vault, BIND9, CA, and resolver configuration remain under [`infra/`](../infra/README.md).
 
-Canonical design: [03 — Platform services](../docs/03-platform-services/README.md).
-
 ## Shared services
 
 ```text
@@ -49,7 +47,7 @@ make edge-smoke
 make edge-validate
 ```
 
-Detailed edge behavior: [02 — Edge and trust](../docs/02-edge-trust/README.md).
+Details: [edge/README.md](edge/README.md).
 
 ## Jenkins
 
@@ -73,7 +71,7 @@ make jenkins-up
 
 Endpoint: `https://jenkins.lab.test`.
 
-Detailed Jenkins behavior: [`docs/03-platform-services/jenkins.md`](../docs/03-platform-services/jenkins.md).
+Details: [jenkins/README.md](jenkins/README.md).
 
 ## Observability
 
@@ -99,7 +97,7 @@ make observability-up
 make observability-smoke
 ```
 
-Detailed observability behavior: [`docs/03-platform-services/observability.md`](../docs/03-platform-services/observability.md).
+Details: [observability/README.md](observability/README.md).
 
 ## Change model
 

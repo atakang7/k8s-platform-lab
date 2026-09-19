@@ -2,8 +2,6 @@
 
 `infra/` owns machine creation, the Kubernetes foundation, and host-side edge services. Kubernetes-resident edge components stay under [`platform/edge/`](../platform/edge/README.md).
 
-Canonical design: [01 — Foundation](../docs/01-foundation/README.md) and [02 — Edge and trust](../docs/02-edge-trust/README.md).
-
 ## Ownership boundary
 
 ```text

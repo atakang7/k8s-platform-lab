@@ -2,7 +2,7 @@
 
 This component rejects Deployment CREATE/UPDATE requests when any regular container omits either CPU or memory from `resources.requests`.
 
-Canonical design: [Admission policy](../../docs/06-governance-resilience/admission-policy.md).
+Lifecycle and install: [policies/README.md](../README.md).
 
 ## Admission path
 

@@ -57,4 +57,3 @@ make edge-validate
 
 Values and manifests in this directory are desired state. Manual Helm changes are temporary diagnostics only.
 
-Full architecture: [02 — Edge and trust](../../docs/02-edge-trust/README.md).

@@ -85,7 +85,7 @@ for cmd in sudo git make vagrant VBoxManage ansible-playbook kubectl helm python
 done
 ```
 
-GitHub and Docker Hub credentials are **not** required to create the cluster. They are required before CI/CD is enabled and must remain outside Git; the supported Vault paths and exact loading commands are documented in [07 — Operations and validation](docs/07-operations-validation/README.md#3-external-credentials).
+GitHub and Docker Hub credentials are **not** required to create the cluster. They are required before CI/CD is enabled and must remain outside Git; setup step 3 below shows how they reach Vault.
 
 ## Fresh setup
 
@@ -117,49 +117,56 @@ make edge-smoke
 
 Later reconciliations normally use `make edge-up && make edge-smoke`.
 
-### 3. Load external delivery credentials
+### 3. Load external credentials
 
-Populate the three documented Vault paths for GitHub CI access, Docker Hub publication, and runtime image pulls:
+`make jenkins-up` stores the CI credentials in Vault from these variables when `secret/ci/github` and `secret/ci/dockerhub` are absent; later runs reuse Vault:
 
-- `secret/ci/github`
-- `secret/ci/dockerhub`
-- `secret/runtime/dockerhub`
+```bash
+export GITHUB_USERNAME=... GITHUB_TOKEN=...          # repository + commit-status access
+export DOCKERHUB_USERNAME=... DOCKERHUB_TOKEN=...    # image and chart publication
+```
 
-Use the exact commands in [External credentials](docs/07-operations-validation/README.md#3-external-credentials). Do not commit tokens, generated Vault material, kubeconfigs, or private keys.
+The runtime image-pull credential is written once:
 
-### 4. Reconcile platform services and runtime registry identity
+```bash
+vault kv put secret/runtime/dockerhub username=... token=...
+```
+
+Do not commit tokens, generated Vault material, kubeconfigs, or private keys.
+
+### 4. Reconcile platform services and the application environment
 
 ```bash
 make jenkins-up
+make environment-up
 make observability-up
 make observability-smoke
-./app/k8s/bootstrap-registry-auth.sh
 ```
 
-Trigger the Jenkins `lab-build` job to build, scan, publish, and hand the immutable image digest to `lab-deploy`.
+Jenkins then runs the `platform` job (base charts, platform checks) and the `sample-java-app` job (build, scan, publish, deploy). See [delivery](delivery/README.md).
 
-### 5. Install the admission policy and run the final proof
-
-The admission webhook image must be published first and installed with its immutable digest. Follow [Admission policy](docs/06-governance-resilience/admission-policy.md), then run:
+### 5. Install admission policies and run the final proof
 
 ```bash
+RESOURCE_REQUESTS_WEBHOOK_IMAGE_DIGEST=sha256:<published-digest> make policies-up
+make policies-smoke
 make e2e-validate
 ```
 
-The full bootstrap, recovery, external-secret, policy-installation, and validation details live in [07 — Operations and validation](docs/07-operations-validation/README.md).
+See [policies](policies/README.md) and [validation](validation/README.md).
 
-> **Teardown scope:** `make destroy` destroys the Vagrant VMs. Host-side Vault/BIND/CA state is deliberately retained for recovery; see the operations guide before treating a VM rebuild as a completely clean host reset.
+> **Teardown scope:** `make destroy` destroys the Vagrant VMs. Host-side Vault/BIND/CA state is deliberately retained for recovery; see [infra/edge](infra/edge/README.md) before treating a VM rebuild as a completely clean host reset.
 
 ## Documentation
 
-| Layer | Purpose |
-|---|---|
-| [01 — Foundation](docs/01-foundation/README.md) | machines, kubeadm cluster, networking, storage, resource layout |
-| [02 — Edge and trust](docs/02-edge-trust/README.md) | DNS, TLS, Vault, secret delivery, ingress, LoadBalancer edge |
-| [03 — Platform services](docs/03-platform-services/README.md) | Jenkins and observability services |
-| [04 — Application runtime](docs/04-application-runtime/README.md) | container build, probes, placement, rollout, logging |
-| [05 — Delivery](docs/05-delivery/README.md) | CI, BuildKit, scanning, immutable artifacts, CD |
-| [06 — Governance and resilience](docs/06-governance-resilience/README.md) | admission policy, fixed-capacity scheduling, canary releases |
-| [07 — Operations and validation](docs/07-operations-validation/README.md) | bootstrap, secrets, recovery, validation, clean rebuild |
+Each component documents itself next to its code:
 
-[`docs/README.md`](docs/README.md) explains the documentation structure and implementation ownership.
+| Component | Purpose |
+|---|---|
+| [infra](infra/README.md) | machines, kubeadm cluster, networking, storage; host edge: DNS, CA, Vault |
+| [platform](platform/README.md) | edge controllers, Jenkins, observability, application environment |
+| [delivery](delivery/README.md) | CI/CD: pipeline library, deploy job, CI agent image |
+| [charts/service](charts/service/README.md) | base chart services inherit |
+| [app](app/README.md) | sample application: build, runtime, chart values |
+| [policies](policies/README.md) | admission policies and their lifecycle |
+| [validation](validation/README.md) | cluster, edge, container and end-to-end checks |

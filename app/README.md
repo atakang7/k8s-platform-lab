@@ -2,8 +2,6 @@
 
 `app/` owns the Java service, container image definition, Kubernetes runtime manifests, probes, resource contract, and application file logging.
 
-Canonical runtime design: [04 — Application runtime](../docs/04-application-runtime/README.md).
-
 ## Request path
 
 ```text

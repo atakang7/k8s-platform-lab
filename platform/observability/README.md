@@ -49,4 +49,3 @@ Prometheus and Elasticsearch use local-path PVCs. Their data survives Pod recrea
 
 Dashboards and alerts are Git-managed. Change JSON/PrometheusRule/value files here, run reconciliation, then run the smoke check. Do not preserve dashboard edits made only in the Grafana UI as source of truth.
 
-Full design: [`docs/03-platform-services/observability.md`](../../docs/03-platform-services/observability.md).
