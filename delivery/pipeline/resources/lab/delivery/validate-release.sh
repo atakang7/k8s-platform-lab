@@ -30,8 +30,11 @@ render_release() {
     values=(--values "${CHART}/values-${ENVIRONMENT}.yaml")
   fi
 
+  # --skip-tests: Helm replaces its test Pod itself (before-hook-creation);
+  # applying it would try to mutate the last run's immutable Pod.
   helm template "${RELEASE}" "${CHART}" \
     --namespace "${NAMESPACE}" \
+    --skip-tests \
     "${values[@]}" \
     --set-string image.digest="${IMAGE_DIGEST:-${PLACEHOLDER_IMAGE_DIGEST}}" \
     > "${WORK_DIRECTORY}/release.yaml"
