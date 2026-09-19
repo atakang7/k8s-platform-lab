@@ -43,14 +43,16 @@ branch or pull request ─► multibranch job ─► changeset under `path`? ─
                                  │
                                  ▼
           deploy job: checkout exact commit · image repo must match the chart
+                      image OCI revision must equal that commit
+                      mint 15-minute deployer token
                       helm upgrade --wait --rollback-on-failure
 ```
 
 Everything here is native Jenkins:
 - **Jobs:** GitHub Branch Source builds every branch and pull request and posts the GitHub commit status.
-- **Only relevant changes run:** declarative `when { changeset }`. The first build of a branch has no changelog, so it always runs.
+- **Only relevant changes run:** declarative `when { changeset }`. A new multibranch job has no changelog, so its first build runs the relevant bootstrap checks instead of silently skipping them.
 - **Only `main` publishes and deploys:** `when { branch 'main' }`.
-- **Release identity:** the full commit SHA plus the image digest. Nothing mutable is deployed.
+- **Release identity:** the full commit SHA plus the image digest. CD inspects the immutable digest and requires its `org.opencontainers.image.revision` label to equal that commit before Helm runs.
 
 ## Identities
 

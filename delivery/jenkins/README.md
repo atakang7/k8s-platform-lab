@@ -33,3 +33,5 @@ The agent image contains the tools required by pipeline steps. BuildKit itself i
 4. Commit the JCasC change in the same pull request and run `make jenkins-up`.
 
 Do not change the live Pod template in Jenkins and leave JCasC behind. The digest in Git is the source of truth.
+
+The `dockerfile-<content hash>` tag identifies the committed build recipe; it is not a claim of bit-for-bit reproducibility. The Dockerfile installs distribution packages without pinning every package version, so a later rebuild may resolve different package contents. The immutable registry digest written to JCasC is the runtime identity Jenkins actually uses.

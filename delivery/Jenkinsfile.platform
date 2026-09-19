@@ -1,6 +1,5 @@
-// This repository's platform layers, as a GitHub multibranch job. Pull
-// requests lint; main also publishes base charts. Platform and infra are
-// applied by the operator (`make`), never by Jenkins.
+// Repository-level validation and base-chart publication. Platform and infra
+// are reconciled by the operator (`make`), never applied by Jenkins.
 @Library('lab-delivery') _
 
 pipeline {
@@ -15,33 +14,49 @@ pipeline {
             steps {
                 container('ci-tools') {
                     sh '''
-                      find delivery infra platform policies validation -type f \\( -name '*.sh' -o -path '*/bin/*' \\) \\
+                      find delivery infra platform policies validation -type f \
+                        \( -name '*.sh' -o -path '*/bin/*' \) \
                         -exec shellcheck --external-sources --source-path=SCRIPTDIR {} +
                     '''
                 }
             }
         }
+
         stage('Chart lint') {
             when {
                 allOf {
                     changeRequest()
-                    changeset 'charts/**'
+                    anyOf {
+                        changeset 'charts/**'
+                        // A new multibranch job has no changelog yet. Validate the
+                        // repository once instead of silently skipping chart checks.
+                        expression { currentBuild.previousBuild == null }
+                    }
                 }
             }
             steps {
                 container('chart-testing') {
                     sh '''
                       git config --global --add safe.directory "$PWD"
-                      ct lint --target-branch "$CHANGE_TARGET" --chart-dirs charts --check-version-increment
+                      ct lint \
+                        --target-branch "$CHANGE_TARGET" \
+                        --chart-dirs charts \
+                        --check-version-increment
                     '''
                 }
             }
         }
+
         stage('Chart publish') {
             when {
                 allOf {
                     branch 'main'
-                    changeset 'charts/**'
+                    anyOf {
+                        changeset 'charts/**'
+                        // First main build must publish the current base charts so a
+                        // fresh Jenkins controller can bootstrap an empty registry.
+                        expression { currentBuild.previousBuild == null }
+                    }
                 }
             }
             steps {
@@ -50,17 +65,29 @@ pipeline {
                     delivery.installScripts()
                 }
                 container('ci-tools') {
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
-                        sh 'for chart in charts/*/; do CHART_DIR="$chart" .delivery/publish-chart.sh; done'
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'dockerhub-creds',
+                            usernameVariable: 'REGISTRY_USERNAME',
+                            passwordVariable: 'REGISTRY_PASSWORD'
+                        )
+                    ]) {
+                        sh '''
+                          for chart_file in charts/*/Chart.yaml; do
+                            [ -f "$chart_file" ] || continue
+                            CHART_DIR="${chart_file%/Chart.yaml}" .delivery/publish-chart.sh
+                          done
+                        '''
                     }
                 }
             }
         }
-        stage('Platform') {
+
+        stage('Policy artifacts') {
             when {
                 anyOf {
-                    changeset 'platform/**'
                     changeset 'policies/**'
+                    expression { currentBuild.previousBuild == null }
                 }
             }
             steps {

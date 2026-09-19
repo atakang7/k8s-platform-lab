@@ -1,38 +1,94 @@
 #!/usr/bin/env bash
-# Builds and publishes the Jenkins CI/CD agent image, then pins its digest in
-# JCasC. Commit the JCasC change and run `make jenkins-up` afterwards.
-set -euo pipefail
+# Builds and publishes the Jenkins CI/CD agent image, resolves the registry
+# digest, and pins that digest in JCasC. Commit the JCasC change and run
+# `make jenkins-up` afterwards.
+set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly root
-cd "${root}"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly ROOT
+readonly REPOSITORY="${CI_AGENT_REPOSITORY:-docker.io/atakangul/lab-ci-agent}"
+readonly DOCKERFILE=delivery/jenkins/ci-agent.Dockerfile
+readonly BUILD_CONTEXT=delivery/jenkins
+readonly JCASC=platform/jenkins/jcasc/jenkins.yaml
 
-readonly repository="${CI_AGENT_REPOSITORY:-docker.io/atakangul/lab-ci-agent}"
-readonly dockerfile=delivery/jenkins/ci-agent.Dockerfile
-readonly jcasc=platform/jenkins/jcasc/jenkins.yaml
-
-# The pinned image must be reproducible from Git: never build uncommitted edits.
-if ! git diff --quiet HEAD -- "${dockerfile}"; then
-  printf 'FAIL | %s has uncommitted changes; commit it before building\n' "${dockerfile}" >&2
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
   exit 1
-fi
+}
 
-# The tag names the Dockerfile content, so it survives squash merges.
-tag="${repository}:dockerfile-$(sha256sum "${dockerfile}" | cut -c1-12)"
+verify_source_is_committed() {
+  # The build is traceable to Git only when the Dockerfile being built matches
+  # HEAD. External package repositories can still change between rebuilds; the
+  # registry digest pinned into JCasC remains the runtime source of truth.
+  git diff --quiet HEAD -- "${DOCKERFILE}" ||
+    fail "${DOCKERFILE} has uncommitted changes; commit it before building"
+}
 
-printf 'WAIT | building %s\n' "${tag}"
-# The Dockerfile copies nothing, so the build context is only its directory.
-docker build --pull -f "${dockerfile}" -t "${tag}" delivery/jenkins
+build_image() {
+  local tag="$1"
 
-printf 'WAIT | pushing %s\n' "${tag}"
-docker push "${tag}"
+  printf 'WAIT | building %s\n' "${tag}"
+  # The Dockerfile copies nothing, so its own directory is the complete build
+  # context required by the recipe.
+  docker build \
+    --pull \
+    --file "${DOCKERFILE}" \
+    --tag "${tag}" \
+    "${BUILD_CONTEXT}"
+}
 
-# Docker records Docker Hub digests without the docker.io/ prefix.
-digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${tag}" |
-  sed -n "s#^${repository#docker.io/}@\(sha256:[0-9a-f]\{64\}\)\$#\1#p" | head -n1)"
-[[ -n "${digest}" ]] || { printf 'FAIL | no registry digest recorded for %s\n' "${tag}" >&2; exit 1; }
+push_image() {
+  local tag="$1"
 
-sed -i -E "s#(image: )${repository}@sha256:[0-9a-f]{64}#\1${repository}@${digest}#" "${jcasc}"
-grep -q "${repository}@${digest}" "${jcasc}" || { printf 'FAIL | %s was not updated\n' "${jcasc}" >&2; exit 1; }
+  printf 'WAIT | pushing %s\n' "${tag}"
+  docker push "${tag}"
+}
 
-printf 'PASS | %s@%s pinned in %s\n' "${repository}" "${digest}" "${jcasc}"
+resolve_registry_digest() {
+  local tag="$1"
+  local digest
+
+  # Docker records Docker Hub RepoDigests without the docker.io/ prefix.
+  digest="$(docker image inspect \
+    --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+    "${tag}" |
+    sed -n "s#^${REPOSITORY#docker.io/}@\\(sha256:[0-9a-f]\\{64\\}\\)$#\\1#p" |
+    head -n1)"
+
+  [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+    fail "no registry digest recorded for ${tag}"
+
+  printf '%s\n' "${digest}"
+}
+
+pin_digest_in_jcasc() {
+  local digest="$1"
+
+  sed -i -E \
+    "s#(image: )${REPOSITORY}@sha256:[0-9a-f]{64}#\\1${REPOSITORY}@${digest}#" \
+    "${JCASC}"
+
+  grep -qF "${REPOSITORY}@${digest}" "${JCASC}" ||
+    fail "${JCASC} was not updated"
+}
+
+main() {
+  local dockerfile_hash
+  local tag
+  local digest
+
+  cd "${ROOT}"
+  verify_source_is_committed
+
+  dockerfile_hash="$(sha256sum "${DOCKERFILE}" | cut -c1-12)"
+  tag="${REPOSITORY}:dockerfile-${dockerfile_hash}"
+
+  build_image "${tag}"
+  push_image "${tag}"
+  digest="$(resolve_registry_digest "${tag}")"
+  pin_digest_in_jcasc "${digest}"
+
+  printf 'PASS | %s@%s pinned in %s\n' "${REPOSITORY}" "${digest}" "${JCASC}"
+}
+
+main "$@"
