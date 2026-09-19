@@ -22,10 +22,13 @@ ARG COSIGN_SHA256=4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f
 
 USER root
 
+# git: delivery steps read and write state, tags and promotion branches; they
+# run on the agent-owned workspace as this image's user, hence safe.directory.
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl jq skopeo xz-utils \
- && rm -rf /var/lib/apt/lists/*
+      ca-certificates curl git jq skopeo xz-utils \
+ && rm -rf /var/lib/apt/lists/* \
+ && git config --system --add safe.directory '*'
 
 RUN curl -fsSLo /usr/local/bin/kubectl \
       "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \

@@ -1,4 +1,6 @@
-// Shared, repository-level delivery helpers. Configuration is checked once,
+// Shared, repository-level delivery helpers. Every shell step runs in the
+// ci-tools container, the one image with all delivery tools (git, jq, curl, helm,
+// cosign). Configuration is checked once,
 // here, where it is read; the step scripts trust what they are given. Pipeline
 // flow remains visible in the pipeline files.
 
@@ -95,10 +97,13 @@ void requirePromoted(Map recorded) {
     }
 
     withEnv(["IMAGE_DIGEST=${recorded.image}", "PREVIOUS_STATE=state/${recorded.previous.name}.yaml"]) {
-        String history = sh(
-            returnStdout: true,
-            script: 'git log --format=%H -S "$IMAGE_DIGEST" -- "$PREVIOUS_STATE"'
-        ).trim()
+        String history
+        container('ci-tools') {
+            history = sh(
+                returnStdout: true,
+                script: 'git log --format=%H -S "$IMAGE_DIGEST" -- "$PREVIOUS_STATE"'
+            ).trim()
+        }
         if (!history) {
             error("${recorded.name} ${recorded.image} is in ${recorded.target.name} but was never in ${recorded.previous.name}")
         }
@@ -114,7 +119,9 @@ void recordRelease(String environment, String name, String version, String image
     ]) {
         withCredentials([gitUsernamePassword(credentialsId: 'github-creds')]) {
             retry(3) {
-                sh 'git fetch --no-tags origin main && git checkout --detach FETCH_HEAD'
+                container('ci-tools') {
+                    sh 'git fetch --no-tags origin main && git checkout --detach FETCH_HEAD'
+                }
                 Map state = readYaml(file: env.STATE_FILE)
                 Map release = [version: version, image: image]
 
@@ -128,12 +135,14 @@ void recordRelease(String environment, String name, String version, String image
 
                 state.services[name] = release
                 writeYaml(file: env.STATE_FILE, data: state, overwrite: true)
-                sh '''
-                  git add "$STATE_FILE"
-                  git -c user.name=lab-delivery -c user.email=delivery@lab.test \
-                    commit --quiet --message "$STATE_MESSAGE"
-                  git push origin HEAD:main
-                '''
+                container('ci-tools') {
+                    sh '''
+                      git add "$STATE_FILE"
+                      git -c user.name=lab-delivery -c user.email=delivery@lab.test \
+                        commit --quiet --message "$STATE_MESSAGE"
+                      git push origin HEAD:main
+                    '''
+                }
             }
         }
     }
@@ -146,20 +155,22 @@ void recordRelease(String environment, String name, String version, String image
 void tagRelease(String environment) {
     withEnv(["ENVIRONMENT=${environment}"]) {
         withCredentials([gitUsernamePassword(credentialsId: 'github-creds')]) {
-            sh '''
-              git fetch --no-tags origin "+refs/tags/$ENVIRONMENT-*:refs/tags/$ENVIRONMENT-*"
-              last="$(git tag --list "$ENVIRONMENT-*" --sort=-v:refname | head -n 1)"
-              if [ -n "$last" ] && git diff --quiet "$last" HEAD -- "state/$ENVIRONMENT.yaml"; then
-                echo "PASS | $ENVIRONMENT still runs $last"
-                exit 0
-              fi
-              day="$(date -u +%Y.%m.%d)"
-              tag="$ENVIRONMENT-$day.$(( $(git tag --list "$ENVIRONMENT-$day.*" | wc -l) + 1 ))"
-              git -c user.name=lab-delivery -c user.email=delivery@lab.test \
-                tag --annotate --message "Release $tag" "$tag" HEAD
-              git push origin "refs/tags/$tag"
-              echo "PASS | tagged $tag"
-            '''
+            container('ci-tools') {
+                sh '''
+                  git fetch --no-tags origin "+refs/tags/$ENVIRONMENT-*:refs/tags/$ENVIRONMENT-*"
+                  last="$(git tag --list "$ENVIRONMENT-*" --sort=-v:refname | head -n 1)"
+                  if [ -n "$last" ] && git diff --quiet "$last" HEAD -- "state/$ENVIRONMENT.yaml"; then
+                    echo "PASS | $ENVIRONMENT still runs $last"
+                    exit 0
+                  fi
+                  day="$(date -u +%Y.%m.%d)"
+                  tag="$ENVIRONMENT-$day.$(( $(git tag --list "$ENVIRONMENT-$day.*" | wc -l) + 1 ))"
+                  git -c user.name=lab-delivery -c user.email=delivery@lab.test \
+                    tag --annotate --message "Release $tag" "$tag" HEAD
+                  git push origin "refs/tags/$tag"
+                  echo "PASS | tagged $tag"
+                '''
+            }
         }
     }
 }
@@ -200,40 +211,44 @@ private void openPromotion(String environment, String name, Map release) {
             gitUsernamePassword(credentialsId: 'github-creds'),
             usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')
         ]) {
-            sh '''
-              git fetch --no-tags origin main
-              rm -rf "$WORKTREE"
-              git worktree add --force --detach "$WORKTREE" FETCH_HEAD
-            '''
+            container('ci-tools') {
+                sh '''
+                  git fetch --no-tags origin main
+                  rm -rf "$WORKTREE"
+                  git worktree add --force --detach "$WORKTREE" FETCH_HEAD
+                '''
+            }
             Map state = readYaml(file: "${worktree}/state/${environment}.yaml")
             state.services[name] = release
             writeYaml(file: "${worktree}/state/${environment}.yaml", data: state, overwrite: true)
-            sh '''
-              if git -C "$WORKTREE" diff --quiet; then
-                echo "PASS | main already promotes this release"
-              else
-                git -C "$WORKTREE" -c user.name=lab-delivery -c user.email=delivery@lab.test \
-                  commit --quiet --message "$TITLE" -- "$STATE_PATH"
-                git -C "$WORKTREE" push --force origin "HEAD:refs/heads/$BRANCH"
-                repository="$(git config --get remote.origin.url | sed -E 's#^https://github.com/##; s#\\.git$##')"
-                status="$(jq -n --arg title "$TITLE" --arg head "$BRANCH" --arg body "$BODY" \
-                    '{title: $title, head: $head, base: "main", body: $body}' |
-                  curl --silent --show-error --output .promote/response.json --write-out '%{http_code}' \
-                    --request POST \
-                    --header "Authorization: Bearer $GITHUB_TOKEN" \
-                    --header 'Accept: application/vnd.github+json' \
-                    --data @- \
-                    "https://api.github.com/repos/$repository/pulls")"
-                case "$status" in
-                  201) echo "PASS | opened $(jq -r .html_url .promote/response.json)" ;;
-                  422) jq -e '.errors[]?.message | select(test("already exists"))' .promote/response.json >/dev/null ||
-                         { echo "FAIL | GitHub refused the pull request: $(cat .promote/response.json)" >&2; exit 1; }
-                       echo "PASS | refreshed the open pull request for $BRANCH" ;;
-                  *) echo "FAIL | GitHub returned $status: $(cat .promote/response.json)" >&2; exit 1 ;;
-                esac
-              fi
-              git worktree remove --force "$WORKTREE"
-            '''
+            container('ci-tools') {
+                sh '''
+                  if git -C "$WORKTREE" diff --quiet; then
+                    echo "PASS | main already promotes this release"
+                  else
+                    git -C "$WORKTREE" -c user.name=lab-delivery -c user.email=delivery@lab.test \
+                      commit --quiet --message "$TITLE" -- "$STATE_PATH"
+                    git -C "$WORKTREE" push --force origin "HEAD:refs/heads/$BRANCH"
+                    repository="$(git config --get remote.origin.url | sed -E 's#^https://github.com/##; s#\\.git$##')"
+                    status="$(jq -n --arg title "$TITLE" --arg head "$BRANCH" --arg body "$BODY" \
+                        '{title: $title, head: $head, base: "main", body: $body}' |
+                      curl --silent --show-error --output .promote/response.json --write-out '%{http_code}' \
+                        --request POST \
+                        --header "Authorization: Bearer $GITHUB_TOKEN" \
+                        --header 'Accept: application/vnd.github+json' \
+                        --data @- \
+                        "https://api.github.com/repos/$repository/pulls")"
+                    case "$status" in
+                      201) echo "PASS | opened $(jq -r .html_url .promote/response.json)" ;;
+                      422) jq -e '.errors[]?.message | select(test("already exists"))' .promote/response.json >/dev/null ||
+                             { echo "FAIL | GitHub refused the pull request: $(cat .promote/response.json)" >&2; exit 1; }
+                           echo "PASS | refreshed the open pull request for $BRANCH" ;;
+                      *) echo "FAIL | GitHub returned $status: $(cat .promote/response.json)" >&2; exit 1 ;;
+                    esac
+                  fi
+                  git worktree remove --force "$WORKTREE"
+                '''
+            }
         }
     }
 }
@@ -244,20 +259,22 @@ private void openPromotion(String environment, String name, Map release) {
 void requireVersionBump(String chart, String target) {
     withEnv(["CHART_YAML=${chart}/Chart.yaml", "TARGET=${target}"]) {
         withCredentials([gitUsernamePassword(credentialsId: 'github-creds')]) {
-            sh '''
-              git fetch --no-tags origin "$TARGET"
-              current="$(sed -n 's/^version: *//p' "$CHART_YAML")"
-              base="$(git show "FETCH_HEAD:$CHART_YAML" 2>/dev/null | sed -n 's/^version: *//p')"
-              if [ -z "$base" ]; then
-                echo "PASS | $CHART_YAML is new; version $current"
-              elif [ "$current" != "$base" ] &&
-                [ "$(printf '%s\n%s\n' "$base" "$current" | sort -V | tail -n 1)" = "$current" ]; then
-                echo "PASS | version $base -> $current"
-              else
-                echo "FAIL | $CHART_YAML version $current must be greater than $TARGET's $base" >&2
-                exit 1
-              fi
-            '''
+            container('ci-tools') {
+                sh '''
+                  git fetch --no-tags origin "$TARGET"
+                  current="$(sed -n 's/^version: *//p' "$CHART_YAML")"
+                  base="$(git show "FETCH_HEAD:$CHART_YAML" 2>/dev/null | sed -n 's/^version: *//p')"
+                  if [ -z "$base" ]; then
+                    echo "PASS | $CHART_YAML is new; version $current"
+                  elif [ "$current" != "$base" ] &&
+                    [ "$(printf '%s\n%s\n' "$base" "$current" | sort -V | tail -n 1)" = "$current" ]; then
+                    echo "PASS | version $base -> $current"
+                  else
+                    echo "FAIL | $CHART_YAML version $current must be greater than $TARGET's $base" >&2
+                    exit 1
+                  fi
+                '''
+            }
         }
     }
 }
