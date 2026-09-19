@@ -1,7 +1,7 @@
 ---
 - name: Download the pinned Calico manifest
   ansible.builtin.get_url:
-    url: "https://raw.githubusercontent.com/projectcalico/calico/v{{ calico_version }}/manifests/calico.yaml"
+    url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_source_revision }}/manifests/calico.yaml"
     dest: "/etc/kubernetes/calico-v{{ calico_version }}.upstream.yaml"
     mode: "0644"
   register: calico_upstream
@@ -12,6 +12,7 @@
     mode: "0644"
     content: |
       version={{ calico_version }}
+      source_revision={{ calico_source_revision }}
       pod_cidr={{ pod_cidr }}
       vm_cidr={{ vm_cidr }}
   register: calico_settings
@@ -41,28 +42,59 @@
   when: calico_upstream.changed or calico_settings.changed or not calico_manifest.stat.exists
 
 - name: Assert rendered Calico Pod CIDR
-  ansible.builtin.command: "grep -Fq 'value: \"{{ pod_cidr }}\"' /etc/kubernetes/calico.yaml"
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -Fq
+      - 'value: "{{ pod_cidr }}"'
+      - /etc/kubernetes/calico.yaml
   changed_when: false
 
 - name: Assert rendered Calico node autodetection
-  ansible.builtin.command: "grep -Fq 'value: \"cidr={{ vm_cidr }}\"' /etc/kubernetes/calico.yaml"
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -Fq
+      - 'value: "cidr={{ vm_cidr }}"'
+      - /etc/kubernetes/calico.yaml
   changed_when: false
 
 - name: Apply Calico
-  ansible.builtin.command: kubectl apply -f /etc/kubernetes/calico.yaml
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - apply
+      - -f
+      - /etc/kubernetes/calico.yaml
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
   register: calico_apply
   changed_when: "'created' in calico_apply.stdout or 'configured' in calico_apply.stdout"
 
 - name: Wait for Calico node agents
-  ansible.builtin.command: kubectl -n kube-system rollout status daemonset/calico-node --timeout=300s
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - -n
+      - kube-system
+      - rollout
+      - status
+      - daemonset/calico-node
+      - --timeout=300s
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
   changed_when: false
 
 - name: Wait for Calico controllers
-  ansible.builtin.command: kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=300s
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - -n
+      - kube-system
+      - rollout
+      - status
+      - deployment/calico-kube-controllers
+      - --timeout=300s
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
   changed_when: false

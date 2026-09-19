@@ -9,8 +9,13 @@ service_cidr: "10.70.0.0/16"
 vm_cidr: "10.50.0.0/24"
 control_plane_endpoint: "10.50.0.10:6443"
 
+# Human-facing release versions stay beside the immutable Git revisions used
+# for downloads. A moved upstream tag therefore cannot change a rebuild.
 calico_version: "3.32.2"
+calico_source_revision: "db255c554b929afd73552fd3ac81d691107a1607"
+
 local_path_provisioner_version: "0.0.36"
+local_path_provisioner_source_revision: "5d4bfc84b32cd9c5f56ed3aba921b1a3924ea2f0"
 
 node_ips:
   node-1: "10.50.0.10"
