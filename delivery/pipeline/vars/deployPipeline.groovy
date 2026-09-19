@@ -82,8 +82,8 @@ def call() {
     }
 }
 
-// Runs one release step (dry-run or deploy) for one recorded release: the
-// chart version and image digest CI published together.
+// Runs one release step (dry-run or deploy) for one recorded release: an app
+// version and the image digest CI published as it.
 private void release(Map recorded, String step) {
     withCredentials([
         usernamePassword(
@@ -94,7 +94,7 @@ private void release(Map recorded, String step) {
     ]) {
         withEnv([
             "RELEASE=${recorded.name}",
-            "CHART_VERSION=${recorded.chart}",
+            "APP_VERSION=${recorded.version}",
             "IMAGE_DIGEST=${recorded.image}",
             "NAMESPACE=${recorded.target.namespace}",
             "ENVIRONMENT=${recorded.target.name}"

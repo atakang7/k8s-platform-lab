@@ -1,7 +1,8 @@
-// CI for one service in a GitHub multibranch job. Every branch and pull
-// request validates, builds, tests, and scans. main additionally publishes the
-// exact scanned image and its chart, and commits both to the first
-// environment's state file; the deploy job releases them from there.
+// CI for one service in a GitHub multibranch job (release flow steps 1-3 in
+// delivery/README.md). Every branch and pull request validates, builds, tests,
+// and scans; a pull request must also raise the app version. main publishes the
+// exact scanned image and its chart as that version and commits the release to
+// the first environment's state file; the deploy job releases it from there.
 //
 //   chart:   service Helm chart; its name is the service's state entry
 //   context: BuildKit context containing the Dockerfile
@@ -40,8 +41,8 @@ def call(Map args) {
                         env.NAMESPACE = first.namespace
                         env.CHART_REF = config.chartRegistry
                         env.COMMIT_SHA = checkoutState.GIT_COMMIT
-                        // One chart version per commit, published with the image it was tested with.
-                        env.CHART_VERSION = "${service.version}-sha-${checkoutState.GIT_COMMIT.take(12)}"
+                        // The app version: image tag, chart version and state entry.
+                        env.APP_VERSION = service.version
                         env.SOURCE_URL = checkoutState.GIT_URL
 
                         delivery.installScripts()
@@ -63,6 +64,9 @@ def call(Map args) {
                             container('ci-tools') {
                                 sh 'hadolint "$BUILD_CONTEXT/Dockerfile"'
                                 script {
+                                    if (env.CHANGE_TARGET) {
+                                        delivery.requireVersionBump(args.chart, env.CHANGE_TARGET)
+                                    }
                                     if (env.RELEASED == 'true') {
                                         withCredentials([
                                             usernamePassword(
@@ -127,8 +131,8 @@ def call(Map args) {
                             }
                             script {
                                 String digest = readFile('pushed.digest').trim()
-                                delivery.recordRelease(env.ENVIRONMENT, env.RELEASE, env.CHART_VERSION, digest)
-                                currentBuild.description = "${env.RELEASE} ${env.CHART_VERSION} → ${env.ENVIRONMENT}"
+                                delivery.recordRelease(env.ENVIRONMENT, env.RELEASE, env.APP_VERSION, digest)
+                                currentBuild.description = "${env.RELEASE} ${env.APP_VERSION} → ${env.ENVIRONMENT}"
                             }
                         }
                     }

@@ -3,7 +3,7 @@
 # that environment's values (values-<ENVIRONMENT>.yaml when the chart has one):
 # schema validation plus the admission chain. CI dry-runs its local CHART before
 # the image exists, so a placeholder digest stands in; the deploy job dry-runs
-# the recorded release (CHART_VERSION and IMAGE_DIGEST).
+# the recorded release (APP_VERSION and IMAGE_DIGEST).
 set -Eeuo pipefail
 
 readonly PLACEHOLDER_IMAGE_DIGEST='sha256:0000000000000000000000000000000000000000000000000000000000000000'

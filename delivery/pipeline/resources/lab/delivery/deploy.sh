@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Releases one recorded release (chart CHART_VERSION, image IMAGE_DIGEST) into
+# Releases one recorded release (app APP_VERSION, image IMAGE_DIGEST) into
 # one environment, with that environment's values (values-<ENVIRONMENT>.yaml
 # when the chart has one). A release already running both is left alone.
 # Kubernetes access is the Pod's own: the deploy job runs each environment
@@ -26,7 +26,7 @@ release_is_current() {
 
   deployed_chart="$(helm list --deployed --filter "^${RELEASE}\$" --output json |
     jq -r '.[0].chart // ""')"
-  [[ "${deployed_chart}" == "${RELEASE}-${CHART_VERSION}" ]] || return 1
+  [[ "${deployed_chart}" == "${RELEASE}-${APP_VERSION}" ]] || return 1
   deployed_digest="$(helm get values "${RELEASE}" --output json |
     jq -r '.image.digest // ""')"
   [[ "${deployed_digest}" == "${IMAGE_DIGEST}" ]]
@@ -61,11 +61,11 @@ main() {
   export HELM_DRIVER=configmap
 
   if release_is_current; then
-    printf 'PASS | %s already runs %s in %s\n' "${RELEASE}" "${CHART_VERSION}" "${ENVIRONMENT}"
+    printf 'PASS | %s already runs %s in %s\n' "${RELEASE}" "${APP_VERSION}" "${ENVIRONMENT}"
     return
   fi
 
-  printf 'WAIT | releasing %s %s to %s\n' "${RELEASE}" "${CHART_VERSION}" "${ENVIRONMENT}"
+  printf 'WAIT | releasing %s %s to %s\n' "${RELEASE}" "${APP_VERSION}" "${ENVIRONMENT}"
   deploy_release
 }
 

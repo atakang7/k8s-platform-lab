@@ -1,6 +1,6 @@
 # Delivery environments, in promotion order. What runs in each one is its
 # state/<name>.yaml: a commit to that file is a deploy. main's CI records every
-# new release (chart version + image digest) in the first environment; a release
+# new release (app version + image digest) in the first environment; a release
 # enters any later environment by pull request, and only after it has been in
 # the previous one.
 chartRegistry: oci://registry-1.docker.io/atakangul

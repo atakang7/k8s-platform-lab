@@ -29,8 +29,8 @@ Map environments() {
 }
 
 // The releases desired in one environment, by service (state/<name>.yaml).
-// Each is the chart version and image digest one CI run published together;
-// null means the service is not released there yet.
+// Each is an app version (image tag and chart version) and the image digest
+// CI published as it; null means the service is not released there yet.
 Map releases(String environment) {
     String file = "state/${environment}.yaml"
     Map state = readYaml(file: file)
@@ -43,8 +43,8 @@ Map releases(String environment) {
     }
     for (String name in state.services.keySet()) {
         Map release = state.services[name]
-        if (release != null && (!release.chart || !(release.image ==~ /^sha256:[0-9a-f]{64}$/))) {
-            error("${file}: ${name} must be null or {chart: <version>, image: sha256:<64 hex>}")
+        if (release != null && (!release.version || !(release.image ==~ /^sha256:[0-9a-f]{64}$/))) {
+            error("${file}: ${name} must be null or {version: <app version>, image: sha256:<64 hex>}")
         }
     }
 
@@ -62,7 +62,7 @@ List<Map> recordedReleases(Map config) {
         for (String name in environmentReleases.keySet()) {
             Map release = environmentReleases[name]
             if (release != null) {
-                recorded << [target: target, previous: previous, name: name, chart: release.chart, image: release.image]
+                recorded << [target: target, previous: previous, name: name, version: release.version, image: release.image]
             }
         }
         previous = target
@@ -91,22 +91,22 @@ void requirePromoted(Map recorded) {
 
 // Commits a new release to main's state/<environment>.yaml: that commit is the
 // deploy. The push is retried because another service may record first.
-void recordRelease(String environment, String name, String chart, String image) {
+void recordRelease(String environment, String name, String version, String image) {
     withEnv([
         "STATE_FILE=state/${environment}.yaml",
-        "STATE_MESSAGE=Deploy ${name} ${chart} to ${environment}"
+        "STATE_MESSAGE=Deploy ${name} ${version} to ${environment}"
     ]) {
         withCredentials([gitUsernamePassword(credentialsId: 'github-creds')]) {
             retry(3) {
                 sh 'git fetch --no-tags origin main && git checkout --detach FETCH_HEAD'
                 Map state = readYaml(file: env.STATE_FILE)
-                Map release = [chart: chart, image: image]
+                Map release = [version: version, image: image]
 
                 if (!state.services.containsKey(name)) {
                     error("${env.STATE_FILE} has no entry for ${name}")
                 }
                 if (state.services[name] == release) {
-                    echo("${name} ${chart} is already recorded for ${environment}")
+                    echo("${name} ${version} is already recorded for ${environment}")
                     return
                 }
 
@@ -119,6 +119,30 @@ void recordRelease(String environment, String name, String chart, String image) 
                   git push origin HEAD:main
                 '''
             }
+        }
+    }
+}
+
+// A pull request that changes a service must raise its app version (the
+// chart's version) above the target branch's. A service new to the target
+// branch has nothing to compare against.
+void requireVersionBump(String chart, String target) {
+    withEnv(["CHART_YAML=${chart}/Chart.yaml", "TARGET=${target}"]) {
+        withCredentials([gitUsernamePassword(credentialsId: 'github-creds')]) {
+            sh '''
+              git fetch --no-tags origin "$TARGET"
+              current="$(sed -n 's/^version: *//p' "$CHART_YAML")"
+              base="$(git show "FETCH_HEAD:$CHART_YAML" 2>/dev/null | sed -n 's/^version: *//p')"
+              if [ -z "$base" ]; then
+                echo "PASS | $CHART_YAML is new; version $current"
+              elif [ "$current" != "$base" ] &&
+                [ "$(printf '%s\n%s\n' "$base" "$current" | sort -V | tail -n 1)" = "$current" ]; then
+                echo "PASS | version $base -> $current"
+              else
+                echo "FAIL | $CHART_YAML version $current must be greater than $TARGET's $base" >&2
+                exit 1
+              fi
+            '''
         }
     }
 }

@@ -45,7 +45,7 @@ registry_login() {
 #
 # Points CHART at the chart RELEASE is released with. A local CHART directory
 # (CI, before anything is published) gets its dependencies built; otherwise the
-# chart is pulled at CHART_VERSION, the version CI published with the image.
+# chart is pulled at APP_VERSION, the version CI published it and the image as.
 # Call registry_login first.
 
 release_chart() {
@@ -57,7 +57,7 @@ release_chart() {
   fi
 
   helm pull "${CHART_REF}/${RELEASE}" \
-    --version "${CHART_VERSION}" \
+    --version "${APP_VERSION}" \
     --untar \
     --destination "${state_directory}/chart"
   CHART="${state_directory}/chart/${RELEASE}"

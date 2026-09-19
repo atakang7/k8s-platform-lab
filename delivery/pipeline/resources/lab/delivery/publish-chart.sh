@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Publishes the chart in CHART_DIR only when that exact version is absent from
-# the registry. Base charts publish their Chart.yaml version (pull requests
-# enforce bumps with chart-testing); service CI passes CHART_VERSION, one
-# version per commit, so each image is published with its own chart.
+# Publishes the chart in CHART_DIR at its Chart.yaml version, only when that
+# version is absent from the registry. Base chart pull requests enforce version
+# bumps with chart-testing; a service chart's version is its app version, which
+# service CI checks, and publish-image.sh has already refused a reused one.
 set -Eeuo pipefail
 
 SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,7 +30,7 @@ main() {
 
   chart_metadata="$(helm show chart "${CHART_DIR}")"
   chart_name="$(read_chart_identity "${chart_metadata}" name)"
-  chart_version="${CHART_VERSION:-$(read_chart_identity "${chart_metadata}" version)}"
+  chart_version="$(read_chart_identity "${chart_metadata}" version)"
 
   if helm show chart \
     "${CHART_REF}/${chart_name}" \
@@ -40,9 +40,7 @@ main() {
   fi
 
   helm dependency build "${CHART_DIR}" >/dev/null
-  helm package "${CHART_DIR}" \
-    --version "${chart_version}" \
-    --destination "${WORK_DIRECTORY}" >/dev/null
+  helm package "${CHART_DIR}" --destination "${WORK_DIRECTORY}" >/dev/null
   helm push "${WORK_DIRECTORY}/${chart_name}-${chart_version}.tgz" "${CHART_REF}"
   printf 'PASS | published %s/%s:%s\n' \
     "${CHART_REF}" "${chart_name}" "${chart_version}"

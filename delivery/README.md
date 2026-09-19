@@ -46,7 +46,7 @@ Base charts live in [`charts/`](../charts/), and namespaces and deploy identitie
 
 ## Onboarding a service
 
-1. A chart that inherits the base chart ([`charts/service`](../charts/service/README.md)), with `image.repository` in its values.
+1. A chart that inherits the base chart ([`charts/service`](../charts/service/README.md)), with `image.repository` in its values. Its `version` is the app version.
 2. A Jenkinsfile:
 
    ```groovy
@@ -112,7 +112,7 @@ No cluster credential is stored in Jenkins.
 
 ## Environments
 
-[`environments.yaml`](../environments.yaml) lists the environments in promotion order (`dev` → `stage` → `prod`) with their namespaces, plus the chart registry and the releases Jenkins owns. What runs in an environment is its [`state/<name>.yaml`](../state/): one `{chart, image}` release per service, `null` until first released. The Git history of those files is the deploy history.
+[`environments.yaml`](../environments.yaml) lists the environments in promotion order (`dev` → `stage` → `prod`) with their namespaces, plus the chart registry and the releases Jenkins owns. What runs in an environment is its [`state/<name>.yaml`](../state/): one `{version, image}` release per service (app version and image digest), `null` until first released. The Git history of those files is the deploy history.
 
 | To | Do |
 |---|---|
