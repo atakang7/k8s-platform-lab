@@ -51,6 +51,8 @@ alertmanager:
       group_by: [alertname, namespace]
     receivers:
       - name: lab-alerts
+      # kube-prometheus-stack's default Watchdog sub-route targets this sink.
+      - name: "null"
   alertmanagerSpec:
     replicas: 1
     resources:
@@ -92,6 +94,9 @@ grafana:
   nodeSelector:
     kubernetes.io/hostname: node-3
   sidecar:
+    resources:
+      requests: {cpu: 10m, memory: 32Mi}
+      limits: {cpu: 100m, memory: 96Mi}
     dashboards:
       searchNamespace: observability
 

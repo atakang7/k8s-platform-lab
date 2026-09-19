@@ -2,34 +2,68 @@
 set -Eeuo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly root
+readonly namespace=observability
+readonly host=observability.lab.test
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+diagnose() {
+  local status=$?
+  printf 'FAIL | Observability smoke failed (exit %s)\n' "${status}" >&2
+  kubectl -n "${namespace}" get pods -o wide >&2 || true
+  kubectl -n "${namespace}" get events --sort-by=.lastTimestamp 2>/dev/null | tail -20 >&2 || true
+  exit "${status}"
+}
+
+cluster_api() {
+  kubectl get --raw "$1"
+}
+
 if [[ "${1:-}" != --cluster ]]; then
-  "${root}/infra/edge/lib/with-kubeconfig.sh" "${root}/platform/observability/bin/smoke" --cluster
+  "${root}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
   exit
 fi
+trap diagnose ERR
 
-namespace=observability
-host=observability.lab.test
-kubectl -n "${namespace}" rollout status deployment/observability-grafana --timeout=90s >/dev/null
-kubectl -n "${namespace}" rollout status deployment/observability-kube-prometh-operator --timeout=90s >/dev/null
-kubectl -n "${namespace}" rollout status statefulset/logs-es --timeout=90s >/dev/null
-kubectl -n "${namespace}" rollout status daemonset/fluent-bit --timeout=90s >/dev/null
-kubectl -n "${namespace}" rollout status statefulset/prometheus-observability-kube-prometh-prometheus --timeout=90s >/dev/null
-kubectl -n "${namespace}" rollout status statefulset/alertmanager-observability-kube-prometh-alertmanager --timeout=90s >/dev/null
-kubectl -n "${namespace}" get pvc -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase}{"\n"}{end}' | awk 'NF {count++; if ($2 != "Bound") bad=1} END {exit bad || count < 2}'
-kubectl -n "${namespace}" get prometheusrule pod-restarts >/dev/null
+phase 'Waiting for observability workloads (timeout: 90s each)'
+kubectl -n "${namespace}" rollout status deployment/observability-grafana --timeout=90s
+kubectl -n "${namespace}" rollout status deployment/observability-kube-prometh-operator --timeout=90s
+kubectl -n "${namespace}" rollout status statefulset/logs-es --timeout=90s
+kubectl -n "${namespace}" rollout status daemonset/fluent-bit --timeout=90s
+kubectl -n "${namespace}" rollout status statefulset/prometheus-observability-kube-prometh-prometheus --timeout=90s
+kubectl -n "${namespace}" rollout status statefulset/alertmanager-observability-kube-prometh-alertmanager --timeout=90s
 
+phase 'Checking persistent storage and loaded alert rules'
+kubectl -n "${namespace}" get pvc -o json |
+  jq -e '[.items[] | select(.status.phase == "Bound")] | length >= 2' >/dev/null
+rules="$(curl --noproxy '*' --silent --show-error --fail --max-time 10 \
+  "https://${host}/prometheus/api/v1/rules")"
+jq -e '.status == "success" and (.data.groups | any(.name == "lab.pod-health"))' \
+  <<<"${rules}" >/dev/null
+
+phase 'Checking DNS, public TLS endpoints, and internal service health'
 resolved="$(getent ahostsv4 "${host}" | awk 'NR == 1 {print $1}')"
-[[ "${resolved}" == 192.168.56.200 ]] || { echo "FAIL | DNS resolved ${host} to ${resolved}" >&2; exit 1; }
-curl --silent --show-error --fail --max-time 10 "https://${host}/grafana/api/health" >/dev/null
-curl --silent --show-error --fail --max-time 10 "https://${host}/prometheus/-/ready" >/dev/null
+[[ "${resolved}" == 192.168.56.200 ]] || fail "DNS resolved ${host} to ${resolved}"
+curl --noproxy '*' --silent --show-error --fail --max-time 10 "https://${host}/grafana/api/health" >/dev/null
+curl --noproxy '*' --silent --show-error --fail --max-time 10 "https://${host}/prometheus/-/ready" >/dev/null
+cluster_api '/api/v1/namespaces/observability/services/http:observability-kube-prometh-alertmanager:9093/proxy/-/ready' >/dev/null
+health="$(cluster_api '/api/v1/namespaces/observability/services/http:logs-es-http:9200/proxy/_cluster/health')"
+jq -e '.status == "green" or .status == "yellow"' <<<"${health}" >/dev/null
 
-curl --silent --show-error --fail --max-time 10 "https://${host}/elasticsearch/" >/dev/null
-indices=""
+phase 'Checking Fluent Bit log delivery'
+indices=''
 for _ in {1..6}; do
-  indices="$(curl --silent --fail --max-time 10 \
-    "https://${host}/elasticsearch/_cat/indices/kubernetes-*?h=index")" || true
+  indices="$(cluster_api '/api/v1/namespaces/observability/services/http:logs-es-http:9200/proxy/_cat/indices/kubernetes-*?h=index' 2>/dev/null || true)"
   [[ -n "${indices}" ]] && break
   sleep 5
 done
-[[ -n "${indices}" ]] || { echo 'FAIL | Fluent Bit has not written a Kubernetes index' >&2; exit 1; }
-echo 'PASS | Stage 5 workloads, PVCs, DNS, TLS, endpoints, rule, and log delivery'
+[[ -n "${indices}" ]] || fail 'Fluent Bit has not written a Kubernetes index'
+printf 'PASS | Observability workloads, storage, endpoints, rules, and log delivery are healthy\n'

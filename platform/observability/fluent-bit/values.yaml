@@ -11,10 +11,16 @@ daemonSetVolumes:
   - name: varlog
     hostPath:
       path: /var/log
+  - name: buffers
+    hostPath:
+      path: /var/lib/lab-fluent-bit
+      type: DirectoryOrCreate
 daemonSetVolumeMounts:
   - name: varlog
     mountPath: /var/log
     readOnly: true
+  - name: buffers
+    mountPath: /buffers
 config:
   service: |
     [SERVICE]
@@ -26,6 +32,9 @@ config:
         HTTP_Listen 0.0.0.0
         HTTP_Port 2020
         Health_Check On
+        storage.path /buffers/storage
+        storage.sync normal
+        storage.backlog.mem_limit 10M
   inputs: |
     [INPUT]
         Name tail
@@ -35,6 +44,8 @@ config:
         Mem_Buf_Limit 5MB
         Skip_Long_Lines On
         Read_from_Head Off
+        DB /buffers/tail.db
+        storage.type filesystem
   filters: |
     [FILTER]
         Name kubernetes
@@ -51,4 +62,5 @@ config:
         Logstash_Prefix kubernetes
         Suppress_Type_Name On
         Replace_Dots On
-        Retry_Limit False
+        Retry_Limit 10
+        storage.total_limit_size 256M
