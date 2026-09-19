@@ -12,6 +12,36 @@
 | `Jenkinsfile.platform` | `platform` job: shellcheck everywhere; `ct lint` on chart pull requests; publishes charts from main |
 | `jenkins/` | CI agent image |
 
+## How it fits together
+
+Jenkins runs four multibranch jobs over this one repository, all on the `lab-delivery` library. The jobs are defined in [`platform/jenkins/jcasc/jenkins.yaml`](../platform/jenkins/jcasc/jenkins.yaml) (`services` list, `platform`, `deploy`). Jobs never call each other: service CI commits a digest to `state/dev.yaml`, and that commit is what starts the deploy job.
+
+```text
+                     GitHub: atakang7/lab
+                   (Jenkins re-indexes every minute)
+                                   │
+     ┌─────────────────┬───────────┴─────┬─────────────────────┐
+     ▼                 ▼                 ▼                     ▼
+ service job       service job       platform job          deploy job
+ sample-java-app   resource-         Jenkinsfile.platform  Jenkinsfile.deploy
+                   requests-webhook
+     └───────┬─────────┘                 │                     │
+             ▼                           ▼                     ▼
+     servicePipeline()           shellcheck everything  deployPipeline()
+     Validate · Build · Scan     ct lint (PR, charts/)  Verify: promoted from the
+             │ main only         publish charts (main)  previous env · chart dry-run
+             ▼                                                 │ main only
+     Publish image                                             ▼
+     commit digest ──► state/dev.yaml ───────────────► Deploy dev → stage → prod
+                                                               ▲
+     promotion PR ───► state/stage.yaml, state/prod.yaml ──────┘
+     (code-owner review)                                       │
+                                                               ▼
+                                               apps-dev · apps-stage · apps-prod
+```
+
+The webhook is built and recorded like any service, but it is not in `releases`, so the operator installs it (`make policies-up`), not Jenkins.
+
 Base charts live in [`charts/`](../charts/), and namespaces and deploy identities in [`platform/environment`](../platform/environment/). Neither is delivery.
 
 ## Onboarding a service
