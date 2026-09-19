@@ -15,7 +15,7 @@ pipeline {
                 container('ci-tools') {
                     sh '''
                       find delivery infra platform policies validation -type f \
-                        \( -name '*.sh' -o -path '*/bin/*' \) \
+                        \\( -name '*.sh' -o -path '*/bin/*' \\) \
                         -exec shellcheck --external-sources --source-path=SCRIPTDIR {} +
                     '''
                 }
