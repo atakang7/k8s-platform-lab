@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 source "${root}/platform/jenkins/versions.env"
 source "${root}/infra/edge/lib/operator-state.sh"
 source "${root}/infra/edge/lib/vault-approle.sh"
@@ -22,97 +22,154 @@ pass() {
 vault_fields_are_present() {
   local path="$1"
   shift
-  local fields field
-  fields="$(vault kv get -format=json "${path}" 2>/dev/null | jq -c '.data.data' || true)"
+
+  local field fields
+  fields="$(vault kv get -format=json "${path}" 2>/dev/null |
+    jq -c '.data.data' || true)"
   [[ -n "${fields}" ]] || return 1
+
   for field in "$@"; do
-    jq -e --arg field "${field}" 'has($field) and (.[$field] | strings | length > 0)' <<< "${fields}" >/dev/null ||
-      return 1
+    jq -e --arg field "${field}" '
+      has($field) and (.[$field] | strings | length > 0)
+    ' <<< "${fields}" >/dev/null || return 1
   done
 }
 
 reconcile_external_credential() {
   local path="$1" username_variable="$2" token_variable="$3"
   local username="${!username_variable:-}" token="${!token_variable:-}"
+
   if [[ -n "${username}" || -n "${token}" ]]; then
-    [[ -n "${username}" ]] || fail "${username_variable} is required when ${token_variable} is set"
-    [[ -n "${token}" ]] || fail "${token_variable} is required when ${username_variable} is set"
+    [[ -n "${username}" ]] ||
+      fail "${username_variable} is required when ${token_variable} is set"
+    [[ -n "${token}" ]] ||
+      fail "${token_variable} is required when ${username_variable} is set"
+
     jq -n --arg username "${username}" --arg token "${token}" \
-      '{username: $username, token: $token}' | vault kv put "${path}" - >/dev/null
+      '{username: $username, token: $token}' |
+      vault kv put "${path}" - >/dev/null
     return
   fi
+
   vault_fields_are_present "${path}" username token
 }
 
 reconcile_external_credentials() {
   local -a missing=()
-  reconcile_external_credential secret/ci/github GITHUB_USERNAME GITHUB_TOKEN ||
+
+  reconcile_external_credential \
+    secret/ci/github GITHUB_USERNAME GITHUB_TOKEN ||
     missing+=('secret/ci/github')
-  reconcile_external_credential secret/ci/dockerhub DOCKERHUB_USERNAME DOCKERHUB_TOKEN ||
+  reconcile_external_credential \
+    secret/ci/dockerhub DOCKERHUB_USERNAME DOCKERHUB_TOKEN ||
     missing+=('secret/ci/dockerhub')
-  [[ "${#missing[@]}" == 0 ]] && return
-  printf 'FAIL | Jenkins requires external account credentials that cannot be generated.\n' >&2
+
+  [[ "${#missing[@]}" -eq 0 ]] && return
+
+  printf 'FAIL | missing external Jenkins credentials\n' >&2
   printf 'Missing Vault path: %s\n' "${missing[@]}" >&2
   cat >&2 <<'EOF'
-Inject all four variables from your secrets manager, then rerun:
+Inject all four variables and rerun:
   export GITHUB_USERNAME='<GitHub username>'
   export GITHUB_TOKEN='<GitHub token with repository/status access>'
   export DOCKERHUB_USERNAME='<Docker Hub username>'
   export DOCKERHUB_TOKEN='<Docker Hub access token>'
   make jenkins-up
-
-jenkins-up stores them at secret/ci/github and secret/ci/dockerhub; later runs
-reuse Vault and do not require the variables.
 EOF
   exit 1
 }
 
-if [[ "${1:-}" != --cluster ]]; then
+ensure_admin_credential() (
+  set -Eeuo pipefail
+
+  vault_fields_are_present     secret/jenkins/admin     jenkins-admin-user     jenkins-admin-password &&
+    return
+
+  local temporary
+  temporary="$(mktemp -d)"
+  trap 'rm -rf -- "${temporary}"' EXIT
+  chmod 0700 "${temporary}"
+  umask 077
+
+  jq -n \
+    --arg password "$(openssl rand -base64 36 | tr -d '\n')" \
+    '{
+      "jenkins-admin-user": "admin",
+      "jenkins-admin-password": $password
+    }' > "${temporary}/admin.json"
+
+  vault kv put secret/jenkins/admin "@${temporary}/admin.json" >/dev/null
+)
+
+configure_vault_identity() {
+  vault policy write \
+    jenkins-read \
+    "${root}/platform/jenkins/resources/admin-read.hcl" >/dev/null
+
+  vault write auth/approle/role/jenkins-vso \
+    token_policies=jenkins-read \
+    token_ttl=1h \
+    token_max_ttl=4h \
+    secret_id_ttl=0 \
+    secret_id_num_uses=0 >/dev/null
+}
+
+operator_reconcile() {
   phase 'Reconciling Jenkins credentials in Vault'
+
   require_vault_operator_token
   reconcile_external_credentials
-  vault policy write jenkins-read "${root}/platform/jenkins/resources/admin-read.hcl" >/dev/null
-  vault write auth/approle/role/jenkins-vso \
-    token_policies=jenkins-read token_ttl=1h token_max_ttl=4h \
-    secret_id_ttl=0 secret_id_num_uses=0 >/dev/null
+  configure_vault_identity
+  ensure_admin_credential
 
-  if ! vault_fields_are_present secret/jenkins/admin jenkins-admin-user jenkins-admin-password; then
-    temporary="$(mktemp -d)"
-    chmod 0700 "${temporary}"
-    trap 'rm -rf -- "${temporary}"' EXIT
-    umask 077
-    jq -n --arg password "$(openssl rand -base64 36 | tr -d '\n')" \
-      '{"jenkins-admin-user": "admin", "jenkins-admin-password": $password}' > "${temporary}/admin.json"
-    vault kv put secret/jenkins/admin "@${temporary}/admin.json" >/dev/null
-  fi
   pass 'Jenkins Vault credentials are current'
   phase 'Reconciling Jenkins through the Kubernetes API tunnel'
-  "${root}/infra/edge/lib/with-kubeconfig.sh" "${root}/platform/jenkins/bin/up" --cluster
-  exit
-fi
 
-kubectl create namespace jenkins --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-temporary="$(mktemp -d)"
-chmod 0700 "${temporary}"
-trap 'rm -rf -- "${temporary}"' EXIT
-kubectl -n jenkins create secret generic vault-ca \
-  --from-file=ca.crt=/usr/local/share/ca-certificates/lab.crt \
-  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  "${root}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+}
 
-kubectl -n jenkins get secret approle-id -o jsonpath='{.data.id}' 2>/dev/null |
-  base64 --decode > "${temporary}/installed-approle-id" || true
-role_id="$(vault read -field=role_id auth/approle/role/jenkins-vso/role-id)"
-installed_role_id="$(kubectl -n jenkins get vaultauth jenkins -o jsonpath='{.spec.appRole.roleId}' 2>/dev/null || true)"
-if [[ "${installed_role_id}" != "${role_id}" ]] ||
-   ! vault_approle_secret_is_valid jenkins-vso "${temporary}/installed-approle-id"; then
-  umask 077
-  vault write -field=secret_id -f auth/approle/role/jenkins-vso/secret-id > "${temporary}/approle-id"
-  kubectl -n jenkins create secret generic approle-id \
-    --from-file="id=${temporary}/approle-id" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-fi
+prepare_namespace() {
+  kubectl create namespace jenkins --dry-run=client -o yaml |
+    kubectl apply -f - >/dev/null
 
-kubectl apply -f "${root}/platform/jenkins/resources/vault-connection.yaml" >/dev/null
-kubectl apply -f - >/dev/null <<EOF
+  kubectl -n jenkins create secret generic vault-ca \
+    --from-file=ca.crt=/usr/local/share/ca-certificates/lab.crt \
+    --dry-run=client -o yaml |
+    kubectl apply -f - >/dev/null
+}
+
+reconcile_jenkins_approle() (
+  set -Eeuo pipefail
+
+  local temporary installed_role_id role_id
+  temporary="$(mktemp -d)"
+  trap 'rm -rf -- "${temporary}"' EXIT
+  chmod 0700 "${temporary}"
+
+  kubectl -n jenkins get secret approle-id \
+    -o jsonpath='{.data.id}' 2>/dev/null |
+    base64 --decode > "${temporary}/installed-secret-id" || true
+
+  role_id="$(vault read -field=role_id auth/approle/role/jenkins-vso/role-id)"
+  installed_role_id="$(kubectl -n jenkins get vaultauth jenkins \
+    -o jsonpath='{.spec.appRole.roleId}' 2>/dev/null || true)"
+
+  if [[ "${installed_role_id}" != "${role_id}" ]] ||
+    ! vault_approle_secret_is_valid       jenkins-vso "${temporary}/installed-secret-id"; then
+    umask 077
+    vault write -field=secret_id -f \
+      auth/approle/role/jenkins-vso/secret-id > "${temporary}/secret-id"
+
+    kubectl -n jenkins create secret generic approle-id \
+      --from-file="id=${temporary}/secret-id" \
+      --dry-run=client -o yaml |
+      kubectl apply -f - >/dev/null
+  fi
+
+  kubectl apply \
+    -f "${root}/platform/jenkins/resources/vault-connection.yaml" >/dev/null
+
+  kubectl apply -f - >/dev/null <<EOF
 apiVersion: secrets.hashicorp.com/v1beta1
 kind: VaultAuth
 metadata:
@@ -126,51 +183,142 @@ spec:
     roleId: ${role_id}
     secretRef: approle-id
 EOF
+)
 
-kubectl apply -f "${root}/platform/jenkins/resources/admin-secret.yaml" >/dev/null
-kubectl apply -f "${root}/platform/jenkins/resources/ci-secrets.yaml" >/dev/null
-kubectl apply -f "${root}/platform/jenkins/resources/agent-rbac.yaml" >/dev/null
-# The CD agent deploys with per-environment short-lived tokens
-# (delivery/environments). Remove the non-expiring agent token and the deploy
-# Role in default left by the previous delivery model.
-kubectl -n jenkins delete secret jenkins-agent-token jenkins-kubeconfig --ignore-not-found >/dev/null
-kubectl -n default delete role jenkins-app-deployer --ignore-not-found >/dev/null
-kubectl -n default delete rolebinding jenkins-app-deployer jenkins-ci-dry-run --ignore-not-found >/dev/null
+apply_jenkins_resources() {
+  kubectl apply \
+    -f "${root}/platform/jenkins/resources/admin-secret.yaml" >/dev/null
+  kubectl apply \
+    -f "${root}/platform/jenkins/resources/ci-secrets.yaml" >/dev/null
+  kubectl apply \
+    -f "${root}/platform/jenkins/resources/agent-rbac.yaml" >/dev/null
+}
 
-wait_for_vault_secret() {
+remove_legacy_delivery_state() {
+  kubectl -n jenkins delete secret \
+    jenkins-agent-token \
+    jenkins-kubeconfig \
+    --ignore-not-found >/dev/null
+
+  kubectl -n default delete role \
+    jenkins-app-deployer \
+    --ignore-not-found >/dev/null
+
+  kubectl -n default delete rolebinding \
+    jenkins-app-deployer \
+    jenkins-ci-dry-run \
+    --ignore-not-found >/dev/null
+}
+
+wait_for_vault_secret() (
+  set -Eeuo pipefail
+
   local resource="$1" path="$2" destination="$3"
   shift 3
-  local field safe_path="${path//\//-}"
-  kubectl -n jenkins wait --for=condition=Ready "vaultstaticsecret/${resource}" --timeout=2m >/dev/null
+
+  local field safe_path temporary
+  temporary="$(mktemp -d)"
+  trap 'rm -rf -- "${temporary}"' EXIT
+  safe_path="${path//\//-}"
+
+  kubectl -n jenkins wait \
+    --for=condition=Ready \
+    "vaultstaticsecret/${resource}" \
+    --timeout=2m >/dev/null
+
   for field in "$@"; do
-    vault kv get -format=json "${path}" | jq -j --arg field "${field}" '.data.data[$field]' |
+    vault kv get -format=json "${path}" |
+      jq -j --arg field "${field}" '.data.data[$field]' |
       sha256sum > "${temporary}/${safe_path}-${field}-vault.sha256"
+
     kubectl -n jenkins get secret "${destination}" -o json |
-      jq -r --arg field "${field}" '.data[$field]' | base64 --decode | sha256sum \
-        > "${temporary}/${safe_path}-${field}-kubernetes.sha256"
-    cmp -s "${temporary}/${safe_path}-${field}-vault.sha256" \
+      jq -r --arg field "${field}" '.data[$field]' |
+      base64 --decode |
+      sha256sum > "${temporary}/${safe_path}-${field}-kubernetes.sha256"
+
+    cmp -s \
+      "${temporary}/${safe_path}-${field}-vault.sha256" \
       "${temporary}/${safe_path}-${field}-kubernetes.sha256" ||
-      fail "secret/${destination} does not match the current ${path} value"
+      fail "secret/${destination} does not match ${path}"
+  done
+)
+
+verify_vault_secrets() {
+  phase 'Waiting for Vault-managed Jenkins Secrets'
+
+  wait_for_vault_secret \
+    jenkins-admin \
+    secret/jenkins/admin \
+    jenkins-admin \
+    jenkins-admin-user \
+    jenkins-admin-password
+
+  wait_for_vault_secret \
+    github-creds \
+    secret/ci/github \
+    github-creds \
+    username \
+    token
+
+  wait_for_vault_secret \
+    dockerhub-creds \
+    secret/ci/dockerhub \
+    dockerhub-creds \
+    username \
+    token
+
+  pass 'Vault-managed Jenkins Secrets match Vault'
+}
+
+verify_agent_cluster_scope() {
+  local agent
+
+  for agent in jenkins-agent jenkins-ci; do
+    [[ "$(kubectl auth can-i create deployments \
+      --all-namespaces \
+      --as="system:serviceaccount:jenkins:${agent}")" == no ]] ||
+      fail "${agent} has cluster-wide deployment rights"
   done
 }
 
-phase 'Waiting for current Vault-managed Jenkins Secrets (timeout: 2m each)'
-wait_for_vault_secret jenkins-admin secret/jenkins/admin jenkins-admin \
-  jenkins-admin-user jenkins-admin-password
-wait_for_vault_secret github-creds secret/ci/github github-creds username token
-wait_for_vault_secret dockerhub-creds secret/ci/dockerhub dockerhub-creds username token
-pass 'Vault-managed Jenkins Secrets match their source values'
-# Neither agent identity has cluster-wide rights; environments grant them per namespace.
-for agent in jenkins-agent jenkins-ci; do
-  [[ "$(kubectl auth can-i create deployments --all-namespaces --as="system:serviceaccount:jenkins:${agent}")" == no ]]
-done
+install_jenkins() {
+  phase 'Reconciling the Jenkins Helm release'
 
-phase 'Reconciling the Jenkins Helm release (timeout: 10m)'
-helm repo add jenkins https://charts.jenkins.io --force-update >/dev/null
-helm repo update jenkins >/dev/null
-helm upgrade --install jenkins jenkins/jenkins \
-  --namespace jenkins --version "${JENKINS_CHART_VERSION}" \
-  --values "${root}/platform/jenkins/values.yaml" \
-  --set-file controller.JCasC.configScripts.platform="${root}/platform/jenkins/jcasc/jenkins.yaml" \
-  --wait --rollback-on-failure --timeout 10m --history-max 5 --hide-notes
-pass 'Jenkins release reconciled'
+  helm repo add jenkins https://charts.jenkins.io --force-update >/dev/null
+  helm repo update jenkins >/dev/null
+
+  helm upgrade --install jenkins jenkins/jenkins \
+    --namespace jenkins \
+    --version "${JENKINS_CHART_VERSION}" \
+    --values "${root}/platform/jenkins/values.yaml" \
+    --set-file \
+      controller.JCasC.configScripts.platform="${root}/platform/jenkins/jcasc/jenkins.yaml" \
+    --wait \
+    --rollback-on-failure \
+    --timeout 10m \
+    --history-max 5 \
+    --hide-notes
+
+  pass 'Jenkins release reconciled'
+}
+
+cluster_reconcile() {
+  prepare_namespace
+  reconcile_jenkins_approle
+  apply_jenkins_resources
+  remove_legacy_delivery_state
+  verify_vault_secrets
+  verify_agent_cluster_scope
+  install_jenkins
+}
+
+main() {
+  if [[ "${1:-}" == --cluster ]]; then
+    cluster_reconcile
+    return
+  fi
+
+  operator_reconcile
+}
+
+main "$@"

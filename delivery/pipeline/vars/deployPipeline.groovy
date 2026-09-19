@@ -20,7 +20,10 @@ def call() {
                     script {
                         if (!(params.COMMIT_SHA ==~ /^[0-9a-f]{40}$/)) { error('COMMIT_SHA must be a full Git SHA') }
                         if (!(params.IMAGE_REF ==~ /^[a-z0-9.:\/_-]+@sha256:[0-9a-f]{64}$/)) { error('IMAGE_REF must be repository@sha256:<64 hex>') }
-                        if (!(params.CHART ==~ /^[A-Za-z0-9_\/.-]+$/) || params.CHART.contains('..')) { error('CHART must be a repository-relative path') }
+                        if (!(params.CHART ==~ /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/) ||
+                            params.CHART.tokenize('/').any { it == '.' || it == '..' }) {
+                            error('CHART must be a repository-relative path without dot segments')
+                        }
 
                         checkout scm
                         sh 'git checkout --detach "$COMMIT_SHA"'

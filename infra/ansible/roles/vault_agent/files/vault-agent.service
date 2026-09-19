@@ -1,5 +1,5 @@
 [Unit]
-Description=Stage 3 Vault Agent for BIND
+Description=Lab Vault Agent for BIND
 After=vault.service
 Requires=vault.service
 

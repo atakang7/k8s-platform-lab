@@ -1,5 +1,5 @@
 [Unit]
-Description=Stage 3 HashiCorp Vault
+Description=Lab HashiCorp Vault
 After=network-online.target
 Wants=network-online.target
 

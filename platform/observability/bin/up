@@ -36,7 +36,7 @@ for node in node-2 node-3; do
   kubectl wait --for=condition=Ready "node/${node}" --timeout=5s >/dev/null
   allocatable="$(kubectl get node "${node}" -o jsonpath='{.status.allocatable.memory}')"
   if [[ "${allocatable}" != *Ki ]] || (( ${allocatable%Ki} < 1450000 )); then
-    echo "FAIL | ${node} needs at least 1450000Ki allocatable memory for Stage 5; found ${allocatable}" >&2
+    echo "FAIL | ${node} needs at least 1450000Ki allocatable memory; found ${allocatable}" >&2
     exit 1
   fi
 done
@@ -95,4 +95,4 @@ begin_phase 'Applying the observability ingress'
 kubectl -n "${namespace}" delete ingress observability-elasticsearch --ignore-not-found
 kubectl apply -f "${root}/platform/observability/ingress.yaml"
 complete_phase
-echo 'PASS | Stage 5 components reconciled; run make observability-smoke'
+echo 'PASS | observability components reconciled; run make observability-smoke'

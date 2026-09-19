@@ -15,7 +15,7 @@
           - edge_host_ip in ansible_all_ipv4_addresses
           - ansible_architecture == 'x86_64'
           - ansible_distribution == 'Ubuntu'
-        fail_msg: "Stage 3 requires Ubuntu x86_64 and host edge IP {{ edge_host_ip }}; resolve the Vagrant network preflight before edge-up"
+        fail_msg: "Edge bootstrap requires Ubuntu x86_64 and host edge IP {{ edge_host_ip }}; resolve the Vagrant network preflight before edge-up"
       tags: [host]
   roles:
     - { role: bind9, tags: [host] }

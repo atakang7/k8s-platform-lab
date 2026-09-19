@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly root
+readonly root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly environment_label=delivery.lab.test/environment
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
@@ -17,21 +17,32 @@ pass() {
   printf 'PASS | %s\n' "$1"
 }
 
+managed_namespaces() {
+  kubectl get namespaces \
+    -l "${environment_label}" \
+    -o json |
+    jq -r '.items[].metadata.name'
+}
+
 admission_check() {
-  local expectation="$1" requests="$2" output status=0
+  local namespace="$1" expectation="$2" requests="$3"
+  local output status=0
+
   output="$(kubectl apply --dry-run=server -f - 2>&1 <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: resource-requests-policy-smoke
-  namespace: default
+  namespace: ${namespace}
 spec:
   replicas: 1
   selector:
-    matchLabels: {app: resource-requests-policy-smoke}
+    matchLabels:
+      app: resource-requests-policy-smoke
   template:
     metadata:
-      labels: {app: resource-requests-policy-smoke}
+      labels:
+        app: resource-requests-policy-smoke
     spec:
       containers:
         - name: pause
@@ -40,36 +51,63 @@ spec:
             requests: ${requests}
 EOF
 )" || status=$?
-  if [[ "${expectation}" == allow && "${status}" -eq 0 ]]; then return; fi
-  if [[ "${expectation}" == deny && "${status}" -ne 0 && "${output}" == *denied* ]]; then return; fi
-  fail "resource-requests-webhook expected ${expectation}, got: ${output}"
+
+  if [[ "${expectation}" == allow && "${status}" -eq 0 ]]; then
+    return
+  fi
+
+  if [[ "${expectation}" == deny && "${status}" -ne 0 && "${output}" == *denied* ]]; then
+    return
+  fi
+
+  fail "resource-requests-webhook expected ${expectation} in ${namespace}, got: ${output}"
 }
 
 smoke_resource_requests_webhook() {
+  local namespace
+  local -a namespaces=()
+
   phase 'Checking resource-requests-webhook rollout and registration'
-  kubectl -n policy-system rollout status deployment/resource-requests-webhook --timeout=90s
+  kubectl -n policy-system rollout status \
+    deployment/resource-requests-webhook --timeout=90s
   kubectl get validatingwebhookconfiguration resource-requests-webhook >/dev/null
+
+  mapfile -t namespaces < <(managed_namespaces)
+  [[ "${#namespaces[@]}" -gt 0 ]] ||
+    fail "no namespace carries the ${environment_label} label"
+
   phase 'Exercising resource request admission decisions'
-  admission_check allow '{cpu: 10m, memory: 16Mi}'
-  admission_check deny '{memory: 16Mi}'
-  admission_check deny '{cpu: 10m}'
-  pass 'Policy resource-requests-webhook is ready and enforcing CPU and memory requests'
+  for namespace in "${namespaces[@]}"; do
+    admission_check "${namespace}" allow '{cpu: 10m, memory: 16Mi}'
+    admission_check "${namespace}" deny '{memory: 16Mi}'
+    admission_check "${namespace}" deny '{cpu: 10m}'
+  done
+
+  pass 'resource-requests-webhook enforces CPU and memory requests in managed environments'
 }
 
 smoke_policy() {
   case "$1" in
-    resource-requests-webhook) smoke_resource_requests_webhook ;;
-    *) fail "unknown policy '$1'; supported policies: resource-requests-webhook" ;;
+    resource-requests-webhook)
+      smoke_resource_requests_webhook
+      ;;
+    *)
+      fail "unknown policy '$1'; supported policies: resource-requests-webhook"
+      ;;
   esac
 }
 
 main() {
   local requested="${1:-}"
-  [[ -n "${requested}" ]] || fail 'policy name is required; run make policy-smoke POLICY=resource-requests-webhook'
+
+  [[ -n "${requested}" ]] ||
+    fail 'policy name is required; run make policy-smoke POLICY=resource-requests-webhook'
+
   if [[ "${requested}" != --cluster ]]; then
     "${root}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster "${requested}"
     return
   fi
+
   requested="${2:-}"
   [[ "${requested}" == all ]] && requested=resource-requests-webhook
   smoke_policy "${requested}"

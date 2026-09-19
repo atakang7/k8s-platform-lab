@@ -5,7 +5,7 @@ image:
 
 replicas: 4
 containerPort: 9001
-# Zero-downtime rollout on the fixed-capacity cluster.
+
 strategy:
   type: RollingUpdate
   rollingUpdate:
@@ -30,10 +30,16 @@ resources:
 
 podSecurityContext:
   fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
 securityContext:
   runAsNonRoot: true
   runAsUser: 10001
+  runAsGroup: 10001
   allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
 
 nodeAffinity:
   requiredDuringSchedulingIgnoredDuringExecution:
@@ -50,7 +56,6 @@ metrics:
   enabled: true
   path: /actuator/prometheus
 
-# The application writes a log file; the Fluent Bit sidecar ships it.
 configMaps:
   fluent-bit:
     fluent-bit.conf: |
@@ -81,6 +86,7 @@ volumes:
   - name: fluent-bit-config
     configMap:
       name: "{{ .Release.Name }}-fluent-bit"
+
 volumeMounts:
   - name: app-logs
     mountPath: /var/log/app
@@ -91,7 +97,10 @@ sidecars:
     securityContext:
       runAsNonRoot: true
       runAsUser: 10001
+      runAsGroup: 10001
       allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
     resources:
       requests: {cpu: 50m, memory: 32Mi}
       limits: {cpu: 100m, memory: 128Mi}

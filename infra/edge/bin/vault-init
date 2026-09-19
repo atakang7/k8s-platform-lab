@@ -1,32 +1,77 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 source "${root}/infra/edge/config.env"
 export VAULT_ADDR=https://127.0.0.1:8200
-[[ "${VAULT_INIT_OUTPUT}" = /* ]] || { echo 'FAIL | Vault init output must be an absolute path' >&2; exit 1; }
-VAULT_INIT_OUTPUT="$(realpath -m -- "${VAULT_INIT_OUTPUT}")"
-case "${VAULT_INIT_OUTPUT}" in
-  "${root}"/*) echo 'FAIL | root-of-trust output cannot be inside the repository' >&2; exit 1;;
-  /var/lib/vault/*|/etc/vault/*|/etc/lab-ca/*) echo 'FAIL | root-of-trust output cannot be stored beside Vault or the local CA' >&2; exit 1;;
-esac
-init_status=0
-vault operator init -status >/dev/null 2>&1 || init_status=$?
-if [[ "${init_status}" == 0 ]]; then
-  [[ -s "${VAULT_INIT_OUTPUT}" ]] || { echo "FAIL | Vault is initialized but ${VAULT_INIT_OUTPUT} is missing; restore that file or reset Vault explicitly" >&2; exit 1; }
-  echo "PASS | Vault is already initialized and its local-lab root of trust is present"
-  exit 0
-fi
-[[ "${init_status}" == 2 ]] || { echo 'FAIL | cannot determine Vault initialization state' >&2; exit 1; }
-umask 077
-install -d -m 0700 "$(dirname -- "${VAULT_INIT_OUTPUT}")"
-if [[ -e "${VAULT_INIT_OUTPUT}" ]]; then
-  rm -f -- "${VAULT_INIT_OUTPUT}"
-  echo 'PASS | Removed init output that belonged to an absent Vault state'
-fi
-if ! vault operator init -key-shares=1 -key-threshold=1 -format=json > "${VAULT_INIT_OUTPUT}"; then
-  rm -f -- "${VAULT_INIT_OUTPUT}"
-  echo 'FAIL | Vault initialization failed; partial output removed' >&2
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
   exit 1
-fi
-echo "PASS | Vault initialized; local-lab root of trust written to ${VAULT_INIT_OUTPUT} (mode 0600)"
+}
+
+resolve_operator_state() {
+  [[ "${VAULT_INIT_OUTPUT}" = /* ]] ||
+    fail 'Vault init output must be an absolute path'
+
+  VAULT_INIT_OUTPUT="$(realpath -m -- "${VAULT_INIT_OUTPUT}")"
+
+  case "${VAULT_INIT_OUTPUT}" in
+    "${root}"/*)
+      fail 'Vault operator state cannot be stored inside the repository'
+      ;;
+    /var/lib/vault/*|/etc/vault/*|/etc/lab-ca/*)
+      fail 'Vault operator state cannot be stored beside Vault or the local CA'
+      ;;
+  esac
+}
+
+vault_init_status() {
+  local status=0
+  vault operator init -status >/dev/null 2>&1 || status=$?
+  printf '%s\n' "${status}"
+}
+
+initialize_vault() {
+  umask 077
+  install -d -m 0700 "$(dirname -- "${VAULT_INIT_OUTPUT}")"
+
+  if [[ -e "${VAULT_INIT_OUTPUT}" ]]; then
+    rm -f -- "${VAULT_INIT_OUTPUT}"
+    printf 'PASS | removed stale Vault operator state\n'
+  fi
+
+  if ! vault operator init \
+    -key-shares=1 \
+    -key-threshold=1 \
+    -format=json > "${VAULT_INIT_OUTPUT}"; then
+    rm -f -- "${VAULT_INIT_OUTPUT}"
+    fail 'Vault initialization failed; partial operator state removed'
+  fi
+
+  chmod 0600 "${VAULT_INIT_OUTPUT}"
+  printf 'PASS | Vault initialized; operator state: %s\n' "${VAULT_INIT_OUTPUT}"
+}
+
+main() {
+  local status
+
+  resolve_operator_state
+  status="$(vault_init_status)"
+
+  case "${status}" in
+    0)
+      [[ -s "${VAULT_INIT_OUTPUT}" ]] ||
+        fail "Vault is initialized but ${VAULT_INIT_OUTPUT} is missing"
+      printf 'PASS | Vault is already initialized\n'
+      ;;
+    2)
+      initialize_vault
+      ;;
+    *)
+      fail 'cannot determine Vault initialization state'
+      ;;
+  esac
+}
+
+main "$@"

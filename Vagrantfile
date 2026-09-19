@@ -58,7 +58,7 @@ master_cpus = integer_env("MASTER_CPUS", 2)
 worker_cpus = integer_env("WORKER_CPUS", 2)
 
 puts <<~PLAN
-  Stage 1 resource plan (deterministic defaults)
+  VM resource plan
     node-1: #{master_cpus} CPU / #{master_memory} MB RAM (control plane)
     node-2: #{worker_cpus} CPU / #{node_2_memory} MB RAM (worker, locally constrained)
     node-3: #{worker_cpus} CPU / #{worker_memory} MB RAM (worker)

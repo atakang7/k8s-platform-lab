@@ -3,17 +3,13 @@ kind: Service
 metadata:
   name: {{ include "resource-requests-webhook.fullname" . }}
   labels:
-    app.kubernetes.io/name: {{ include "resource-requests-webhook.name" . }}
-    helm.sh/chart: {{ include "resource-requests-webhook.chart" . }}
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- include "resource-requests-webhook.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
+  selector:
+    {{- include "resource-requests-webhook.selectorLabels" . | nindent 4 }}
   ports:
-    - port: {{ .Values.service.port }}
+    - name: https
+      port: {{ .Values.service.port }}
       targetPort: https
       protocol: TCP
-      name: https
-  selector:
-    app.kubernetes.io/name: {{ include "resource-requests-webhook.name" . }}
-    app.kubernetes.io/instance: {{ .Release.Name }}

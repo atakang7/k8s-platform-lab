@@ -19,9 +19,9 @@
     path: /etc/hosts
     marker: "# {mark} STAGE 1 KUBERNETES NODES"
     block: |
-      10.50.0.10 node-1
-      10.50.0.11 node-2
-      10.50.0.12 node-3
+      {% for node, address in node_ips | dictsort %}
+      {{ address }} {{ node }}
+      {% endfor %}
 
 - name: Disable active swap
   ansible.builtin.command: swapoff -a

@@ -8,7 +8,11 @@
   {{- $tlsCert = index $secret.data "tls.crt" -}}
   {{- $tlsKey = index $secret.data "tls.key" -}}
 {{- else -}}
-  {{- $altNames := list (printf "%s.%s" (include "resource-requests-webhook.fullname" .) .Release.Namespace) (printf "%s.%s.svc" (include "resource-requests-webhook.fullname" .) .Release.Namespace) (printf "%s.%s.svc.cluster.local" (include "resource-requests-webhook.fullname" .) .Release.Namespace) -}}
+  {{- $altNames := list
+      (printf "%s.%s" (include "resource-requests-webhook.fullname" .) .Release.Namespace)
+      (printf "%s.%s.svc" (include "resource-requests-webhook.fullname" .) .Release.Namespace)
+      (printf "%s.%s.svc.cluster.local" (include "resource-requests-webhook.fullname" .) .Release.Namespace)
+  -}}
   {{- $ca := genCA "resource-requests-webhook-ca" 3650 -}}
   {{- $cert := genSignedCert (include "resource-requests-webhook.fullname" .) nil $altNames 3650 $ca -}}
   {{- $caCert = $ca.Cert | b64enc -}}
@@ -20,10 +24,7 @@ kind: Secret
 metadata:
   name: {{ $secretName }}
   labels:
-    app.kubernetes.io/name: {{ include "resource-requests-webhook.name" . }}
-    helm.sh/chart: {{ include "resource-requests-webhook.chart" . }}
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- include "resource-requests-webhook.labels" . | nindent 4 }}
 type: kubernetes.io/tls
 data:
   ca.crt: {{ $caCert }}
@@ -35,12 +36,14 @@ kind: ValidatingWebhookConfiguration
 metadata:
   name: {{ include "resource-requests-webhook.fullname" . }}
   labels:
-    app.kubernetes.io/name: {{ include "resource-requests-webhook.name" . }}
-    helm.sh/chart: {{ include "resource-requests-webhook.chart" . }}
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- include "resource-requests-webhook.labels" . | nindent 4 }}
 webhooks:
   - name: validate-resource-requests.lab.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    timeoutSeconds: 5
     clientConfig:
       service:
         name: {{ include "resource-requests-webhook.fullname" . }}
@@ -52,15 +55,7 @@ webhooks:
         apiGroups: ["apps"]
         apiVersions: ["v1"]
         resources: ["deployments"]
-    failurePolicy: Fail
-    sideEffects: None
-    admissionReviewVersions: ["v1"]
     namespaceSelector:
       matchExpressions:
-        - key: kubernetes.io/metadata.name
-          operator: NotIn
-          values:
-            - kube-system
-            - kube-public
-            - kube-node-lease
-            - {{ .Release.Namespace }}
+        - key: delivery.lab.test/environment
+          operator: Exists

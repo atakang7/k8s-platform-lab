@@ -126,8 +126,8 @@
         that:
           - "('podSubnet: ' + pod_cidr) in cluster_configuration.stdout"
           - "('serviceSubnet: ' + service_cidr) in cluster_configuration.stdout"
-        success_msg: "PASS | Pod and Service CIDRs match the Stage 1 design"
-        fail_msg: "FAIL | kubeadm Pod or Service CIDR does not match the Stage 1 design"
+        success_msg: "PASS | Pod and Service CIDRs match the cluster configuration"
+        fail_msg: "FAIL | kubeadm Pod or Service CIDR does not match the cluster configuration"
 
     - name: Verify Calico node agents
       ansible.builtin.command: kubectl -n kube-system rollout status daemonset/calico-node --timeout=30s
@@ -193,4 +193,4 @@
 
     - name: Report Stage 1 outcome
       ansible.builtin.debug:
-        msg: "PASS | Stage 1 cluster foundation validation complete"
+        msg: "PASS | cluster foundation validation complete"

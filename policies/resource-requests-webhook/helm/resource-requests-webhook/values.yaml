@@ -1,11 +1,10 @@
-replicaCount: 1
+replicaCount: 2
 
 image:
   repository: docker.io/atakangul/resource-requests-webhook
   pullPolicy: IfNotPresent
   digest: ""
 
-# The policy image is public. Private registries may supply pull secrets here.
 imagePullSecrets: []
 
 nameOverride: ""
@@ -17,14 +16,18 @@ service:
 
 resources:
   requests:
-    cpu: 100m
-    memory: 128Mi
+    cpu: 50m
+    memory: 64Mi
   limits:
     cpu: 200m
     memory: 256Mi
 
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+spreadAcrossNodes: true
+
 nodeSelector: {}
-
 tolerations: []
-
 affinity: {}

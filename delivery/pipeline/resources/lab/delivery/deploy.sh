@@ -30,4 +30,4 @@ export HELM_DRIVER=configmap   # release history in ConfigMaps: the deployer has
 # --force-conflicts: the release owns its objects; manual kubectl edits are taken back.
 helm upgrade --install "${RELEASE}" "${CHART}" --namespace "${NAMESPACE}" \
   --set-string image.digest="${IMAGE_DIGEST}" \
-  --force-conflicts --rollback-on-failure --wait --timeout 5m
+  --force-conflicts --rollback-on-failure --wait --timeout 5m --history-max 5

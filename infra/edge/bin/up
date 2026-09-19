@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 source "${root}/infra/edge/config.env"
 source "${root}/infra/edge/versions.env"
 source "${root}/infra/edge/lib/operator-state.sh"
-cd "${root}"
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
@@ -13,11 +12,22 @@ fail() {
 }
 
 configure_host() {
-  sudo -n true || fail 'passwordless sudo is required for non-interactive edge bootstrap'
-  sudo -n PYTHONNOUSERSITE=1 ANSIBLE_CONFIG="${root}/infra/ansible/ansible.cfg" VAULT_VERSION="${VAULT_VERSION}" VAULT_SHA256="${VAULT_SHA256}" \
-    ansible-playbook -i localhost, -c local infra/ansible/playbooks/edge-host.yml \
-    --tags host -e "edge_host_ip=${EDGE_HOST_IP}" -e "edge_network_cidr=${EDGE_NETWORK_CIDR}" \
-    -e "dns_zone=${DNS_ZONE}"
+  sudo -n true ||
+    fail 'passwordless sudo is required for non-interactive edge bootstrap'
+
+  sudo -n \
+    PYTHONNOUSERSITE=1 \
+    ANSIBLE_CONFIG="${root}/infra/ansible/ansible.cfg" \
+    VAULT_VERSION="${VAULT_VERSION}" \
+    VAULT_SHA256="${VAULT_SHA256}" \
+    ansible-playbook \
+      -i localhost, \
+      -c local \
+      "${root}/infra/ansible/playbooks/edge-host.yml" \
+      --tags host \
+      -e "edge_host_ip=${EDGE_HOST_IP}" \
+      -e "edge_network_cidr=${EDGE_NETWORK_CIDR}" \
+      -e "dns_zone=${DNS_ZONE}"
 }
 
 ensure_vault_ready() {
@@ -25,38 +35,73 @@ ensure_vault_ready() {
   "${root}/infra/edge/bin/vault-unseal"
 }
 
-configure_vault_runtime() {
+wait_for_current_tsig() (
+  set -Eeuo pipefail
+
   local expected_tsig
-  require_vault_operator_token
-  "${root}/infra/edge/lib/with-kubeconfig.sh" "${root}/infra/edge/lib/kubernetes.sh" vso
-  "${root}/infra/edge/lib/vault.sh"
   expected_tsig="$(mktemp)"
-  trap 'rm -f -- "${expected_tsig:-}"' RETURN
-  vault kv get -format=json secret/edge/dns/tsig | jq -r \
-    '"\nkey \"" + .data.data.key_name + "\" {\n  algorithm hmac-sha256;\n  secret \"" + .data.data.secret + "\";\n};"' > "${expected_tsig}"
+  trap 'rm -f -- "${expected_tsig}"' EXIT
+
+  vault kv get -format=json secret/edge/dns/tsig |
+    jq -r '
+      "\nkey \"" + .data.data.key_name + "\" {" +
+      "\n  algorithm hmac-sha256;" +
+      "\n  secret \"" + .data.data.secret + "\";" +
+      "\n};"
+    ' > "${expected_tsig}"
+
   for _ in {1..60}; do
     if sudo -n systemctl is-active --quiet vault-agent &&
-       sudo -n cmp -s "${expected_tsig}" /run/lab-bind/tsig.key; then return; fi
+      sudo -n cmp -s "${expected_tsig}" /run/lab-bind/tsig.key; then
+      return
+    fi
     sleep 0.5
   done
+
   sudo -n systemctl status vault-agent --no-pager -l >&2 || true
-  fail 'Vault Agent did not render the current Vault DNS TSIG within 30 seconds'
+  fail 'Vault Agent did not render the current DNS TSIG within 30 seconds'
+)
+
+configure_vault_runtime() {
+  require_vault_operator_token
+
+  "${root}/infra/edge/lib/with-kubeconfig.sh" \
+    "${root}/infra/edge/lib/kubernetes.sh" vso
+  "${root}/infra/edge/lib/vault.sh"
+
+  wait_for_current_tsig
 }
 
 configure_dns_host() {
-  sudo -n PYTHONNOUSERSITE=1 ANSIBLE_CONFIG="${root}/infra/ansible/ansible.cfg" ansible-playbook -i localhost, -c local infra/ansible/playbooks/edge-host.yml \
-    --tags dns -e "edge_host_ip=${EDGE_HOST_IP}" -e "edge_network_cidr=${EDGE_NETWORK_CIDR}" \
-    -e "dns_zone=${DNS_ZONE}"
+  sudo -n \
+    PYTHONNOUSERSITE=1 \
+    ANSIBLE_CONFIG="${root}/infra/ansible/ansible.cfg" \
+    ansible-playbook \
+      -i localhost, \
+      -c local \
+      "${root}/infra/ansible/playbooks/edge-host.yml" \
+      --tags dns \
+      -e "edge_host_ip=${EDGE_HOST_IP}" \
+      -e "edge_network_cidr=${EDGE_NETWORK_CIDR}" \
+      -e "dns_zone=${DNS_ZONE}"
+}
+
+configure_cluster_edge() {
+  "${root}/infra/edge/lib/with-kubeconfig.sh" \
+    "${root}/infra/edge/lib/kubernetes.sh" full
 }
 
 main() {
+  cd "${root}"
+
   configure_host
   ensure_vault_ready
   configure_vault_runtime
   configure_dns_host
-  "${root}/infra/edge/lib/with-kubeconfig.sh" "${root}/infra/edge/lib/kubernetes.sh" full
+  configure_cluster_edge
+
   unset VAULT_TOKEN
-  echo 'PASS | Stage 3 edge is configured; run make edge-smoke'
+  printf 'PASS | edge is configured; run make edge-smoke\n'
 }
 
 main "$@"
