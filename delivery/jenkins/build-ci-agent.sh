@@ -52,7 +52,7 @@ resolve_registry_digest() {
   digest="$(docker image inspect \
     --format '{{range .RepoDigests}}{{println .}}{{end}}' \
     "${tag}" |
-    sed -n "s#^${REPOSITORY#docker.io/}@\\(sha256:[0-9a-f]\\{64\\}\\)$#\\1#p" |
+    sed -n "s#^${REPOSITORY#docker.io/}@\\(sha256:[0-9a-f]\\{64\\}\\)\$#\\1#p" |
     head -n1)"
 
   [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] ||
