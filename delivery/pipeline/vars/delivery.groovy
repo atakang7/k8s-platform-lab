@@ -164,7 +164,8 @@ void tagRelease(String environment) {
                     exit 0
                   fi
                   day="$(date -u +%Y.%m.%d)"
-                  tag="$ENVIRONMENT-$day.$(( $(git tag --list "$ENVIRONMENT-$day.*" | wc -l) + 1 ))"
+                  # One past the highest number, not the count: a deleted tag leaves a gap.
+                  tag="$ENVIRONMENT-$day.$(git tag --list "$ENVIRONMENT-$day.*" | awk -F. '$NF > n { n = $NF } END { print n + 1 }')"
                   git -c user.name=lab-delivery -c user.email=delivery@lab.test \
                     tag --annotate --message "Release $tag" "$tag" HEAD
                   git push origin "refs/tags/$tag"
