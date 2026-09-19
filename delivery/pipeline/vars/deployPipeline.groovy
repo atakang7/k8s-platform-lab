@@ -33,31 +33,12 @@ def call() {
                                 delivery.installScripts()
                                 Map config = delivery.environments()
                                 env.CHART_REF = config.chartRegistry
-                                String previous = null
 
-                                for (Map target in config.environments) {
-                                    Map digests = delivery.digests(target.name)
-                                    for (String name in digests.keySet()) {
-                                        String digest = digests[name]
-                                        if (digest == null) {
-                                            continue
-                                        }
-                                        if (previous != null) {
-                                            withEnv(["DIGEST=${digest}", "PREVIOUS_STATE=state/${previous}.yaml"]) {
-                                                String history = sh(
-                                                    returnStdout: true,
-                                                    script: 'git log --format=%H -S "$DIGEST" -- "$PREVIOUS_STATE"'
-                                                ).trim()
-                                                if (!history) {
-                                                    error("${name} ${digest} is in ${target.name} but was never in ${previous}")
-                                                }
-                                            }
-                                        }
-                                        if (config.releases.containsKey(name)) {
-                                            release(config, target, name, digest, '.delivery/validate-release.sh')
-                                        }
+                                for (Map recorded in delivery.recordedDigests(config)) {
+                                    delivery.requirePromoted(recorded)
+                                    if (config.releases.containsKey(recorded.name)) {
+                                        release(config, recorded, '.delivery/validate-release.sh')
                                     }
-                                    previous = target.name
                                 }
                             }
                         }
@@ -77,13 +58,9 @@ def call() {
                                 Map config = delivery.environments()
                                 env.CHART_REF = config.chartRegistry
 
-                                for (Map target in config.environments) {
-                                    Map digests = delivery.digests(target.name)
-                                    for (String name in digests.keySet()) {
-                                        String digest = digests[name]
-                                        if (digest != null && config.releases.containsKey(name)) {
-                                            release(config, target, name, digest, '.delivery/deploy.sh')
-                                        }
+                                for (Map recorded in delivery.recordedDigests(config)) {
+                                    if (config.releases.containsKey(recorded.name)) {
+                                        release(config, recorded, '.delivery/deploy.sh')
                                     }
                                 }
                             }
@@ -95,9 +72,12 @@ def call() {
     }
 }
 
-// Runs one release step (dry-run or deploy) for one digest in one environment,
-// with the chart from the commit the image was built from.
-private void release(Map config, Map target, String name, String digest, String step) {
+// Runs one release step (dry-run or deploy) for one recorded digest, with the
+// chart from the commit the image was built from.
+private void release(Map config, Map recorded, String step) {
+    String name = recorded.name
+    String digest = recorded.digest
+    Map target = recorded.target
     Map service = delivery.service(config.releases[name])
     if (service.name != name) {
         error("environments.yaml: release ${name} points at chart ${service.name}")

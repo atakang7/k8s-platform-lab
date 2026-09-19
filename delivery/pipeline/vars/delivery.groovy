@@ -86,6 +86,45 @@ Map digests(String environment) {
     state.digests
 }
 
+// Every digest the state records, in promotion order: one entry per
+// environment and state entry, with the environment it must have been in first
+// (null for the first environment).
+List<Map> recordedDigests(Map config) {
+    List<Map> recorded = []
+    Map previous = null
+
+    for (Map target in config.environments) {
+        Map environmentDigests = digests(target.name)
+        for (String name in environmentDigests.keySet()) {
+            String digest = environmentDigests[name]
+            if (digest != null) {
+                recorded << [target: target, previous: previous, name: name, digest: digest]
+            }
+        }
+        previous = target
+    }
+
+    recorded
+}
+
+// A digest may enter an environment only after it was recorded in the previous
+// one; the Git history of that environment's state file is the proof.
+void requirePromoted(Map recorded) {
+    if (recorded.previous == null) {
+        return
+    }
+
+    withEnv(["DIGEST=${recorded.digest}", "PREVIOUS_STATE=state/${recorded.previous.name}.yaml"]) {
+        String history = sh(
+            returnStdout: true,
+            script: 'git log --format=%H -S "$DIGEST" -- "$PREVIOUS_STATE"'
+        ).trim()
+        if (!history) {
+            error("${recorded.name} ${recorded.digest} is in ${recorded.target.name} but was never in ${recorded.previous.name}")
+        }
+    }
+}
+
 // Commits a new digest to main's state/<environment>.yaml: that commit is the
 // deploy. The push is retried because another service may record first.
 void recordDigest(String environment, String name, String digest) {
