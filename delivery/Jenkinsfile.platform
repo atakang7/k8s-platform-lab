@@ -3,7 +3,7 @@
 @Library('lab-delivery') _
 
 pipeline {
-    agent { label 'lab-ci-runner' }
+    agent { label 'lab-ci-light' }
     options {
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '20'))

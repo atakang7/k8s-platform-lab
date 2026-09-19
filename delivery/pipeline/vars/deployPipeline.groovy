@@ -29,7 +29,7 @@ def call() {
                     // cluster's releases must also carry the delivery signature and
                     // pass a server-side dry-run with its environment's values.
                     stage('Verify') {
-                        agent { label 'lab-ci-runner' }
+                        agent { label 'lab-ci-light' }
                         options { timeout(time: 15, unit: 'MINUTES') }
                         steps {
                             script {

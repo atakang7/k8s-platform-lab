@@ -54,11 +54,11 @@ Details: [edge/README.md](edge/README.md).
 ```text
 Jenkins controller · node-3 · 0 executors
                   │ Kubernetes plugin
-         ┌────────┴────────┐
-         ▼                 ▼
-lab-ci-runner      lab-cd-runner
-node-3               node-3
-ci-tools + BuildKit  deployment tools
+         ┌────────────────┼────────────────┐
+         ▼                ▼                ▼
+lab-ci-runner     lab-ci-light      lab-cd-runner
+node-3, 1 Pod       any worker, 2 Pods  node-3
+image builds        lint, verification  deployment tools
 ```
 
 JCasC owns controller configuration, credentials, Kubernetes cloud configuration, both agent templates, the `lab-delivery` library, and the delivery jobs (see [`delivery/`](../delivery/README.md)).

@@ -37,7 +37,7 @@ Endpoint: `https://jenkins.lab.test`.
 
 - zero controller executors;
 - Kubernetes cloud configuration;
-- exclusive `lab-ci-runner` and `lab-cd-runner` templates;
+- exclusive `lab-ci-runner` (image builds), `lab-ci-light` (lint and deploy verification, so they never queue behind a build) and `lab-cd-runner` templates;
 - GitHub and Docker Hub credentials (no cluster credential: CD runs as each environment's own ServiceAccount);
 - the `lab-delivery` shared library (`delivery/pipeline`);
 - a GitHub multibranch job per service and for `platform` (native commit statuses), plus the `deploy` job.
