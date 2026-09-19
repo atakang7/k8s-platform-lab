@@ -10,15 +10,15 @@
       - { name: kubectl, version: "{{ kubernetes_package_version }}" }
       - { name: kubelet, version: "{{ kubernetes_package_version }}" }
   tasks:
+    # One command and one assert: asserting over a registered loop's results
+    # intermittently saw an item without stdout on this Ansible release.
     - name: Read foundation service states
       ansible.builtin.command:
         argv:
           - systemctl
           - is-active
-          - "{{ item }}"
-      loop:
-        - containerd
-        - kubelet
+          - containerd
+          - kubelet
       register: foundation_service_states
       changed_when: false
       failed_when: false
@@ -26,12 +26,9 @@
     - name: Verify foundation services are active
       ansible.builtin.assert:
         that:
-          - item.stdout == "active"
-        success_msg: "PASS | {{ item.item }} is healthy on {{ inventory_hostname }}"
-        fail_msg: "FAIL | {{ item.item }} is not active on {{ inventory_hostname }}"
-      loop: "{{ foundation_service_states.results }}"
-      loop_control:
-        label: "{{ item.item }}"
+          - foundation_service_states.stdout_lines | default([]) == ["active", "active"]
+        success_msg: "PASS | containerd and kubelet are healthy on {{ inventory_hostname }}"
+        fail_msg: "FAIL | containerd, kubelet on {{ inventory_hostname }}: {{ foundation_service_states.stdout_lines | default(foundation_service_states) }}"
 
     - name: Read pinned package versions
       ansible.builtin.command:
