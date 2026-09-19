@@ -114,6 +114,21 @@ for secret in jenkins-admin github-creds dockerhub-creds jenkins-kubeconfig; do
 done
 [[ "$(kubectl auth can-i create deployments -n default --as=system:serviceaccount:jenkins:jenkins-agent)" == yes ]]
 [[ "$(kubectl auth can-i create deployments -n kube-system --as=system:serviceaccount:jenkins:jenkins-agent)" == no ]]
+# Prove the CI identity is dry-run only: a real write must be denied by the admission policy.
+ci_write_denied=false
+for _ in {1..15}; do
+  if output="$(kubectl -n default create configmap jenkins-ci-policy-probe --from-literal=probe=1 \
+      --as=system:serviceaccount:jenkins:jenkins-ci 2>&1)"; then
+    kubectl -n default delete configmap jenkins-ci-policy-probe >/dev/null
+  elif [[ "${output}" == *jenkins-ci-dry-run-only* ]]; then
+    ci_write_denied=true
+    break
+  fi
+  sleep 2
+done
+[[ "${ci_write_denied}" == true ]] || { echo "FAIL | jenkins-ci can write to the cluster: ${output}" >&2; exit 1; }
+kubectl -n default create configmap jenkins-ci-policy-probe --from-literal=probe=1 \
+  --as=system:serviceaccount:jenkins:jenkins-ci --dry-run=server >/dev/null
 for secret in jenkins-admin github-creds dockerhub-creds jenkins-kubeconfig; do
   [[ "$(kubectl -n jenkins get secret "${secret}" -o json | jq '.data | length')" -gt 0 ]]
 done

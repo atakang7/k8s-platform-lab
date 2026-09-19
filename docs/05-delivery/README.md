@@ -91,6 +91,8 @@ The independent validation checks run in parallel:
 
 Server-side dry-run is intentional. It sends objects through the real API server and admission chain without leaving test workloads behind.
 
+Kubernetes authorizes a dry-run exactly like a real write, so the CI identity (`jenkins-ci`) holds write verbs. The `jenkins-ci-dry-run-only` ValidatingAdmissionPolicy rejects any request from it that is not a dry-run; only CD's `jenkins-agent` identity can change the cluster.
+
 A failed check stops artifact publication.
 
 ## Build strategy

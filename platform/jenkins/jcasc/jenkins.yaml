@@ -34,7 +34,8 @@ jenkins:
                   component: jenkins-agent
                   workload: lab-ci-runner
               spec:
-                serviceAccountName: jenkins-agent
+                # Dry-run only: see jenkins-ci-dry-run-only in platform/jenkins/resources/agent-rbac.yaml.
+                serviceAccountName: jenkins-ci
                 restartPolicy: Never
                 nodeSelector:
                   kubernetes.io/hostname: node-3

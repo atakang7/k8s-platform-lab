@@ -26,9 +26,9 @@ https://jenkins.lab.test
 │ BuildKit         │  │ deployment tools │
 └────────┬─────────┘  └────────┬─────────┘
          │                     │
-         └──────────┬──────────┘
-                    ▼
-        serviceAccount: jenkins-agent
+         ▼                     ▼
+   SA jenkins-ci         SA jenkins-agent
+   dry-run only          deploys to default
 ```
 
 The controller never builds or deploys application code itself. `numExecutors: 0` keeps controller CPU, memory, and filesystem state out of the workload execution path.
@@ -89,7 +89,7 @@ CI and CD use separate labels and templates even though both are pinned to `node
 | `lab-ci-runner` | tests, lint, server dry-run, BuildKit, Trivy, publication | GitHub/Docker Hub bindings; Maven, Trivy, BuildKit caches |
 | `lab-cd-runner` | exact-commit checkout and Kubernetes deployment | GitHub binding; kubeconfig bound only during deployment |
 
-The split separates scheduling, tooling, caches, and pipeline intent. It is **not** an RBAC isolation boundary in the current reference configuration: both Pod templates use the same `jenkins-agent` ServiceAccount. CI uses that in-cluster identity for server-side Kubernetes dry-runs; CD additionally binds the explicit kubeconfig credential for deployment.
+The split is also a Kubernetes identity boundary. `lab-ci-runner` runs as the `jenkins-ci` ServiceAccount: it holds the RBAC verbs server-side dry-run needs, and the `jenkins-ci-dry-run-only` ValidatingAdmissionPolicy denies every request from it that is not a dry-run. CI can validate production objects but cannot change them. `lab-cd-runner` runs as `jenkins-agent` and deploys through the explicit kubeconfig credential. `make jenkins-up` proves the policy by attempting a real write as `jenkins-ci` and failing unless it is denied.
 
 ## CI warm state
 

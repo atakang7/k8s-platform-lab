@@ -65,7 +65,7 @@ ci-tools + BuildKit  deployment tools
 
 JCasC owns controller configuration, credentials, Kubernetes cloud configuration, both agent templates, and the `lab-build` / `lab-deploy` jobs.
 
-The CI runner keeps Maven, Trivy, and BuildKit caches under `/var/lib/lab-ci/` on `node-3`. Both agent templates currently use the same `jenkins-agent` ServiceAccount; the CI/CD split is execution/tooling separation, not a separate Kubernetes RBAC boundary.
+The CI runner keeps Maven, Trivy, and BuildKit caches under `/var/lib/lab-ci/` on `node-3`. CI runs as the dry-run-only `jenkins-ci` ServiceAccount and CD as `jenkins-agent`; the split is a Kubernetes identity boundary enforced by the `jenkins-ci-dry-run-only` ValidatingAdmissionPolicy.
 
 ```bash
 make jenkins-up

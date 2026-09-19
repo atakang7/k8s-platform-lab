@@ -36,3 +36,54 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: jenkins-app-deployer
+---
+# lab-ci-runner identity. CI validates manifests with server-side dry-run,
+# which Kubernetes authorizes exactly like a real write, so it is bound to the
+# same Role as CD. jenkins-ci-dry-run-only below rejects every request from it
+# that is not a dry-run, so CI can validate production objects but never change them.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-ci
+  namespace: jenkins
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-ci-dry-run
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-ci
+    namespace: jenkins
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: jenkins-app-deployer
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: jenkins-ci-dry-run-only
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["*/*"]
+  matchConditions:
+    - name: jenkins-ci-requests-only
+      expression: request.userInfo.username == 'system:serviceaccount:jenkins:jenkins-ci'
+  validations:
+    - expression: request.dryRun == true
+      message: jenkins-ci may only send dry-run requests
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: jenkins-ci-dry-run-only
+spec:
+  policyName: jenkins-ci-dry-run-only
+  validationActions: [Deny]

@@ -51,7 +51,7 @@ CI queues CD asynchronously after publication. Deployment duration does not keep
 
 `Jenkinsfile.build` runs on `lab-ci-runner`.
 
-Kubernetes manifests use `--dry-run=server`, so checks pass through the live API server and active admission chain without persisting test workloads.
+Kubernetes manifests use `--dry-run=server`, so checks pass through the live API server and active admission chain without persisting test workloads. CI runs as the `jenkins-ci` ServiceAccount, which an admission policy restricts to dry-run requests: CI can validate production objects but cannot change them.
 
 Persistent node-local caches on `node-3`:
 
