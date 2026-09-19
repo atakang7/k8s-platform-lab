@@ -72,7 +72,7 @@ A change under `delivery/` (pipeline, deploy script, agent image) runs the app f
 
 `Jenkinsfile.build` runs on `lab-ci-runner`.
 
-Unit tests run inside the image build (`app/Dockerfile`, build stage), with the same JDK 11 and Maven wrapper that compile the shipped jar. A failing test fails the BuildKit solve, so no image is produced or published. There is no separate test step on the CI agent's own JDK.
+Unit tests run inside the image build (`app/Dockerfile`, build stage), with the same JDK 11 and Maven wrapper that compile the shipped jar. A failing test fails the BuildKit solve, so no image is produced or published. The CI agent image carries no JDK or Maven.
 
 Kubernetes manifests use `--dry-run=server`, so checks pass through the live API server and active admission chain without persisting test workloads. CI runs as the `jenkins-ci` ServiceAccount, which an admission policy restricts to dry-run requests: CI can validate production objects but cannot change them.
 

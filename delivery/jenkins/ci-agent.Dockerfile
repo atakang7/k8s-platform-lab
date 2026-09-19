@@ -1,7 +1,9 @@
 # Build only through delivery/jenkins/build-ci-agent.sh: it refuses uncommitted
 # changes and pins the resulting digest in JCasC, so the running image always
 # corresponds to this file in Git.
-FROM maven:3.9.4-eclipse-temurin-17@sha256:e3f36fd6d0949541de3b6a32bb3de30331b2bdb6bac8ba365c4f8a5f0fcd3e59
+# Plain Ubuntu: Maven and a JDK are not needed; the application builds and
+# tests inside its own Dockerfile.
+FROM ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 
 # Checksums are pinned here, not fetched beside the binary, so a replaced
 # upstream artifact fails the build instead of entering the image.
@@ -18,7 +20,7 @@ USER root
 
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl git jq python3 skopeo \
+      ca-certificates curl jq skopeo \
  && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSLo /usr/local/bin/kubectl \
@@ -39,8 +41,7 @@ RUN curl -fsSLo /usr/local/bin/kubectl \
  && tar -xzf /tmp/helm.tar.gz -C /usr/local/bin --strip-components=1 linux-amd64/helm \
  && rm /tmp/helm.tar.gz
 
-RUN mvn --version \
- && kubectl version --client=true \
+RUN kubectl version --client=true \
  && hadolint --version \
  && trivy --version \
  && skopeo --version \
