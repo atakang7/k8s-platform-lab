@@ -31,7 +31,7 @@ configuration
     └─ final end-to-end validation
 ```
 
-A smoke test answers "is the normal path healthy now?". A deeper validation may deliberately create and remove temporary resources to exercise integration boundaries.
+A smoke test answers "is the normal path healthy now?". A deeper validation may deliberately create and remove temporary resources to exercise integration boundaries. Those resources are cleaned before and after the check so an interrupted previous run cannot satisfy a later validation.
 
 ## Expected operating order
 
@@ -58,4 +58,6 @@ For release verification, confirm at minimum:
 
 ## Failure handling
 
-Validation scripts should fail on the first broken invariant with enough context to identify the subsystem. Do not make a validator silently repair the system. Repair belongs in the subsystem's reconciliation path, then the validator is rerun.
+Validation scripts should fail on the first broken invariant with enough context to identify the subsystem. They may clean up only resources that the validation itself owns; they must not repair platform state. Repair belongs in the owning subsystem's reconciliation path, then the validator is rerun.
+
+Keep validation data flow explicit. Values that connect checks—such as an end-to-end request ID—are created by the orchestrator and passed as arguments instead of being smuggled through stdout or mutable ambient state.

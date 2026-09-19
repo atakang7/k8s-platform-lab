@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly application_directory="${repository_root}/app"
-readonly query_value=container-validation
-readonly expected_response="QueryStringValue: ${query_value}"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly ROOT
+readonly APPLICATION_DIRECTORY="${ROOT}/app"
+readonly QUERY_VALUE=container-validation
+readonly EXPECTED_RESPONSE="QueryStringValue: ${QUERY_VALUE}"
 
-container_name=''
-response_file=''
+CONTAINER_NAME=''
+RESPONSE_FILE=''
 
 pass() {
   printf 'PASS | %s\n' "$1"
@@ -19,15 +20,20 @@ fail() {
 }
 
 require_command() {
-  command -v "$1" >/dev/null 2>&1 ||
-    fail "required command is unavailable: $1"
+  local command_name="$1"
+
+  command -v "${command_name}" >/dev/null 2>&1 ||
+    fail "required command is unavailable: ${command_name}"
 }
 
 cleanup() {
-  if [[ -n "${container_name}" ]]; then
-    docker rm --force "${container_name}" >/dev/null 2>&1 || true
+  if [[ -n "${CONTAINER_NAME}" ]]; then
+    docker rm --force "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   fi
-  [[ -z "${response_file}" ]] || rm -f -- "${response_file}"
+
+  if [[ -n "${RESPONSE_FILE}" ]]; then
+    rm -f -- "${RESPONSE_FILE}"
+  fi
 }
 
 resolve_git_sha() {
@@ -36,7 +42,7 @@ resolve_git_sha() {
     return
   fi
 
-  git -C "${repository_root}" rev-parse --verify HEAD 2>/dev/null ||
+  git -C "${ROOT}" rev-parse --verify HEAD 2>/dev/null ||
     fail 'no Git commit found; commit the project or set STAGE2_GIT_SHA'
 }
 
@@ -46,55 +52,80 @@ resolve_source_repository() {
     return
   fi
 
-  git -C "${repository_root}" remote get-url origin 2>/dev/null ||
+  git -C "${ROOT}" remote get-url origin 2>/dev/null ||
     fail 'no Git origin found; set STAGE2_SOURCE_REPOSITORY'
 }
 
 validate_inputs() {
-  local git_sha="$1" source_repository="$2"
+  local git_sha="$1"
+  local source_repository="$2"
+  local push_mode="${STAGE2_PUSH:-false}"
 
   [[ "${git_sha}" =~ ^[0-9a-f]{7,40}$ ]] ||
-    fail 'Git SHA must contain 7 to 40 hexadecimal characters'
+    fail 'Git SHA must contain 7 to 40 lowercase hexadecimal characters'
 
   [[ "${source_repository}" != 'https://github.com/SampleJavaApp/app' ]] ||
     fail 'OCI source must identify the submission repository'
 
   [[ "${source_repository}" =~ ^(https://|ssh://|git@|file://).+ ]] ||
     fail 'submission repository must be an HTTPS, SSH, or file Git URL'
+
+  case "${push_mode}" in
+    true|false)
+      ;;
+    *)
+      fail 'STAGE2_PUSH must be true or false'
+      ;;
+  esac
+
+  if [[ "${push_mode}" == true && -z "${DOCKERHUB_REPOSITORY:-}" ]]; then
+    fail 'DOCKERHUB_REPOSITORY is required when STAGE2_PUSH=true'
+  fi
 }
 
 build_images() {
-  local git_sha="$1" source_repository="$2" image_reference="$3"
+  local git_sha="$1"
+  local source_repository="$2"
+  local image_reference="$3"
   local build_reference="container-validation-build:${git_sha}"
 
+  printf 'WAIT | building application test stage\n'
   docker build \
     --target build \
     --build-arg "SOURCE_REVISION=${git_sha}" \
     --tag "${build_reference}" \
-    "${application_directory}"
+    "${APPLICATION_DIRECTORY}"
   pass 'application build stage completed'
 
+  printf 'WAIT | building runtime image\n'
   docker build \
     --build-arg "SOURCE_REPOSITORY=${source_repository}" \
     --build-arg "SOURCE_REVISION=${git_sha}" \
     --tag "${image_reference}" \
-    "${application_directory}"
+    "${APPLICATION_DIRECTORY}"
   pass "runtime image built as ${image_reference}"
 }
 
 validate_oci_labels() {
-  local image_reference="$1" git_sha="$2" source_repository="$3"
-  local revision_label source_label
+  local image_reference="$1"
+  local git_sha="$2"
+  local source_repository="$3"
+  local revision_label
+  local source_label
 
-  revision_label="$(docker image inspect \
-    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
-    "${image_reference}")"
+  revision_label="$(
+    docker image inspect \
+      --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+      "${image_reference}"
+  )"
   [[ "${revision_label}" == "${git_sha}" ]] ||
     fail 'OCI revision label does not match the supplied Git SHA'
 
-  source_label="$(docker image inspect \
-    --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' \
-    "${image_reference}")"
+  source_label="$(
+    docker image inspect \
+      --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' \
+      "${image_reference}"
+  )"
   [[ "${source_label}" == "${source_repository}" ]] ||
     fail 'OCI source label does not match the submission repository'
 
@@ -102,17 +133,23 @@ validate_oci_labels() {
 }
 
 start_application() {
-  local image_reference="$1" git_sha="$2"
+  local image_reference="$1"
+  local git_sha="$2"
   local host_port
 
-  container_name="container-validation-${git_sha:0:12}-$$"
+  CONTAINER_NAME="container-validation-${git_sha:0:12}-$$"
+
   docker run \
     --detach \
-    --name "${container_name}" \
+    --name "${CONTAINER_NAME}" \
     --publish 127.0.0.1::9001 \
     "${image_reference}" >/dev/null
 
-  host_port="$(docker port "${container_name}" 9001/tcp | awk -F: 'NR == 1 { print $NF }')"
+  host_port="$(
+    docker port "${CONTAINER_NAME}" 9001/tcp |
+      awk -F: 'NR == 1 { print $NF }'
+  )"
+
   [[ "${host_port}" =~ ^[0-9]+$ ]] ||
     fail 'container did not publish application port 9001'
 
@@ -121,22 +158,27 @@ start_application() {
 
 wait_for_application() {
   local host_port="$1"
+  local attempt
   local application_url="http://127.0.0.1:${host_port}/api/foos"
 
-  for _ in {1..60}; do
-    if curl --silent --show-error --fail \
+  for attempt in {1..60}; do
+    if curl \
+      --silent \
+      --show-error \
+      --fail \
       --get \
-      --data-urlencode "val=${query_value}" \
-      --output "${response_file}" \
+      --data-urlencode "val=${QUERY_VALUE}" \
+      --output "${RESPONSE_FILE}" \
       "${application_url}" 2>/dev/null; then
-      [[ "$(<"${response_file}")" == "${expected_response}" ]] ||
+      [[ "$(<"${RESPONSE_FILE}")" == "${EXPECTED_RESPONSE}" ]] ||
         fail 'HTTP response did not contain the supplied query parameter'
+
       pass 'container is ready and echoes the query parameter'
       return
     fi
 
-    if [[ "$(docker inspect --format '{{.State.Running}}' "${container_name}")" != true ]]; then
-      docker logs "${container_name}" >&2
+    if [[ "$(docker inspect --format '{{.State.Running}}' "${CONTAINER_NAME}")" != true ]]; then
+      docker logs "${CONTAINER_NAME}" >&2
       fail 'container exited before the application became ready'
     fi
 
@@ -147,9 +189,11 @@ wait_for_application() {
 }
 
 validate_application_log() {
-  for _ in {1..10}; do
-    if docker exec "${container_name}" \
-      grep --fixed-strings --quiet "${expected_response}" /var/log/app/app.log; then
+  local attempt
+
+  for attempt in {1..10}; do
+    if docker exec "${CONTAINER_NAME}" \
+      grep --fixed-strings --quiet "${EXPECTED_RESPONSE}" /var/log/app/app.log; then
       pass 'application file log contains the request'
       return
     fi
@@ -162,26 +206,29 @@ validate_application_log() {
 validate_metrics() {
   local host_port="$1"
 
-  curl --silent --show-error --fail \
-    --output "${response_file}" \
+  curl \
+    --silent \
+    --show-error \
+    --fail \
+    --output "${RESPONSE_FILE}" \
     "http://127.0.0.1:${host_port}/actuator/prometheus" ||
     fail 'Prometheus endpoint is unavailable'
 
-  grep --fixed-strings --quiet 'http_server_requests_seconds_count' "${response_file}" ||
+  grep --fixed-strings --quiet \
+    'http_server_requests_seconds_count' "${RESPONSE_FILE}" ||
     fail 'Prometheus endpoint does not expose HTTP request metrics'
 
   pass 'Prometheus endpoint exposes HTTP request metrics'
 }
 
 validate_runtime_image() {
-  local image_reference="$1"
   local runtime_uid
 
-  runtime_uid="$(docker exec "${container_name}" sh -c 'id -u')"
+  runtime_uid="$(docker exec "${CONTAINER_NAME}" id -u)"
   [[ "${runtime_uid}" =~ ^[0-9]+$ && "${runtime_uid}" != 0 ]] ||
     fail 'container process is running as root'
 
-  docker exec "${container_name}" sh -c '
+  docker exec "${CONTAINER_NAME}" sh -c '
     ! command -v mvn >/dev/null 2>&1 &&
     ! command -v javac >/dev/null 2>&1 &&
     ! test -e /app/src &&
@@ -189,26 +236,27 @@ validate_runtime_image() {
     ! test -e /app/mvnw
   ' || fail 'runtime image contains build tooling or source artifacts'
 
-  docker image inspect "${image_reference}" >/dev/null
-  pass "runtime image is non-root and contains no build source/tooling"
+  pass 'runtime image is non-root and contains no build source/tooling'
 }
 
 push_if_requested() {
-  local image_reference="$1" image_repository="$2"
+  local image_reference="$1"
+  local image_repository="$2"
+  local registry_details
+  local registry_digest
 
-  if [[ "${STAGE2_PUSH:-false}" != true ]]; then
+  if [[ "${STAGE2_PUSH:-false}" == false ]]; then
     printf 'SKIP | registry push not requested; set STAGE2_PUSH=true and DOCKERHUB_REPOSITORY\n'
     return
   fi
 
-  [[ -n "${DOCKERHUB_REPOSITORY:-}" ]] ||
-    fail 'DOCKERHUB_REPOSITORY is required when STAGE2_PUSH=true'
-
   docker push "${image_reference}"
 
-  local registry_details registry_digest
   registry_details="$(docker buildx imagetools inspect "${image_reference}")"
-  registry_digest="$(awk '/^Digest:/ { print $2; exit }' <<<"${registry_details}")"
+  registry_digest="$(
+    awk '/^Digest:/ { print $2; exit }' <<< "${registry_details}"
+  )"
+
   [[ "${registry_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] ||
     fail 'registry did not return an immutable SHA256 digest'
 
@@ -216,15 +264,23 @@ push_if_requested() {
 }
 
 main() {
-  local git_sha source_repository image_repository image_reference host_port
+  local command_name
+  local git_sha
+  local source_repository
+  local image_repository
+  local image_reference
+  local host_port
+
+  [[ "$#" -eq 0 ]] || fail 'container validation does not accept arguments'
 
   for command_name in curl docker git; do
     require_command "${command_name}"
   done
+
   docker info >/dev/null 2>&1 ||
     fail 'Docker daemon is unavailable'
 
-  response_file="$(mktemp)"
+  RESPONSE_FILE="$(mktemp)"
   trap cleanup EXIT
 
   git_sha="$(resolve_git_sha)"
@@ -237,11 +293,12 @@ main() {
 
   build_images "${git_sha}" "${source_repository}" "${image_reference}"
   validate_oci_labels "${image_reference}" "${git_sha}" "${source_repository}"
+
   host_port="$(start_application "${image_reference}" "${git_sha}")"
   wait_for_application "${host_port}"
   validate_application_log
   validate_metrics "${host_port}"
-  validate_runtime_image "${image_reference}"
+  validate_runtime_image
   push_if_requested "${image_reference}" "${image_repository}"
 
   pass 'application container validation complete'
