@@ -86,8 +86,8 @@ node-exporter / kube-state-metrics / targets
            Grafana  AlertManager
 
 container logs ──► platform Fluent Bit ──┐
-app.log ─► Pod sidecar Fluent Bit├──► Elasticsearch ──► Grafana
-                                         ┘
+                                         ├──► Elasticsearch ──► Grafana
+app.log ────────► Pod sidecar Fluent Bit ─┘
 ```
 
 Prometheus and Elasticsearch run on `node-2`. Grafana, AlertManager, kube-state-metrics, and Prometheus Operator run on `node-3`. Platform Fluent Bit and node-exporter run on every node.

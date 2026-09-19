@@ -170,3 +170,4 @@ Each component documents itself next to its code:
 | [app](app/README.md) | sample application: build, runtime, chart values |
 | [policies](policies/README.md) | admission policies and their lifecycle |
 | [validation](validation/README.md) | cluster, edge, container and end-to-end checks |
+| [state](state/) | unwired dev/stage/prod digest placeholders reserved for a later state handoff |
