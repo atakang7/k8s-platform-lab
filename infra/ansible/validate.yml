@@ -54,6 +54,18 @@
       loop_control:
         label: "{{ item.item.name }}"
 
+    - name: Read containerd configuration
+      ansible.builtin.slurp:
+        src: /etc/containerd/config.toml
+      register: containerd_configuration
+
+    - name: Verify the immutable sandbox image pin
+      ansible.builtin.assert:
+        that:
+          - ('sandbox_image = "' + pause_image + '"') in (containerd_configuration.content | b64decode)
+        success_msg: "PASS | containerd sandbox image matches the repository digest on {{ inventory_hostname }}"
+        fail_msg: "FAIL | containerd sandbox image differs from the repository pin on {{ inventory_hostname }}"
+
     - name: Verify containerd CRI responds
       ansible.builtin.shell: |
         set -o pipefail

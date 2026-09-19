@@ -27,7 +27,7 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
         - name: server
-          image: busybox:1.36.1
+          image: "{{ validation_busybox_image }}"
           command: ["sh", "-c"]
           args:
             - mkdir -p /tmp/www; echo healthy > /tmp/www/health; httpd -f -p 8080 -h /tmp/www
@@ -73,7 +73,7 @@ metadata:
 spec:
   containers:
     - name: writer
-      image: busybox:1.36.1
+      image: "{{ validation_busybox_image }}"
       command: ["sh", "-c", "echo storage-ready > /data/result; sleep 3600"]
       resources:
         requests:

@@ -4,6 +4,11 @@ kubernetes_package_version: "1.34.1-1.1"
 kubernetes_repository_minor: "1.34"
 containerd_package_version: "1.7.24-0ubuntu1~20.04.2"
 
+# Cluster/runtime utility images are immutable for reproducible bootstrap and
+# validation. Keep human-readable versions in comments when updating digests.
+pause_image: "registry.k8s.io/pause@sha256:278fb9dbcca9518083ad1e11276933a2e96f23de604a3a08cc3c80002767d24c"  # 3.10.1
+validation_busybox_image: "busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"  # 1.36.1
+
 pod_cidr: "10.60.0.0/16"
 service_cidr: "10.70.0.0/16"
 vm_cidr: "10.50.0.0/24"
