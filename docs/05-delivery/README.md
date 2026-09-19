@@ -168,9 +168,9 @@ Deployment duration therefore does not keep the build agent occupied.
 
 ## Exact-source deployment
 
-CD validates both inputs before doing work:
+CD validates both inputs:
 
-- `IMAGE_REF` must be `...@sha256:<64 hex>`;
+- `IMAGE_REF` must be `docker.io/atakangul/sample-java-app@sha256:<64 hex>` (checked by the Ansible role; other repositories are rejected);
 - `COMMIT_SHA` must be a full 40-character Git SHA.
 
 It then checks out that commit in detached HEAD state. Deployment manifests and Ansible logic therefore come from the same revision that produced the artifact.

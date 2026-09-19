@@ -3,5 +3,8 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  vars:
+    # Must match IMAGE_REPOSITORY in delivery/Jenkinsfile.build.
+    image_repository: docker.io/atakangul/sample-java-app
   roles:
     - application

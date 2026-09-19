@@ -18,6 +18,7 @@ pipeline {
         timeout(time: 30, unit: 'MINUTES')
     }
     environment {
+        // CD accepts only this repository: image_repository in delivery/ansible/deploy.yml.
         IMAGE_REPOSITORY = 'docker.io/atakangul/sample-java-app'
         CI_COMPLETE = 'false'
     }

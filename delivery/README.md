@@ -68,7 +68,7 @@ Trivy is report-only by default because `TRIVY_EXIT_CODE` defaults to `0`. The C
 CD rejects mutable image references and abbreviated source revisions. It requires:
 
 ```text
-IMAGE_REF  = repository@sha256:<64 hex>
+IMAGE_REF  = docker.io/atakangul/sample-java-app@sha256:<64 hex>
 COMMIT_SHA = <40 hex Git SHA>
 ```
 

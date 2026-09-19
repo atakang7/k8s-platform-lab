@@ -2,8 +2,8 @@
 - name: Validate immutable image reference
   ansible.builtin.assert:
     that:
-      - image_ref is match('^.+@sha256:[0-9a-f]{64}$')
-    fail_msg: image_ref must be an immutable sha256 digest reference
+      - image_ref is match('^' ~ (image_repository | regex_escape) ~ '@sha256:[0-9a-f]{64}$')
+    fail_msg: image_ref must be {{ image_repository }}@sha256:<64 hex>
 
 - name: Apply application ConfigMap
   ansible.builtin.command:
@@ -32,7 +32,7 @@
 - name: Render Deployment with immutable image and apply it
   ansible.builtin.shell: |
     set -o pipefail
-    kubectl set image -f app/k8s/deployment.yaml app='{{ image_ref }}' --local -o yaml \
+    kubectl set image -f app/k8s/deployment.yaml app={{ image_ref | quote }} --local -o yaml \
       | kubectl apply -f -
   args:
     executable: /bin/bash

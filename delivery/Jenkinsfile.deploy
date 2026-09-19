@@ -25,9 +25,7 @@ pipeline {
             steps {
                 script {
                     timed('Deploy.ValidateInput') {
-                        if (!(params.IMAGE_REF ==~ /^.+@sha256:[0-9a-f]{64}$/)) {
-                            error('IMAGE_REF must be an immutable sha256 digest reference')
-                        }
+                        // IMAGE_REF is validated by the Ansible role, which pins the repository.
                         if (!(params.COMMIT_SHA ==~ /^[0-9a-f]{40}$/)) {
                             error('COMMIT_SHA must be a full Git SHA')
                         }
