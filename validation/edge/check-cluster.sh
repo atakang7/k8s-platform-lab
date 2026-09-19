@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly root
 source "${root}/infra/edge/config.env"
 
 readonly validation_namespace=stage3-validation
@@ -200,7 +201,7 @@ EOF
 }
 
 check_ingress_dns_and_tls() {
-  local readonly host="stage3.${DNS_ZONE}"
+  local -r host="stage3.${DNS_ZONE}"
 
   for _ in {1..90}; do
     if [[ "$(dig +short "@${EDGE_HOST_IP}" "${host}" A | tail -1)" == "${INGRESS_VIP}" ]] &&

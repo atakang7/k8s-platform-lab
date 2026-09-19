@@ -1,0 +1,4 @@
+environment: prod
+digests:
+  sample-java-app: null
+  resource-requests-webhook: null

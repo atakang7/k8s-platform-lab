@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 source "${root}/infra/edge/lib/operator-state.sh"
 source "${root}/infra/edge/lib/vault-approle.sh"
 
@@ -89,7 +89,7 @@ main() {
   ensure_tls_secret
   reconcile_host_identity
   "${root}/infra/edge/lib/with-kubeconfig.sh" "${root}/infra/edge/lib/bootstrap-vso-auth.sh"
-  echo 'PASS | Vault policies, secrets, audit, and AppRole identities are reconciled'
+  printf 'PASS | Vault policies, secrets, audit, and AppRole identities are reconciled\n'
 }
 
 main "$@"

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly root
 source "${root}/platform/jenkins/versions.env"
 source "${root}/infra/edge/lib/operator-state.sh"
 source "${root}/infra/edge/lib/vault-approle.sh"

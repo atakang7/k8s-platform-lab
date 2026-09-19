@@ -3,7 +3,8 @@ set -Eeuo pipefail
 
 readonly control_plane=node-1
 readonly local_api_port="${LAB_LOCAL_API_PORT:-16443}"
-readonly runtime_directory="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+runtime_directory="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+readonly runtime_directory
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2

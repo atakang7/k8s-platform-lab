@@ -8,7 +8,7 @@ set -eu
 : "${COMMIT_SHA:?COMMIT_SHA is required}"
 : "${SOURCE_URL:?SOURCE_URL is required}"
 
-echo "==> Building ${BUILD_CONTEXT} at ${COMMIT_SHA} into OCI layout app-image/"
+printf 'WAIT | building %s at %s into app-image/\n' "${BUILD_CONTEXT}" "${COMMIT_SHA}"
 
 rm -rf app-image
 buildctl build \
@@ -19,4 +19,4 @@ buildctl build \
   --opt build-arg:SOURCE_REVISION="${COMMIT_SHA}" \
   --output "type=oci,tar=false,dest=app-image"
 
-echo "Image ready: app-image/"
+printf 'PASS | image ready: app-image/\n'

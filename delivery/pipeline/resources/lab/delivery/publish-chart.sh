@@ -14,9 +14,9 @@ source "$(dirname -- "$0")/helm-registry-login.sh"
 name="$(helm show chart "${CHART_DIR}" | sed -n 's/^name: //p')"
 version="$(helm show chart "${CHART_DIR}" | sed -n 's/^version: //p')"
 if helm show chart "${CHART_REF}/${name}" --version "${version}" >/dev/null 2>&1; then
-  echo "PASS | ${name} ${version} is already published"
+  printf 'PASS | %s %s is already published\n' "${name}" "${version}"
   exit 0
 fi
 helm package "${CHART_DIR}" --destination "${work}" >/dev/null
 helm push "${work}/${name}-${version}.tgz" "${CHART_REF}"
-echo "PASS | published ${CHART_REF}/${name}:${version}"
+printf 'PASS | published %s/%s:%s\n' "${CHART_REF}" "${name}" "${version}"

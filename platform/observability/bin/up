@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly root
 source "${root}/platform/observability/versions.env"
 
 phase='startup'
@@ -29,14 +30,14 @@ if [[ "${1:-}" != --cluster ]]; then
   exit
 fi
 
-namespace=observability
+readonly namespace=observability
 # This layout needs room for Prometheus on node-2 and Grafana beside Jenkins on node-3.
 begin_phase 'Validating worker readiness and memory capacity'
 for node in node-2 node-3; do
   kubectl wait --for=condition=Ready "node/${node}" --timeout=5s >/dev/null
   allocatable="$(kubectl get node "${node}" -o jsonpath='{.status.allocatable.memory}')"
   if [[ "${allocatable}" != *Ki ]] || (( ${allocatable%Ki} < 1450000 )); then
-    echo "FAIL | ${node} needs at least 1450000Ki allocatable memory; found ${allocatable}" >&2
+    printf 'FAIL | %s needs at least 1450000Ki allocatable memory; found %s\n' "${node}" "${allocatable}" >&2
     exit 1
   fi
 done
@@ -95,4 +96,4 @@ begin_phase 'Applying the observability ingress'
 kubectl -n "${namespace}" delete ingress observability-elasticsearch --ignore-not-found
 kubectl apply -f "${root}/platform/observability/ingress.yaml"
 complete_phase
-echo 'PASS | observability components reconciled; run make observability-smoke'
+printf 'PASS | observability components reconciled; run make observability-smoke\n'

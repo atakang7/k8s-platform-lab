@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly root
 source "${root}/infra/edge/config.env"
 export VAULT_ADDR=https://127.0.0.1:8200
 
@@ -17,4 +18,4 @@ systemctl is-active --quiet named vault-agent || fail 'BIND or Vault Agent is st
   fail 'nodes or edge workloads are not Ready; inspect kubectl rollout status'
 
 [[ "$(curl --noproxy '*' --silent --show-error --fail --max-time 5 "https://stage3.${DNS_ZONE}")" == stage3-edge-ok ]] || fail 'trusted HTTPS to the retained validation backend failed; run make edge-validate if the backend is absent'
-echo 'PASS | Stage 3 nodes, host services, workloads, DNS, and trusted HTTPS are healthy'
+printf 'PASS | edge host services, workloads, DNS, and trusted HTTPS are healthy\n'

@@ -18,7 +18,7 @@ trap 'rm -rf -- "${work}"' EXIT
 scanned="$(jq -r '.manifests[0].digest' app-image/index.json)"
 tagged="${IMAGE_REPOSITORY}:sha-${COMMIT_SHA:0:12}"
 
-echo "==> Publishing scanned image ${scanned} as ${tagged}"
+printf 'WAIT | publishing scanned image %s as %s\n' "${scanned}" "${tagged}"
 skopeo copy --authfile "${work}/auth.json" --digestfile pushed.digest \
   oci:app-image "docker://${tagged}"
 pushed="$(cat pushed.digest)"
@@ -27,4 +27,4 @@ pushed="$(cat pushed.digest)"
   { echo "FAIL | registry digest ${pushed} differs from scanned ${scanned}" >&2; exit 1; }
 
 printf 'IMAGE_REF=%s@%s\n' "${IMAGE_REPOSITORY}" "${pushed}" > image_ref.env
-echo "Published ${IMAGE_REPOSITORY}@${pushed}"
+printf 'PASS | published %s@%s\n' "${IMAGE_REPOSITORY}" "${pushed}"
