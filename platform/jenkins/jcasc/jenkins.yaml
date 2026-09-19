@@ -52,10 +52,12 @@ jenkins:
                 initContainers:
                   # hostPaths are created root-owned; BuildKit and ci-tools run as uid 1000.
                   # BuildKit keeps its own state private, so only the Trivy cache,
-                  # written earlier as root, is chowned recursively.
+                  # written earlier as root, is chowned recursively - and only while
+                  # its root is not uid 1000's yet: Trivy then writes 0700 directories
+                  # that root with only CHOWN cannot enter, and chown -R would fail.
                   - name: cache-owner
                     image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
-                    command: ["sh", "-c", "chown 1000:1000 /state && chown -R 1000:1000 /trivy"]
+                    command: ["sh", "-c", "chown 1000:1000 /state && { [ \"$(stat -c %u /trivy)\" = 1000 ] || chown -R 1000:1000 /trivy; }"]
                     securityContext:
                       runAsUser: 0
                       runAsGroup: 0
