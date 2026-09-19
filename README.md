@@ -145,14 +145,14 @@ make observability-up
 make observability-smoke
 ```
 
-Jenkins then runs the `platform` job (base charts, platform checks) and the `sample-java-app` job (build, scan, publish, deploy). See [delivery](delivery/README.md).
+`make environment-up` prepares the `dev`, `stage` and `prod` namespaces. Jenkins then runs the `platform` job (base charts, platform checks), the service jobs (build, scan, publish, record the digest in `state/dev.yaml`) and the `deploy` job, which releases each environment to its `state/<name>.yaml`. Promote to `stage` and `prod` by pull request. See [delivery](delivery/README.md).
 
 ### 5. Install admission policies and run the final proof
 
 ```bash
-RESOURCE_REQUESTS_WEBHOOK_IMAGE_DIGEST=sha256:<published-digest> make policies-up
+make policies-up        # webhook digest from state/prod.yaml
 make policies-smoke
-make e2e-validate
+make e2e-validate       # validates the prod release
 ```
 
 See [policies](policies/README.md) and [validation](validation/README.md).
@@ -172,4 +172,4 @@ Each component documents itself next to its code:
 | [app](app/README.md) | sample application: build, runtime, chart values |
 | [policies](policies/README.md) | admission policies and their lifecycle |
 | [validation](validation/README.md) | cluster, edge, container and end-to-end checks |
-| [state](state/) | unwired dev/stage/prod digest placeholders reserved for a later state handoff |
+| [state](state/) | the image digests each environment runs; a commit here is a deploy |

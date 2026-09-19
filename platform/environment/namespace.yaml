@@ -1,4 +1,4 @@
-# The application namespace of this repository's environment (environment.yaml).
+# The application namespace of one delivery environment (environments.yaml).
 # platform/environment/bin/up renders __NAMESPACE__, __ENVIRONMENT__ and __ROLE_ID__.
 apiVersion: v1
 kind: Namespace

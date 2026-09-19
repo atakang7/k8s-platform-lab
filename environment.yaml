@@ -1,7 +1,0 @@
-# Runtime settings for the environment reconciled by this checkout.
-name: dev
-namespace: apps
-# true: every deploy waits for manual approval in Jenkins.
-approval: false
-# OCI registry for platform charts (charts/*).
-chartRegistry: oci://registry-1.docker.io/atakangul

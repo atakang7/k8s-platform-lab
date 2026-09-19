@@ -1,0 +1,16 @@
+# Delivery environments, in promotion order. What runs in each one is its
+# state/<name>.yaml: a commit to that file is a deploy. main's CI records every
+# new digest in the first environment; a digest enters any later environment
+# by pull request, and only after it has been in the previous one.
+chartRegistry: oci://registry-1.docker.io/atakangul
+environments:
+  - name: dev
+    namespace: apps-dev
+  - name: stage
+    namespace: apps-stage
+  - name: prod
+    namespace: apps-prod
+# State entries the deploy job releases, with their chart. Every other state
+# entry is built by delivery and installed by the operator (`make policies-up`).
+releases:
+  sample-java-app: app/chart

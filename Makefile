@@ -1,3 +1,7 @@
+# Environment whose state/<name>.yaml cluster-wide policies are installed from.
+ENVIRONMENT ?= prod
+export ENVIRONMENT
+
 .PHONY: cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up environment-up observability-up observability-smoke policies-up policy-up policies-smoke policy-smoke vault-init vault-unseal e2e-validate destroy
 
 cluster-up:

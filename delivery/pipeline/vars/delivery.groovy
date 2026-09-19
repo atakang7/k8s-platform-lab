@@ -33,29 +33,112 @@ boolean isOciRepository(String value) {
     value?.startsWith('oci://') && isImageRepository(value.substring('oci://'.length()))
 }
 
-// This repository represents one environment. Fail here when its contract is
-// malformed so every consumer sees the same validated configuration.
-Map environment() {
-    Map target = readYaml(file: 'environment.yaml')
+// The delivery environments in promotion order, the chart registry, and the
+// releases the deploy job owns. Fail here when the contract is malformed so
+// every consumer sees the same validated configuration.
+Map environments() {
+    Map config = readYaml(file: 'environments.yaml')
+    List targets = config?.environments
 
-    if (!isDnsLabel(target?.name as String)) {
-        error('environment.yaml: name must be a DNS label of at most 63 characters')
+    if (!(targets instanceof List) || targets.isEmpty()) {
+        error('environments.yaml: environments must be a non-empty list')
     }
-    if (!isDnsLabel(target?.namespace as String)) {
-        error('environment.yaml: namespace must be a DNS label of at most 63 characters')
+    for (Map target in targets) {
+        if (!isDnsLabel(target?.name as String)) {
+            error('environments.yaml: every environment name must be a DNS label of at most 63 characters')
+        }
+        if (!isDnsLabel(target?.namespace as String)) {
+            error("environments.yaml: ${target.name} namespace must be a DNS label of at most 63 characters")
+        }
     }
-    if (!(target?.approval instanceof Boolean)) {
-        error('environment.yaml: approval must be true or false')
+    if (targets*.name.unique(false).size() != targets.size()) {
+        error('environments.yaml: environment names must be unique')
     }
-    if (!isOciRepository(target?.chartRegistry as String)) {
-        error('environment.yaml: chartRegistry must use an explicit registry host, e.g. oci://registry.example.com/team')
+    if (!isOciRepository(config?.chartRegistry as String)) {
+        error('environments.yaml: chartRegistry must use an explicit registry host, e.g. oci://registry.example.com/team')
+    }
+    if (!(config?.releases instanceof Map)) {
+        error('environments.yaml: releases must map state entries to chart paths')
     }
 
-    target
+    config
+}
+
+// The digests desired in one environment, by state entry (state/<name>.yaml).
+// A null digest means the service is not released there yet.
+Map digests(String environment) {
+    String file = "state/${environment}.yaml"
+    Map state = readYaml(file: file)
+
+    if (state?.environment != environment) {
+        error("${file}: environment must be ${environment}")
+    }
+    if (!(state?.digests instanceof Map)) {
+        error("${file}: digests must map state entries to digests")
+    }
+    for (String name in state.digests.keySet()) {
+        String digest = state.digests[name]
+        if (digest != null && !(digest ==~ /^sha256:[0-9a-f]{64}$/)) {
+            error("${file}: ${name} digest must be null or sha256:<64 hex>")
+        }
+    }
+
+    state.digests
+}
+
+// Commits a new digest to main's state/<environment>.yaml: that commit is the
+// deploy. The push is retried because another service may record first.
+void recordDigest(String environment, String name, String digest) {
+    withEnv([
+        "STATE_FILE=state/${environment}.yaml",
+        "STATE_MESSAGE=Deploy ${name} ${digest} to ${environment}"
+    ]) {
+        withCredentials([gitUsernamePassword(credentialsId: 'github-creds')]) {
+            retry(3) {
+                sh 'git fetch --no-tags origin main && git checkout --detach FETCH_HEAD'
+                Map state = readYaml(file: env.STATE_FILE)
+
+                if (!state.digests.containsKey(name)) {
+                    error("${env.STATE_FILE} has no entry for ${name}")
+                }
+                if (state.digests[name] == digest) {
+                    echo("${name} ${digest} is already recorded for ${environment}")
+                    return
+                }
+
+                state.digests[name] = digest
+                writeYaml(file: env.STATE_FILE, data: state, overwrite: true)
+                sh '''
+                  git add "$STATE_FILE"
+                  git -c user.name=lab-delivery -c user.email=delivery@lab.test \
+                    commit --quiet --message "$STATE_MESSAGE"
+                  git push origin HEAD:main
+                '''
+            }
+        }
+    }
+}
+
+// Extracts a chart as it was at the commit an image was built from, so a
+// release always pairs the image with the chart it was tested with. The commit
+// must be in the checked-out history: images from unmerged commits never ship.
+String chartAt(String revision, String chart) {
+    withEnv(["REVISION=${revision}", "CHART=${chart}"]) {
+        sh '''
+          git merge-base --is-ancestor "$REVISION" HEAD || {
+            echo "FAIL | commit $REVISION is not in this branch's history" >&2
+            exit 1
+          }
+          mkdir -p ".release/$REVISION"
+          git archive "$REVISION" "$CHART" | tar -x -C ".release/$REVISION"
+        '''
+    }
+
+    ".release/${revision}/${chart}"
 }
 
 // A service is defined by its chart: the chart name is the Helm release and
-// image.repository is the only image repository that release may consume.
+// the state entry, and image.repository is the only image repository that release may consume.
 Map service(String chart) {
     if (!chart) {
         error('service chart path is required')
@@ -86,6 +169,7 @@ void installScripts() {
         'publish-image.sh',
         'validate-release.sh',
         'deploy.sh',
+        'image-revision.sh',
         'publish-chart.sh',
         'helm-registry-login.sh'
     ]

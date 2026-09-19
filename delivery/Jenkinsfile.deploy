@@ -1,4 +1,4 @@
-// Generic deploy job: one service × one environment × one digest.
+// Deploy job: releases every environment to its state/<name>.yaml.
 @Library('lab-delivery') _
 
 deployPipeline()

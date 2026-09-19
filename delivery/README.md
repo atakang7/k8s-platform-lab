@@ -5,11 +5,11 @@
 | Path | Purpose |
 |---|---|
 | `pipeline/` | Jenkins shared library `lab-delivery`, loaded by JCasC |
-| `pipeline/vars/servicePipeline.groovy` | CI/CD for one service |
-| `pipeline/vars/deployPipeline.groovy` | the `deploy` job: one chart × one digest |
+| `pipeline/vars/servicePipeline.groovy` | CI for one service; records main's digests in `state/dev.yaml` |
+| `pipeline/vars/deployPipeline.groovy` | the `deploy` job: releases every environment to its `state/<name>.yaml` |
 | `pipeline/resources/lab/delivery/` | the step scripts the pipelines run |
 | `Jenkinsfile.deploy` | `deploy` job entry point |
-| `Jenkinsfile.platform` | `platform` job: shellcheck everywhere; `ct lint` on chart pull requests; publishes charts from main; lints policies |
+| `Jenkinsfile.platform` | `platform` job: shellcheck everywhere; `ct lint` on chart pull requests; publishes charts from main |
 | `jenkins/` | CI agent image |
 
 Base charts live in [`charts/`](../charts/), and namespaces and deploy identities in [`platform/environment`](../platform/environment/). Neither is delivery.
@@ -25,34 +25,40 @@ Base charts live in [`charts/`](../charts/), and namespaces and deploy identitie
    ```
 
 3. One entry in the `services` list in [`platform/jenkins/jcasc/jenkins.yaml`](../platform/jenkins/jcasc/jenkins.yaml). It creates a GitHub multibranch job.
+4. One `<chart name>: null` entry under `digests` in every [`state/<environment>.yaml`](../state/).
+5. If Jenkins releases it, one entry under `releases` in [`environments.yaml`](../environments.yaml). Services not listed there (the admission webhook) are built and recorded, and the operator installs them.
 
-The chart name is the release name, and the chart's `image.repository` is the only repository its releases accept.
+The chart name is the release name and the state entry, and the chart's `image.repository` is the only repository its releases accept. Per-environment values go in `values-<environment>.yaml` next to `values.yaml`.
 
 ## Pipeline
 
 ```text
-branch or pull request ─► multibranch job ─► changeset under `path`? ── no ──► done
-                                 │ yes
-                                 ▼
-          Validate   hadolint · helm dry-run through the API server and admission
-          Build      BuildKit, once; unit tests run inside the Dockerfile
-          Scan       Trivy + CycloneDX SBOM of that image
-          ── main only ──
-          Publish    push the scanned image unchanged; digest must match
-          Deploy     approval if environment.yaml says so ─► deploy job
-                                 │
-                                 ▼
-          deploy job: checkout exact commit · image repo must match the chart
-                      image OCI revision must equal that commit
-                      mint 15-minute deployer token
-                      helm upgrade --wait --rollback-on-failure
+branch or pull request ─► service job ─► changeset under `path`? ── no ──► done
+                               │ yes
+                               ▼
+        Validate   hadolint · helm dry-run in dev through the API server and admission
+        Build      BuildKit, once; unit tests run inside the Dockerfile
+        Scan       Trivy + CycloneDX SBOM of that image
+        ── main only ──
+        Publish    push the scanned image unchanged; digest must match
+                   commit the digest to state/dev.yaml on main
+                               │
+                               ▼
+state/ changed ─► deploy job
+        Verify     every digest was in the previous environment first
+                   image revision label is a commit in this branch's history
+                   dry-run of that commit's chart with the environment's values
+        ── main only ──
+        Deploy     dev, stage, prod in order; releases already on their digest are skipped
+                   mint 15-minute deployer token
+                   helm upgrade --wait --rollback-on-failure
 ```
 
-Everything here is native Jenkins:
+Everything here is native Jenkins and Git:
 - **Jobs:** GitHub Branch Source builds every branch and pull request and posts the GitHub commit status.
 - **Only relevant changes run:** declarative `when { changeset }`. A new multibranch job has no changelog, so its first build runs the relevant bootstrap checks instead of silently skipping them.
 - **Only `main` publishes and deploys:** `when { branch 'main' }`.
-- **Release identity:** the full commit SHA plus the image digest. CD inspects the immutable digest and requires its `org.opencontainers.image.revision` label to equal that commit before Helm runs.
+- **Release identity:** the image digest. CD reads the image's `org.opencontainers.image.revision` label and takes the chart from that commit, so a digest always ships with the chart it was tested with.
 
 ## Identities
 
@@ -66,10 +72,20 @@ No cluster credential is stored in Jenkins.
 
 ## Environments
 
-A repository is one environment, described by [`environment.yaml`](../environment.yaml): name, namespace, approval gate and chart registry. This repository is `dev`. A `stage` or `prod` copy changes `environment.yaml` and its app values. Nothing in `delivery/` changes.
+[`environments.yaml`](../environments.yaml) lists the environments in promotion order (`dev` → `stage` → `prod`) with their namespaces, plus the chart registry and the releases Jenkins owns. What runs in an environment is its [`state/<name>.yaml`](../state/): one digest per service, `null` until first released. The Git history of those files is the deploy history.
+
+| To | Do |
+|---|---|
+| deploy to dev | merge a service change; CI commits the new digest to `state/dev.yaml` |
+| promote | pull request copying a digest into `state/stage.yaml` or `state/prod.yaml`; the deploy job verifies it, review approves it |
+| roll back | revert the state commit |
+
+A failed deploy rolls itself back and fails the build. The state file still names the new digest until someone reverts or fixes it.
+
+Jenkins pushes state commits to `main` with `github-creds`. That token needs contents write access, and branch protection must allow the push.
 
 ## Operating rules
 
-- Roll back by re-running the `deploy` job with a previous commit + digest. A failed deploy already rolls itself back.
+- Change what runs only through `state/`. A manual `helm upgrade` is taken back by the next deploy of that release.
 - Change the CI image only through `jenkins/build-ci-agent.sh` ([jenkins/README.md](jenkins/README.md)).
 - Platform and infra are applied by the operator (`make`), never by Jenkins; the `platform` job only checks them.

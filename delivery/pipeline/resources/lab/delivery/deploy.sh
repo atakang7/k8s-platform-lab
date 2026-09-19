@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Releases one immutable service image. The CD Pod itself has no deploy rights:
-# it mints a 15-minute token for the namespace-scoped deployer identity, builds
-# a temporary kubeconfig around that token, and discards it after the release.
+# Releases one immutable service image into one environment, with that
+# environment's values (values-<ENVIRONMENT>.yaml when the chart has one). The
+# chart is the one from the image's own commit, so a release already running
+# the digest is left alone. The CD Pod itself has no deploy rights: it mints a
+# 15-minute token for the namespace-scoped deployer identity, builds a
+# temporary kubeconfig around that token, and discards it after the release.
 set -Eeuo pipefail
 
 SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,9 +23,8 @@ require_inputs() {
   : "${CHART:?CHART is required}"
   : "${RELEASE:?RELEASE is required}"
   : "${NAMESPACE:?NAMESPACE is required}"
-  : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
+  : "${ENVIRONMENT:?ENVIRONMENT is required}"
   : "${IMAGE_DIGEST:?IMAGE_DIGEST is required}"
-  : "${COMMIT_SHA:?COMMIT_SHA is required}"
   : "${CHART_REF:?CHART_REF is required}"
   : "${REGISTRY_USERNAME:?REGISTRY_USERNAME is required}"
   : "${REGISTRY_PASSWORD:?REGISTRY_PASSWORD is required}"
@@ -33,44 +35,6 @@ require_inputs() {
     printf 'FAIL | IMAGE_DIGEST must be sha256:<64 hex>\n' >&2
     exit 1
   }
-  [[ "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
-    printf 'FAIL | COMMIT_SHA must be a full lowercase Git SHA\n' >&2
-    exit 1
-  }
-}
-
-write_image_registry_auth() {
-  local registry_host
-  local encoded_auth
-
-  registry_host="${IMAGE_REPOSITORY%%/*}"
-  encoded_auth="$(printf '%s:%s' "${REGISTRY_USERNAME}" "${REGISTRY_PASSWORD}" |
-    base64 | tr -d '\n')"
-
-  jq -n \
-    --arg host "${registry_host}" \
-    --arg auth "${encoded_auth}" \
-    '{auths: {($host): {auth: $auth}}}' \
-    > "${WORK_DIRECTORY}/image-registry-auth.json"
-}
-
-verify_image_provenance() {
-  local image_reference
-  local image_revision
-
-  image_reference="${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
-  image_revision="$(skopeo inspect \
-    --authfile "${WORK_DIRECTORY}/image-registry-auth.json" \
-    --config "docker://${image_reference}" |
-    jq -r '.config.Labels["org.opencontainers.image.revision"] // ""')"
-
-  [[ "${image_revision}" == "${COMMIT_SHA}" ]] || {
-    printf 'FAIL | image %s declares revision %s, expected %s\n' \
-      "${image_reference}" "${image_revision:-<missing>}" "${COMMIT_SHA}" >&2
-    exit 1
-  }
-
-  printf 'PASS | image provenance matches commit %s\n' "${COMMIT_SHA}"
 }
 
 prepare_chart() {
@@ -119,16 +83,28 @@ KUBECONFIG
   export KUBECONFIG="${WORK_DIRECTORY}/kubeconfig"
 }
 
+release_is_current() {
+  local deployed_digest
+
+  [[ -n "$(helm list --deployed --filter "^${RELEASE}\$" --short)" ]] || return 1
+  deployed_digest="$(helm get values "${RELEASE}" --output json |
+    jq -r '.image.digest // ""')"
+  [[ "${deployed_digest}" == "${IMAGE_DIGEST}" ]]
+}
+
 deploy_release() {
-  # Helm release history is kept in ConfigMaps because deployer intentionally
-  # has no Secrets access.
-  export HELM_DRIVER=configmap
+  local values=()
+
+  if [[ -f "${CHART}/values-${ENVIRONMENT}.yaml" ]]; then
+    values=(--values "${CHART}/values-${ENVIRONMENT}.yaml")
+  fi
 
   # The release owns its objects. --force-conflicts takes ownership back from
   # manual server-side-apply edits; --rollback-on-failure restores the last
   # successful release if readiness fails.
   helm upgrade --install "${RELEASE}" "${CHART}" \
     --namespace "${NAMESPACE}" \
+    "${values[@]}" \
     --set-string image.digest="${IMAGE_DIGEST}" \
     --force-conflicts \
     --rollback-on-failure \
@@ -139,10 +115,19 @@ deploy_release() {
 
 main() {
   require_inputs
-  write_image_registry_auth
-  verify_image_provenance
   prepare_chart
   write_deployer_kubeconfig
+
+  # Helm release history is kept in ConfigMaps because deployer intentionally
+  # has no Secrets access.
+  export HELM_DRIVER=configmap
+
+  if release_is_current; then
+    printf 'PASS | %s already runs %s in %s\n' "${RELEASE}" "${IMAGE_DIGEST}" "${ENVIRONMENT}"
+    return
+  fi
+
+  printf 'WAIT | releasing %s %s to %s\n' "${RELEASE}" "${IMAGE_DIGEST}" "${ENVIRONMENT}"
   deploy_release
 }
 

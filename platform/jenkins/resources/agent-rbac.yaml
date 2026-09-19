@@ -1,6 +1,6 @@
 # lab-cd-runner identity. It holds no deploy rights of its own: each delivery
 # environment lets it mint short-lived tokens for that environment's
-# `deployer` only (delivery/environments/environment.yaml).
+# `deployer` only (environments.yaml).
 apiVersion: v1
 kind: ServiceAccount
 metadata:

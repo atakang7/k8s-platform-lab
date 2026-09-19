@@ -45,7 +45,7 @@ Releases are identified by registry digest. `chart/` inherits the platform base 
 
 ## Deployment contract
 
-`chart/values.yaml` sets four replicas.
+`chart/values.yaml` is the prod release: four replicas at `app.lab.test`. `chart/values-dev.yaml` and `chart/values-stage.yaml` run one replica each at `app-dev` and `app-stage`, because all three environments share the lab cluster.
 
 ```text
 sample-java-app · replicas 4
@@ -111,6 +111,7 @@ The sidecar's tail offset database lives on the Pod's shared volume, so a sideca
 |---|---|
 | `chart/Chart.yaml` | release name, base chart version |
 | `chart/values.yaml` | image repository, replicas, placement, probes, resources, security, ingress, metrics, Fluent Bit sidecar |
+| `chart/values-<environment>.yaml` | dev and stage overrides |
 | `Jenkinsfile` | the call into the platform delivery library |
 
 The image pull Secret is provisioned per environment by [`platform/environment`](../platform/environment/). Do not commit registry credentials.

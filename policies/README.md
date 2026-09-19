@@ -39,13 +39,11 @@ The builder and distroless runtime bases are pinned by digest. The resulting web
 
 ## Deploy
 
-The first install needs the published image digest. Later reconciliations reuse the currently installed digest unless an explicit replacement is supplied.
+Delivery builds, scans and publishes the image (`resource-requests-webhook/Jenkinsfile`) and records its digest in `state/dev.yaml`. It reaches `stage` and `prod` by pull request, like any service ([delivery](../delivery/README.md)). Admission policy is cluster-wide, so the operator installs the digest of one environment, `prod` by default:
 
 ```bash
-RESOURCE_REQUESTS_WEBHOOK_IMAGE_DIGEST=sha256:<published-digest> \
-  make policy-up POLICY=resource-requests-webhook
-
-make policy-up POLICY=resource-requests-webhook
+make policy-up POLICY=resource-requests-webhook                   # state/prod.yaml
+make policy-up POLICY=resource-requests-webhook ENVIRONMENT=dev   # state/dev.yaml
 ```
 
 `make policies-up` reconciles every registered policy. Helm waits for readiness and rolls a failed upgrade back.

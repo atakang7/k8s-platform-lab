@@ -21,8 +21,10 @@ require_command() {
     fail "required command is unavailable: ${command_name}"
 }
 
+# The last environment in promotion order (prod) runs the full-size release
+# this validation expects: four replicas at app.<zone>.
 environment_namespace() {
-  python3 - "${ROOT}/environment.yaml" <<'PY'
+  python3 - "${ROOT}/environments.yaml" <<'PY'
 import sys
 import yaml
 
@@ -30,12 +32,13 @@ path = sys.argv[1]
 with open(path, encoding="utf-8") as source:
     config = yaml.safe_load(source)
 
-if not isinstance(config, dict):
-    raise SystemExit(f"{path}: expected a YAML mapping")
+environments = config.get("environments") if isinstance(config, dict) else None
+if not isinstance(environments, list) or not environments:
+    raise SystemExit(f"{path}: environments must be a non-empty list")
 
-namespace = config.get("namespace")
+namespace = environments[-1].get("namespace")
 if not isinstance(namespace, str) or not namespace:
-    raise SystemExit(f"{path}: namespace must be a non-empty string")
+    raise SystemExit(f"{path}: the last environment needs a namespace")
 
 print(namespace)
 PY

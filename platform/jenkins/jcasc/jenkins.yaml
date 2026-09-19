@@ -187,6 +187,7 @@ jobs:
       // one entry here plus its chart and a two-line Jenkinsfile.
       def services = [
         [name: 'sample-java-app', jenkinsfile: 'app/Jenkinsfile'],
+        [name: 'resource-requests-webhook', jenkinsfile: 'policies/resource-requests-webhook/Jenkinsfile'],
       ]
       def githubOwner = 'atakang7'
       def githubRepository = 'lab'
@@ -221,21 +222,8 @@ jobs:
       services.each { service -> githubMultibranch(service.name, service.jenkinsfile) }
       githubMultibranch('platform', 'delivery/Jenkinsfile.platform')
 
-      pipelineJob('deploy') {
-        description('Deploy one published image of one service chart to this environment')
-        parameters {
-          stringParam('CHART', '', 'Service chart path, e.g. app/chart')
-          stringParam('IMAGE_REF', '', 'Immutable image reference repository@sha256:...')
-          stringParam('COMMIT_SHA', '', 'Full Git commit SHA the image was built from')
-        }
-        definition {
-          cpsScm {
-            scm { git { remote { url("https://github.com/${githubOwner}/${githubRepository}.git"); credentials('github-creds') }; branch('*/main') } }
-            scriptPath('delivery/Jenkinsfile.deploy')
-            lightweight(true)
-          }
-        }
-      }
+      // Releases every environment to its state/<name>.yaml (environments.yaml).
+      githubMultibranch('deploy', 'delivery/Jenkinsfile.deploy')
 
 unclassified:
   # The platform delivery library (delivery/pipeline). Services cannot choose

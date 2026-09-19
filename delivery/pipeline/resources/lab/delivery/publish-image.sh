@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Pushes the exact OCI layout that was scanned and records its immutable
-# repository@digest reference. Publication fails if the registry digest differs
+# Pushes the exact OCI layout that was scanned and writes its registry digest
+# to pushed.digest. Publication fails if the registry digest differs
 # from the scanned manifest digest.
 set -Eeuo pipefail
 
 readonly IMAGE_LAYOUT=app-image
 readonly IMAGE_INDEX="${IMAGE_LAYOUT}/index.json"
 readonly DIGEST_FILE=pushed.digest
-readonly IMAGE_REFERENCE_FILE=image_ref.env
 WORK_DIRECTORY="$(mktemp -d)"
 readonly WORK_DIRECTORY
 trap 'rm -rf -- "${WORK_DIRECTORY}"' EXIT
@@ -89,8 +88,6 @@ main() {
     exit 1
   }
 
-  printf 'IMAGE_REF=%s@%s\n' \
-    "${IMAGE_REPOSITORY}" "${pushed_digest}" > "${IMAGE_REFERENCE_FILE}"
   printf 'PASS | published %s@%s\n' "${IMAGE_REPOSITORY}" "${pushed_digest}"
 }
 

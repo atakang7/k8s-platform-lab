@@ -61,7 +61,7 @@ pipeline {
             }
             steps {
                 script {
-                    env.CHART_REF = delivery.environment().chartRegistry
+                    env.CHART_REF = delivery.environments().chartRegistry
                     delivery.installScripts()
                 }
                 container('ci-tools') {
@@ -79,38 +79,6 @@ pipeline {
                           done
                         '''
                     }
-                }
-            }
-        }
-
-        stage('Policy artifacts') {
-            when {
-                anyOf {
-                    changeset 'policies/**'
-                    expression { currentBuild.previousBuild == null }
-                }
-            }
-            steps {
-                container('ci-tools') {
-                    sh '''
-                      helm lint policies/resource-requests-webhook/helm/resource-requests-webhook \
-                        --set-string image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000
-                      hadolint policies/resource-requests-webhook/Dockerfile
-                    '''
-                }
-                // Building the policy image executes its Go 1.27 unit tests inside
-                // the pinned builder image. CI does not need Go installed globally.
-                container('buildkit') {
-                    sh '''
-                      set -eu
-                      rm -rf policy-image
-                      trap 'rm -rf policy-image' EXIT
-                      buildctl build \
-                        --frontend dockerfile.v0 \
-                        --local context=policies/resource-requests-webhook \
-                        --local dockerfile=policies/resource-requests-webhook \
-                        --output type=oci,tar=false,dest=policy-image
-                    '''
                 }
             }
         }

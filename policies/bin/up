@@ -20,32 +20,36 @@ pass() {
   printf 'PASS | %s\n' "$1"
 }
 
-resolve_resource_requests_digest() {
-  local configured_digest="${RESOURCE_REQUESTS_WEBHOOK_IMAGE_DIGEST:-}"
-  local installed_image
+# The digest desired in ENVIRONMENT's state/<name>.yaml, recorded there by
+# delivery. Admission policy is cluster-wide, so the operator chooses which
+# environment's digest this cluster runs.
+resolve_state_digest() {
+  local name="$1"
 
-  if [[ -n "${configured_digest}" ]]; then
-    printf '%s\n' "${configured_digest}"
-    return
-  fi
+  : "${ENVIRONMENT:?ENVIRONMENT is required, e.g. make policies-up ENVIRONMENT=prod}"
 
-  installed_image="$(kubectl -n "${POLICY_NAMESPACE}" get deployment "${RESOURCE_REQUESTS_WEBHOOK}" \
-    -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+  python3 - "${ROOT}/state/${ENVIRONMENT}.yaml" "${name}" <<'PY'
+import sys
+import yaml
 
-  if [[ "${installed_image}" == *@sha256:* ]]; then
-    printf '%s\n' "${installed_image##*@}"
-    return
-  fi
+path, name = sys.argv[1:]
+with open(path, encoding="utf-8") as source:
+    state = yaml.safe_load(source)
 
-  fail 'resource-requests-webhook needs RESOURCE_REQUESTS_WEBHOOK_IMAGE_DIGEST=sha256:<64 lowercase hex>; publish the image, export its digest, and rerun make policy-up POLICY=resource-requests-webhook'
+digests = state.get("digests") if isinstance(state, dict) else None
+if not isinstance(digests, dict) or name not in digests:
+    raise SystemExit(f"{path}: digests has no entry for {name}")
+
+print(digests[name] or "")
+PY
 }
 
 reconcile_resource_requests_webhook() {
   local digest
 
-  digest="$(resolve_resource_requests_digest)"
+  digest="$(resolve_state_digest "${RESOURCE_REQUESTS_WEBHOOK}")"
   [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] ||
-    fail 'RESOURCE_REQUESTS_WEBHOOK_IMAGE_DIGEST must be sha256:<64 lowercase hex characters>'
+    fail "state/${ENVIRONMENT}.yaml has no ${RESOURCE_REQUESTS_WEBHOOK} digest yet; its CI on main records one in state/dev.yaml, then promote it"
 
   phase 'reconciling policy resource-requests-webhook (timeout: 5m)'
 

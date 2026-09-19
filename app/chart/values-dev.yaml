@@ -1,0 +1,9 @@
+# dev: one replica. prod (values.yaml) shares the lab cluster at full size.
+replicas: 1
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+ingress:
+  host: app-dev.lab.test

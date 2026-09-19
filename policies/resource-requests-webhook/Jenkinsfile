@@ -1,0 +1,7 @@
+@Library('lab-delivery') _
+
+servicePipeline(
+    chart: 'policies/resource-requests-webhook/helm/resource-requests-webhook',
+    context: 'policies/resource-requests-webhook',
+    path: 'policies/resource-requests-webhook/'
+)

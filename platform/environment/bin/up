@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly ROOT
-readonly ENVIRONMENT_CONFIG="${ROOT}/environment.yaml"
+readonly ENVIRONMENT_CONFIG="${ROOT}/environments.yaml"
 readonly ENVIRONMENT_MANIFEST="${ROOT}/platform/environment/namespace.yaml"
 readonly REGISTRY_POLICY="${ROOT}/platform/environment/registry-pull-read.hcl"
 
@@ -19,25 +19,26 @@ phase() {
   printf 'WAIT | %s\n' "$1"
 }
 
-read_environment_field() {
-  local field="$1"
-
-  python3 - "${ENVIRONMENT_CONFIG}" "${field}" <<'PY'
+# Every delivery environment in promotion order, one "name namespace" line each.
+read_environments() {
+  python3 - "${ENVIRONMENT_CONFIG}" <<'PY'
 import sys
 import yaml
 
-config_path, field = sys.argv[1:]
+config_path = sys.argv[1]
 with open(config_path, encoding="utf-8") as source:
     config = yaml.safe_load(source)
 
-if not isinstance(config, dict):
-    raise SystemExit(f"{config_path}: expected a YAML mapping")
+environments = config.get("environments") if isinstance(config, dict) else None
+if not isinstance(environments, list) or not environments:
+    raise SystemExit(f"{config_path}: environments must be a non-empty list")
 
-value = config.get(field)
-if not isinstance(value, str) or not value:
-    raise SystemExit(f"{config_path}: {field} must be a non-empty string")
-
-print(value)
+for environment in environments:
+    name = environment.get("name") if isinstance(environment, dict) else None
+    namespace = environment.get("namespace") if isinstance(environment, dict) else None
+    if not isinstance(name, str) or not isinstance(namespace, str):
+        raise SystemExit(f"{config_path}: every environment needs a name and a namespace")
+    print(name, namespace)
 PY
 }
 
@@ -173,28 +174,30 @@ verify_registry_secret() {
 }
 
 cluster_reconcile() {
+  local environments
   local environment_name
   local namespace
   local role_id
 
-  environment_name="$(read_environment_field name)"
-  namespace="$(read_environment_field namespace)"
-  validate_environment_identity "${environment_name}" "${namespace}"
-
+  environments="$(read_environments)"
   role_id="$(vault read -field=role_id auth/approle/role/registry-pull-vso/role-id)"
 
-  phase "reconciling environment ${environment_name} in namespace ${namespace}"
-  apply_environment_manifest "${environment_name}" "${namespace}" "${role_id}"
-  reconcile_registry_identity "${namespace}"
-  verify_access_model "${namespace}"
-  verify_registry_secret "${namespace}"
+  while read -r environment_name namespace; do
+    validate_environment_identity "${environment_name}" "${namespace}"
 
-  printf 'PASS | environment %s (%s)\n' "${environment_name}" "${namespace}"
+    phase "reconciling environment ${environment_name} in namespace ${namespace}"
+    apply_environment_manifest "${environment_name}" "${namespace}" "${role_id}"
+    reconcile_registry_identity "${namespace}"
+    verify_access_model "${namespace}"
+    verify_registry_secret "${namespace}"
+
+    printf 'PASS | environment %s (%s)\n' "${environment_name}" "${namespace}"
+  done <<<"${environments}"
 }
 
 operator_reconcile() {
   reconcile_registry_vault_access
-  phase 'reconciling application environment through the Kubernetes API tunnel'
+  phase 'reconciling application environments through the Kubernetes API tunnel'
   "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
 }
 
