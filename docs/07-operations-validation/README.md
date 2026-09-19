@@ -1,6 +1,6 @@
 # 07 — Operations and validation
 
-This layer describes the supported bootstrap, reconciliation, recovery, and validation path. It does not own platform configuration; it proves the repository can recreate and operate that configuration.
+This layer describes the supported bootstrap, reconciliation, recovery, and validation path. It does not own platform configuration; it proves the repository can recreate and operate that configuration. Host OS, tool, capacity, and network prerequisites are declared in the root [README](../../README.md#prerequisites).
 
 ## Bootstrap order
 
@@ -19,6 +19,7 @@ fresh checkout
 │ make edge-up                 │
 │ Vault init / unseal          │
 │ make edge-up                 │
+│ make edge-validate · 1st run │
 │ make edge-smoke              │
 └──────────────┬───────────────┘
                ▼
@@ -77,8 +78,11 @@ make edge-up
 VAULT_INIT_OUTPUT=/secure/absolute/path/vault-init.json make vault-init
 make vault-unseal
 make edge-up
+make edge-validate
 make edge-smoke
 ```
+
+On the first build, `edge-validate` is intentional: it exercises the full DNS/TLS integration and establishes the retained `stage3.lab.test` backend that `edge-smoke` checks. Subsequent reconciliations normally use `make edge-up && make edge-smoke`.
 
 `vault-init.json` contains root-of-trust material. Keep it outside the repository with restrictive permissions and move it to protected operator storage.
 

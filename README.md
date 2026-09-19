@@ -51,6 +51,116 @@ control plane               worker                      worker
                             192.168.56.11               192.168.56.12
 ```
 
+
+## Prerequisites
+
+The full environment is supported from an **Ubuntu x86_64 operator host**. VM creation may work on other systems, but the complete bootstrap intentionally runs host-side Ansible and refuses non-Ubuntu or non-x86_64 hosts because it configures BIND9, Vault, the local CA, and split DNS on the operator machine.
+
+| Requirement | Purpose |
+|---|---|
+| sudo access | host DNS, Vault, CA, resolver, and trust-store configuration |
+| VirtualBox (`VBoxManage`) + Vagrant | create the three VMs and the host-only edge network |
+| Ansible (`ansible-playbook`) | provision Kubernetes and reconcile host-side edge services |
+| `kubectl` + Helm | reconcile Kubernetes-resident edge and platform components |
+| Git, GNU Make, Bash, Python 3, OpenSSH, `ip`, `curl`, `jq`, OpenSSL | orchestration and validation helpers |
+| Internet access | Vagrant box, package repositories, container registries, and Helm repositories |
+
+The edge reconciliation installs the host Vault CLI and DNS utilities used by later validation. Host tool versions are not duplicated here; component versions owned by the repository are pinned in the corresponding `versions.env`, Ansible variables, manifests, or chart configuration.
+
+The default VM plan allocates **6 vCPUs and 8 GiB RAM** in total:
+
+| Node | Role | CPU | RAM |
+|---|---|---:|---:|
+| node-1 | control plane | 2 | 2048 MiB |
+| node-2 | worker | 2 | 2048 MiB |
+| node-3 | worker + platform workloads | 2 | 4096 MiB |
+
+Leave additional capacity for the Ubuntu host and VirtualBox. The host-facing network `192.168.56.0/24` must be available; `192.168.56.200-220` is reserved for MetalLB. The `Vagrantfile` checks host routes, addresses, and VirtualBox DHCP overlap before boot and fails early on a collision.
+
+A quick host check before creating anything:
+
+```bash
+for cmd in sudo git make vagrant VBoxManage ansible-playbook kubectl helm python3 ssh ip curl jq openssl; do
+  command -v "$cmd" >/dev/null || echo "missing: $cmd"
+done
+```
+
+GitHub and Docker Hub credentials are **not** required to create the cluster. They are required before CI/CD is enabled and must remain outside Git; the supported Vault paths and exact loading commands are documented in [07 — Operations and validation](docs/07-operations-validation/README.md#3-external-credentials).
+
+## Fresh setup
+
+Run all commands from the repository root. The first `make edge-up` is expected to stop at the Vault initialization gate after preparing the host edge services. That stop is intentional: Vault initialization and unsealing remain explicit operator actions.
+
+### 1. Create and validate the Kubernetes foundation
+
+```bash
+make cluster-up
+make cluster-validate
+```
+
+### 2. Bootstrap edge, trust, and Vault
+
+Prepare the host edge first:
+
+```bash
+make edge-up
+```
+
+On a new host, the command exits with the instruction to initialize Vault. Store the init output outside the repository:
+
+```bash
+SECRETS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/lab-operator"
+install -d -m 700 "$SECRETS_DIR"
+
+VAULT_INIT_OUTPUT="$SECRETS_DIR/vault-init.json" make vault-init
+make vault-unseal
+make edge-up
+```
+
+Keep the generated init file in protected operator storage. The second `make edge-up` may request the operator-held Vault bootstrap token through a hidden prompt.
+
+For the **first build**, run the deep edge validation once. It proves ExternalDNS create/delete behavior and establishes the retained HTTPS validation backend consumed by the lightweight smoke check:
+
+```bash
+make edge-validate
+make edge-smoke
+```
+
+Later reconciliations normally use `make edge-up && make edge-smoke`.
+
+### 3. Load external delivery credentials
+
+Populate the three documented Vault paths for GitHub CI access, Docker Hub publication, and runtime image pulls:
+
+- `secret/ci/github`
+- `secret/ci/dockerhub`
+- `secret/runtime/dockerhub`
+
+Use the exact commands in [External credentials](docs/07-operations-validation/README.md#3-external-credentials). Do not commit tokens, generated Vault material, kubeconfigs, or private keys.
+
+### 4. Reconcile platform services and runtime registry identity
+
+```bash
+make jenkins-up
+make observability-up
+make observability-smoke
+./app/k8s/bootstrap-registry-auth.sh
+```
+
+Trigger the Jenkins `lab-build` job to build, scan, publish, and hand the immutable image digest to `lab-deploy`.
+
+### 5. Install the admission policy and run the final proof
+
+The admission webhook image must be published first and installed with its immutable digest. Follow [Admission policy](docs/06-governance-resilience/admission-policy.md), then run:
+
+```bash
+make e2e-validate
+```
+
+The full bootstrap, recovery, external-secret, policy-installation, and validation details live in [07 — Operations and validation](docs/07-operations-validation/README.md).
+
+> **Teardown scope:** `make destroy` destroys the Vagrant VMs. Host-side Vault/BIND/CA state is deliberately retained for recovery; see the operations guide before treating a VM rebuild as a completely clean host reset.
+
 ## Documentation
 
 | Layer | Purpose |
