@@ -54,6 +54,10 @@ smokeTest:
 
 Further Helm test hooks in the app chart run with it; they are the service's end-to-end tests.
 
+## Canary
+
+Delivery releases a prod canary as a second release, `<service>-canary`, with `ingress.canaryWeight` set: its Ingress becomes an ingress-nginx canary for the same host and takes that percentage of the traffic. Apps do not set it.
+
 ## Release rule
 
 Released versions are immutable. Pull requests that change this chart must bump `version` in `Chart.yaml`; chart-testing enforces the version increment. The main platform job publishes a version only when that exact version is absent from the OCI registry.

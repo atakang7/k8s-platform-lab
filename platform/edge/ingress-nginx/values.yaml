@@ -13,6 +13,11 @@ controller:
           app.kubernetes.io/component: controller
   extraArgs:
     default-ssl-certificate: ingress-nginx/lab-wildcard
+  # Request metrics per Ingress. Prometheus scrapes them (additionalServiceMonitors
+  # in platform/observability) and delivery judges prod canaries by their 5xx
+  # rate (delivery/README.md, Release flow step 6).
+  metrics:
+    enabled: true
   service:
     type: LoadBalancer
     allocateLoadBalancerNodePorts: false

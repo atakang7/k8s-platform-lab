@@ -64,6 +64,7 @@ def call() {
                                             delivery.installScripts()
                                             Map config = delivery.environments()
                                             env.CHART_REF = config.chartRegistry
+                                            env.METRICS_URL = config.metrics ?: ''
 
                                             for (Map recorded in delivery.recordedReleases(config)) {
                                                 if (recorded.target.name == environment && config.releases.contains(recorded.name)) {
@@ -90,6 +91,7 @@ def call() {
 // Runs one release step (dry-run or deploy) for one recorded release: an app
 // version and the image digest CI published as it.
 private void release(Map recorded, String step) {
+    Map canary = recorded.target.canary ?: [:]
     withCredentials([
         usernamePassword(
             credentialsId: 'dockerhub-creds',
@@ -102,7 +104,10 @@ private void release(Map recorded, String step) {
             "APP_VERSION=${recorded.version}",
             "IMAGE_DIGEST=${recorded.image}",
             "NAMESPACE=${recorded.target.namespace}",
-            "ENVIRONMENT=${recorded.target.name}"
+            "ENVIRONMENT=${recorded.target.name}",
+            "CANARY_WEIGHT=${canary.weight ?: ''}",
+            "CANARY_MINUTES=${canary.minutes ?: ''}",
+            "CANARY_MAX_ERROR_RATE=${canary.maxErrorRate ?: ''}"
         ]) {
             container('ci-tools') {
                 sh(step)

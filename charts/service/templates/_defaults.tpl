@@ -30,6 +30,7 @@ ingress:
   enabled: false
   className: nginx
   host: ""          # TLS uses the ingress controller's default wildcard certificate
+  canaryWeight: 0   # >0 makes this Ingress an ingress-nginx canary for the host taking that % of traffic; set by delivery
 metrics:
   enabled: false
   path: /metrics

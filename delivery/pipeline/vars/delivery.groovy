@@ -21,6 +21,14 @@ Map environments() {
     if (!(config?.chartRegistry as String)?.startsWith('oci://')) {
         error('environments.yaml: chartRegistry must be an oci:// reference')
     }
+    if (targets.any { it.canary } && !config.metrics) {
+        error('environments.yaml: canary environments need metrics, the Prometheus URL')
+    }
+    for (Map target in targets.findAll { it.canary }) {
+        if (!(target.canary.weight in 1..100) || !(target.canary.minutes > 0) || !(target.canary.maxErrorRate instanceof Number)) {
+            error("environments.yaml: ${target.name} canary needs weight (1-100), minutes and maxErrorRate")
+        }
+    }
     if (!(config?.releases instanceof List)) {
         error('environments.yaml: releases must list the services the deploy job releases')
     }

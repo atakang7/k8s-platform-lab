@@ -4,6 +4,8 @@
 # enters any later environment by pull request, and only after it has been in
 # the previous one.
 chartRegistry: oci://registry-1.docker.io/atakangul
+# Prometheus the deploy job judges canaries with (platform/observability).
+metrics: http://observability-kube-prometh-prometheus.observability.svc:9090/prometheus
 environments:
   - name: dev
     namespace: apps-dev
@@ -11,6 +13,9 @@ environments:
     namespace: apps-stage
   - name: prod
     namespace: apps-prod
+    # Each release first runs as a one-replica canary behind `weight`% of the
+    # traffic for `minutes`; a 5xx rate above maxErrorRate removes it.
+    canary: {weight: 10, minutes: 5, maxErrorRate: 0.01}
 # Services the deploy job releases. Every other state entry is built by
 # delivery and installed by the operator (`make policies-up`).
 releases:

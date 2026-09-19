@@ -180,6 +180,11 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "service.labels" . | nindent 4 }}
+  {{- if gt (int .Values.ingress.canaryWeight) 0 }}
+  annotations:
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: {{ .Values.ingress.canaryWeight | quote }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   tls:

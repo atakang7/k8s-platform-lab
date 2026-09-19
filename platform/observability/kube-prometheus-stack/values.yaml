@@ -42,6 +42,22 @@ prometheus:
             requests:
               storage: 2Gi
 
+  # ingress-nginx is installed before this stack exists, so its scrape config
+  # lives here. Delivery reads its per-Ingress request metrics to judge canaries.
+  additionalServiceMonitors:
+    - name: ingress-nginx
+      additionalLabels:
+        release: observability
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+          app.kubernetes.io/component: controller
+      namespaceSelector:
+        matchNames: [ingress-nginx]
+      endpoints:
+        - port: metrics
+          interval: 15s
+
 alertmanager:
   config:
     global:
