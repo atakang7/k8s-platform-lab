@@ -48,7 +48,8 @@ read_published_digest() {
     --authfile "${REGISTRY_AUTH_FILE}" \
     "docker://${IMAGE_REPOSITORY}:${APP_VERSION}" |
     jq -r '.config.Labels["org.opencontainers.image.revision"] // ""')"
-  git diff --quiet "${published_revision}" "${COMMIT_SHA}" -- "${SERVICE_PATH}" 2>/dev/null || {
+  # The workspace belongs to the agent user, not this container's; trust it for this read.
+  git -c safe.directory="${PWD}" diff --quiet "${published_revision}" "${COMMIT_SHA}" -- "${SERVICE_PATH}" || {
     printf 'FAIL | %s %s was published from %s, and %s changed since; raise the version\n' \
       "${IMAGE_REPOSITORY}" "${APP_VERSION}" "${published_revision:-<unknown>}" "${SERVICE_PATH}" >&2
     return 1
