@@ -54,6 +54,7 @@ For release verification, confirm at minimum:
 - `sample-java-app` has four Ready replicas spread across node-2 and node-3;
 - the live application responds through `https://app.lab.test`;
 - the running application image is an immutable digest from CI/CD;
+- the application Pod runtime keeps service-account tokens and service links disabled, uses the RuntimeDefault seccomp profile, and enforces the two-replica disruption budget;
 - the admission webhook accepts complete requests and rejects missing CPU or memory requests.
 
 ## Failure handling

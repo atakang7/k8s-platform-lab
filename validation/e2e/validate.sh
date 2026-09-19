@@ -148,6 +148,7 @@ validate_application() {
   local namespace="$1"
   local request_id="$2"
   local deployment
+  local pdb
   local pods
   local response
   local logged=false
@@ -173,6 +174,31 @@ validate_application() {
     | test("@sha256:[0-9a-f]{64}$")
   ' <<< "${deployment}" >/dev/null ||
     fail 'application image is not immutable'
+
+  jq -e '
+    .spec.template.spec as $pod
+    | ($pod.automountServiceAccountToken == false)
+      and ($pod.enableServiceLinks == false)
+      and ($pod.terminationGracePeriodSeconds == 30)
+      and ($pod.securityContext.seccompProfile.type == "RuntimeDefault")
+      and (
+        $pod.containers
+        | all(
+            .securityContext.runAsNonRoot == true
+            and .securityContext.allowPrivilegeEscalation == false
+            and (.securityContext.capabilities.drop | index("ALL") != null)
+          )
+      )
+      and (
+        $pod.containers
+        | any(.name == "app" and .imagePullPolicy == "IfNotPresent")
+      )
+  ' <<< "${deployment}" >/dev/null ||
+    fail 'application Pod runtime security or lifecycle contract is wrong'
+
+  pdb="$(kubectl -n "${namespace}" get poddisruptionbudget sample-java-app -o json)"
+  jq -e '.spec.minAvailable == 2' <<< "${pdb}" >/dev/null ||
+    fail 'application PodDisruptionBudget does not preserve two replicas'
 
   pods="$(
     kubectl -n "${namespace}" get pods \
@@ -224,7 +250,7 @@ validate_application() {
   [[ "${logged}" == true ]] ||
     fail 'request did not reach the asynchronous application file log'
 
-  pass 'application replicas, image identity, placement, DNS, HTTPS, and file logging'
+  pass 'application replicas, immutable image, runtime security, disruption budget, placement, DNS, HTTPS, and file logging'
 }
 
 validate_observability() {

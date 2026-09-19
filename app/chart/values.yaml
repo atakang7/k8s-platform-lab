@@ -12,6 +12,10 @@ strategy:
     maxUnavailable: 0
     maxSurge: 4
 
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
 probes:
   startup:
     httpGet: {path: /actuator/health/liveness, port: http}

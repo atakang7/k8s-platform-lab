@@ -68,7 +68,7 @@ maxUnavailable: 0
 maxSurge:       4
 ```
 
-Replacement Pods must become Ready before old capacity is intentionally removed.
+Replacement Pods must become Ready before old capacity is intentionally removed. Voluntary disruptions are bounded by a PodDisruptionBudget with `minAvailable: 2`, so maintenance cannot intentionally evict more than half of the service at once.
 
 ## Health and shutdown
 

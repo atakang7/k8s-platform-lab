@@ -2,9 +2,9 @@ apiVersion: v2
 name: sample-java-app
 description: Lab sample Java application
 type: application
-version: 1.0.0
+version: 1.1.0
 dependencies:
   # Platform base chart (charts/service), published by the platform job.
   - name: service
-    version: 1.0.0
+    version: 1.1.0
     repository: oci://registry-1.docker.io/atakangul
