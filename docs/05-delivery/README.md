@@ -204,6 +204,28 @@ This final read-back turns "kubectl apply succeeded" into a stronger invariant: 
 
 The application Deployment itself uses `maxUnavailable: 0` and readiness probes, so CD waits on Kubernetes' availability-aware rollout behavior instead of sleeping for an arbitrary period.
 
+## Failed release rollback
+
+Kubernetes does not roll back a failed rollout by itself: it stops, keeps the old Pods serving (`maxUnavailable: 0`), and leaves the Deployment pointing at the failed image with its new Pods still holding capacity. CD therefore undoes its own failure:
+
+```text
+read Deployment revision            (before any apply)
+      │
+      ▼
+release + verify ── any step fails ──► read revision again
+                                            │
+                     revision moved ────────┼──── revision unchanged
+                            │                          │
+                            ▼                          ▼
+          rollout undo --to-revision=<before>    nothing to undo
+          wait for rollback rollout                    │
+                            └──────────┬───────────────┘
+                                       ▼
+                        fail the job with the original error
+```
+
+The undo targets the exact pre-release revision, never "previous": a failure before the Deployment apply must not step a healthy Deployment back. On the very first release there is no prior revision and nothing is undone. ConfigMap, Service, ServiceMonitor and Ingress changes are not rolled back.
+
 ## Commit status
 
 Both pipelines write GitHub commit statuses for pending/success/failure. The source revision therefore carries the delivery result without requiring Jenkins to be open while reviewing a commit.

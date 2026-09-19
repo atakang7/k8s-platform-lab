@@ -36,6 +36,8 @@ read live Deployment image
       └── mismatch ─────► fail
 ```
 
+Any failure after the Deployment revision has moved rolls the Deployment back to its pre-release revision before the job fails; see [Failed release rollback](../../docs/05-delivery/README.md#failed-release-rollback).
+
 The committed Deployment file is not rewritten with each release digest. Ansible renders the image override for the apply operation so source configuration stays stable while the release artifact stays immutable.
 
 Run through Jenkins during normal operation. Syntax is checked by CI before publication:

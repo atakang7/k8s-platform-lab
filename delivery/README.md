@@ -40,7 +40,8 @@ lab-deploy · lab-cd-runner
     ├─ checkout exact commit
     ├─ Ansible apply
     ├─ rollout status
-    └─ assert live image == requested digest
+    ├─ assert live image == requested digest
+    └─ on failure: undo to the pre-release revision
 ```
 
 The local tar is scan input only. Publication is a second BuildKit solve against the same source revision and build context, reusing warm BuildKit state.
