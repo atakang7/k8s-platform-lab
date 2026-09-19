@@ -261,11 +261,15 @@ apply_jenkins_resources() {
 
 remove_obsolete_delivery_access() {
   # Retain this cleanup because an operator may upgrade an older cluster
-  # directly to the current repository state. These objects carried broader,
-  # persistent delivery credentials before the short-lived deployer-token model.
+  # directly to the current repository state. These objects carried delivery
+  # access before per-environment deploy identities (platform/environment).
   kubectl -n "${JENKINS_NAMESPACE}" delete secret \
     jenkins-agent-token \
     jenkins-kubeconfig \
+    --ignore-not-found >/dev/null
+
+  kubectl -n "${JENKINS_NAMESPACE}" delete serviceaccount \
+    jenkins-agent \
     --ignore-not-found >/dev/null
 
   kubectl -n default delete role \
@@ -344,14 +348,10 @@ verify_vault_secrets() {
 }
 
 verify_agent_cluster_scope() {
-  local service_account
-
-  for service_account in jenkins-agent jenkins-ci; do
-    [[ "$(kubectl auth can-i create deployments \
-      --all-namespaces \
-      --as="system:serviceaccount:${JENKINS_NAMESPACE}:${service_account}")" == no ]] ||
-      fail "${service_account} has cluster-wide deployment rights"
-  done
+  [[ "$(kubectl auth can-i create deployments \
+    --all-namespaces \
+    --as="system:serviceaccount:${JENKINS_NAMESPACE}:jenkins-ci")" == no ]] ||
+    fail 'jenkins-ci has cluster-wide deployment rights'
 }
 
 install_jenkins() {

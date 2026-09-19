@@ -123,20 +123,38 @@ apply_environment_manifest() {
     kubectl apply -f - >/dev/null
 }
 
+# Each environment's deploy identity releases into its own namespace only.
 verify_cd_access() {
-  local namespace="$1"
-  local -r cd_identity=system:serviceaccount:jenkins:jenkins-agent
-
-  [[ "$(kubectl auth can-i create serviceaccounts/deployer \
-    --subresource=token \
-    --namespace "${namespace}" \
-    --as="${cd_identity}")" == yes ]] ||
-    fail 'CD cannot mint deployer tokens'
+  local environment_name="$1"
+  local namespace="$2"
+  local -r cd_identity="system:serviceaccount:jenkins:jenkins-deploy-${environment_name}"
 
   [[ "$(kubectl auth can-i create deployments \
     --namespace "${namespace}" \
+    --as="${cd_identity}")" == yes ]] ||
+    fail "jenkins-deploy-${environment_name} cannot deploy to ${namespace}"
+
+  [[ "$(kubectl auth can-i create deployments \
+    --all-namespaces \
     --as="${cd_identity}")" == no ]] ||
-    fail 'CD holds deploy rights directly'
+    fail "jenkins-deploy-${environment_name} can deploy outside ${namespace}"
+
+  [[ "$(kubectl auth can-i get secrets \
+    --namespace "${namespace}" \
+    --as="${cd_identity}")" == no ]] ||
+    fail "jenkins-deploy-${environment_name} can read Secrets"
+}
+
+# Clusters set up before per-environment deploy identities still carry the
+# token-minting model; remove it so no identity keeps that access.
+remove_token_minting_access() {
+  local namespace="$1"
+
+  kubectl -n "${namespace}" delete \
+    serviceaccount/deployer \
+    role/deployer-token-minter \
+    rolebinding/deployer-token-minter \
+    --ignore-not-found >/dev/null
 }
 
 verify_ci_dry_run_only() {
@@ -156,9 +174,10 @@ verify_ci_dry_run_only() {
 }
 
 verify_access_model() {
-  local namespace="$1"
+  local environment_name="$1"
+  local namespace="$2"
 
-  verify_cd_access "${namespace}"
+  verify_cd_access "${environment_name}" "${namespace}"
   verify_ci_dry_run_only "${namespace}"
 }
 
@@ -188,7 +207,8 @@ cluster_reconcile() {
     phase "reconciling environment ${environment_name} in namespace ${namespace}"
     apply_environment_manifest "${environment_name}" "${namespace}" "${role_id}"
     reconcile_registry_identity "${namespace}"
-    verify_access_model "${namespace}"
+    remove_token_minting_access "${namespace}"
+    verify_access_model "${environment_name}" "${namespace}"
     verify_registry_secret "${namespace}"
 
     printf 'PASS | environment %s (%s)\n' "${environment_name}" "${namespace}"

@@ -1,16 +1,9 @@
-# lab-cd-runner identity. It holds no deploy rights of its own: each delivery
-# environment lets it mint short-lived tokens for that environment's
-# `deployer` only (environments.yaml).
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: jenkins-agent
-  namespace: jenkins
----
 # lab-ci-runner identity. Delivery environments bind it to their deployer
 # Role so CI can server-side dry-run releases, which Kubernetes authorizes like
 # real writes; jenkins-ci-dry-run-only below rejects every request from it
 # that is not a dry-run, so CI can validate environments but never change them.
+# CD identities are per environment: platform/environment creates
+# jenkins-deploy-<environment>.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

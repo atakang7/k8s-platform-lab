@@ -21,7 +21,7 @@ def call() {
                     }
                 }
                 stages {
-                    // A digest may enter an environment only after it was in the
+                    // An image may enter an environment only after it was in the
                     // previous one. Released services must also pass a server-side
                     // dry-run of their chart with the target environment's values.
                     stage('Verify') {
@@ -33,6 +33,7 @@ def call() {
                                 delivery.installScripts()
                                 Map config = delivery.environments()
                                 env.CHART_REF = config.chartRegistry
+                                env.DELIVERY_ENVIRONMENTS = config.environments*.name.join(' ')
 
                                 for (Map recorded in delivery.recordedReleases(config)) {
                                     stage("Verify ${recorded.name} in ${recorded.target.name}") {
@@ -46,24 +47,29 @@ def call() {
                         }
                     }
 
+                    // One agent Pod per environment, in promotion order, running
+                    // as that environment's jenkins-deploy-<name> identity
+                    // (platform/environment): it can release there and nowhere else.
                     stage('Deploy') {
-                        when {
-                            beforeAgent true
-                            branch 'main'
-                        }
-                        agent { label 'lab-cd-runner' }
+                        when { branch 'main' }
                         options { timeout(time: 30, unit: 'MINUTES') }
                         steps {
                             script {
-                                checkout scm
-                                delivery.installScripts()
-                                Map config = delivery.environments()
-                                env.CHART_REF = config.chartRegistry
+                                for (String environment in env.DELIVERY_ENVIRONMENTS.tokenize(' ')) {
+                                    podTemplate(inheritFrom: 'cd-runner', serviceAccount: "jenkins-deploy-${environment}") {
+                                        node(POD_LABEL) {
+                                            checkout scm
+                                            delivery.installScripts()
+                                            Map config = delivery.environments()
+                                            env.CHART_REF = config.chartRegistry
 
-                                for (Map recorded in delivery.recordedReleases(config)) {
-                                    if (config.releases.contains(recorded.name)) {
-                                        stage("Deploy ${recorded.name} to ${recorded.target.name}") {
-                                            release(recorded, '.delivery/deploy.sh')
+                                            for (Map recorded in delivery.recordedReleases(config)) {
+                                                if (recorded.target.name == environment && config.releases.contains(recorded.name)) {
+                                                    stage("Deploy ${recorded.name} to ${environment}") {
+                                                        release(recorded, '.delivery/deploy.sh')
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }

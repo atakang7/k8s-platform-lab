@@ -7,13 +7,15 @@ metadata:
   labels:
     delivery.lab.test/environment: __ENVIRONMENT__
 ---
-# Release identity. No credential for it is stored: each deploy mints a
-# short-lived token (delivery/pipeline/resources/lab/delivery/deploy.sh).
+# Deploy identity of this environment. The deploy job releases this
+# environment from an agent Pod running as this ServiceAccount
+# (delivery/pipeline/vars/deployPipeline.groovy), so the Pod deploying one
+# environment cannot touch another. No credential for it is stored in Jenkins.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: deployer
-  namespace: __NAMESPACE__
+  name: jenkins-deploy-__ENVIRONMENT__
+  namespace: jenkins
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -49,8 +51,8 @@ metadata:
   namespace: __NAMESPACE__
 subjects:
   - kind: ServiceAccount
-    name: deployer
-    namespace: __NAMESPACE__
+    name: jenkins-deploy-__ENVIRONMENT__
+    namespace: jenkins
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -71,32 +73,6 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: deployer
----
-# The CD agent holds no deploy rights; it may only mint deployer tokens.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: deployer-token-minter
-  namespace: __NAMESPACE__
-rules:
-  - apiGroups: [""]
-    resources: ["serviceaccounts/token"]
-    resourceNames: ["deployer"]
-    verbs: ["create"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: deployer-token-minter
-  namespace: __NAMESPACE__
-subjects:
-  - kind: ServiceAccount
-    name: jenkins-agent
-    namespace: jenkins
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: deployer-token-minter
 ---
 apiVersion: secrets.hashicorp.com/v1beta1
 kind: VaultConnection

@@ -142,7 +142,9 @@ jenkins:
                   component: jenkins-agent
                   workload: lab-cd-runner
               spec:
-                serviceAccountName: jenkins-agent
+                # No identity of its own: the deploy job runs each environment
+                # from a Pod inheriting this template with that environment's
+                # jenkins-deploy-<name> ServiceAccount (deployPipeline.groovy).
                 enableServiceLinks: false
                 restartPolicy: Never
                 nodeSelector:

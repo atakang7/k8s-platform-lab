@@ -79,8 +79,9 @@ state/ changed ─► deploy job
         Verify     every image was in the previous environment first
                    dry-run of the recorded chart with the environment's values
         ── main only ──
-        Deploy     dev, stage, prod in order; releases already on their chart and image are skipped
-                   mint 15-minute deployer token
+        Deploy     dev, stage, prod in order, one agent Pod each running as that
+                   environment's jenkins-deploy-<name>; releases already on their
+                   chart and image are skipped
                    helm upgrade --wait --rollback-on-failure
 ```
 
@@ -95,8 +96,7 @@ Everything here is native Jenkins and Git:
 | Who | Can |
 |---|---|
 | CI (`jenkins-ci`) | server-side dry-run only; admission denies its real writes |
-| CD (`jenkins-agent`) | mint a 15-minute token for the namespace's `deployer`, nothing else |
-| `deployer` | manage the chart's objects in its namespace; no Secrets |
+| CD (`jenkins-deploy-<environment>`) | manage the chart's objects in that environment's namespace only; no Secrets |
 
 No cluster credential is stored in Jenkins.
 

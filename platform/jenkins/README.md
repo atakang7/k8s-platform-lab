@@ -38,7 +38,7 @@ Endpoint: `https://jenkins.lab.test`.
 - zero controller executors;
 - Kubernetes cloud configuration;
 - exclusive `lab-ci-runner` and `lab-cd-runner` templates;
-- GitHub and Docker Hub credentials (no cluster credential: CD mints short-lived tokens);
+- GitHub and Docker Hub credentials (no cluster credential: CD runs as each environment's own ServiceAccount);
 - the `lab-delivery` shared library (`delivery/pipeline`);
 - a GitHub multibranch job per service and for `platform` (native commit statuses), plus the `deploy` job.
 
@@ -46,6 +46,6 @@ Do not make durable job, agent, or credential changes in the UI. Put them in JCa
 
 ## CI agent image
 
-The tools image is built from `delivery/jenkins/ci-agent.Dockerfile` and referenced by immutable digest in JCasC. Tooling changes require a new image, a new digest, and then `make jenkins-up`. Agent Pods disable Kubernetes service-link environment injection; their service-account tokens remain intentional because CI performs server-side dry-runs and CD mints short-lived deployer tokens.
+The tools image is built from `delivery/jenkins/ci-agent.Dockerfile` and referenced by immutable digest in JCasC. Tooling changes require a new image, a new digest, and then `make jenkins-up`. Agent Pods disable Kubernetes service-link environment injection; their service-account tokens remain intentional because CI performs server-side dry-runs and CD releases with its environment's identity.
 
 See [`delivery/README.md`](../../delivery/README.md) for pipeline behavior.
