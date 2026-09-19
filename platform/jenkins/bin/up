@@ -297,43 +297,41 @@ remove_obsolete_delivery_access() {
     --ignore-not-found >/dev/null
 }
 
-wait_for_vault_secret() (
-  set -Eeuo pipefail
+# True when every field of the Kubernetes Secret equals its Vault value.
+secret_matches_vault() {
+  local path="$1"
+  local destination="$2"
+  shift 2
+  local field
 
+  for field in "$@"; do
+    [[ "$(vault kv get -format=json "${path}" |
+        jq -j --arg field "${field}" '.data.data[$field]' | sha256sum)" == \
+      "$(kubectl -n "${JENKINS_NAMESPACE}" get secret "${destination}" -o json |
+        jq -r --arg field "${field}" '.data[$field]' | base64 --decode | sha256sum)" ]] ||
+      return 1
+  done
+}
+
+# Vault Secrets Operator syncs a changed Vault value within its refresh
+# interval (1m), so a Secret is given two minutes to catch up before failing.
+wait_for_vault_secret() {
   local resource="$1"
   local path="$2"
   local destination="$3"
   shift 3
-
-  local field
-  local safe_path
-  local temporary_directory
-
-  temporary_directory="$(mktemp -d)"
-  trap 'rm -rf -- "${temporary_directory}"' EXIT
-  safe_path="${path//\//-}"
 
   kubectl -n "${JENKINS_NAMESPACE}" wait \
     --for=condition=Ready \
     "vaultstaticsecret/${resource}" \
     --timeout=2m >/dev/null
 
-  for field in "$@"; do
-    vault kv get -format=json "${path}" |
-      jq -j --arg field "${field}" '.data.data[$field]' |
-      sha256sum > "${temporary_directory}/${safe_path}-${field}-vault.sha256"
-
-    kubectl -n "${JENKINS_NAMESPACE}" get secret "${destination}" -o json |
-      jq -r --arg field "${field}" '.data[$field]' |
-      base64 --decode |
-      sha256sum > "${temporary_directory}/${safe_path}-${field}-kubernetes.sha256"
-
-    cmp -s \
-      "${temporary_directory}/${safe_path}-${field}-vault.sha256" \
-      "${temporary_directory}/${safe_path}-${field}-kubernetes.sha256" ||
-      fail "secret/${destination} does not match ${path}"
+  for _ in {1..24}; do
+    secret_matches_vault "${path}" "${destination}" "$@" && return
+    sleep 5
   done
-)
+  fail "secret/${destination} does not match ${path}"
+}
 
 verify_vault_secrets() {
   phase 'waiting for Vault-managed Jenkins Secrets'
