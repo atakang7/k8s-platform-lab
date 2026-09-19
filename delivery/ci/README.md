@@ -10,10 +10,10 @@ checkout
             │
             ▼
       build-image.sh
-      BuildKit solve #1
+      BuildKit · single build + unit tests
             │
             ▼
-       app-image.tar
+       app-image/ (OCI layout)
             │
             ▼
        scan-image.sh
@@ -21,24 +21,22 @@ checkout
             │
             ▼
       publish-image.sh
-      BuildKit solve #2 · warm cache
-            │
-            ▼
-       registry push
+      skopeo push of app-image/, unchanged
+      pushed digest == scanned digest, or fail
             │
             ▼
  repository@sha256:<digest>
 ```
 
-The local tar is scan input only. `publish-image.sh` performs a second BuildKit solve against the same source/context and captures the registry digest.
+The image is built once. `publish-image.sh` pushes the scanned OCI layout unchanged and fails unless the registry digest equals the scanned manifest digest.
 
 ## Contracts
 
 | File | Contract |
 |---|---|
-| `build-image.sh` | BuildKit runs the unit tests and exports the local scan candidate |
+| `build-image.sh` | BuildKit runs the unit tests and builds the image once into `app-image/` |
 | `scan-image.sh` | scans before publish and writes `sbom.json` |
-| `publish-image.sh` | rebuilds from warm cache, pushes, records immutable digest |
+| `publish-image.sh` | pushes the scanned `app-image/` unchanged, verifies digest equality, records the immutable reference |
 | `github-status.sh` | updates commit status contexts |
 | `route.sh` | change router: prints the CI flows for a commit range; see [Change router](../README.md#change-router) |
 | `check-shell-syntax.sh` | `bash -n` on every shell script under the given paths; fails if none found |

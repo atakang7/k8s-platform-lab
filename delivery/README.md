@@ -24,16 +24,16 @@ parallel validation
     └─ Helm lint + chart server dry-run
     │
     ▼
-BuildKit solve #1 · unit tests run here (JDK 11, mvnw)
+BuildKit · single build · unit tests run here (JDK 11, mvnw)
     │
     ▼
-app-image.tar ──► Trivy + CycloneDX SBOM
-    │ scan stage complete
-    ▼
-BuildKit solve #2 · same source/context · warm cache
+app-image/ (OCI layout) ──► Trivy + CycloneDX SBOM
     │
     ▼
-registry push ──► repository@sha256:<digest>
+skopeo push of app-image/, unchanged
+    │ pushed digest must equal the scanned manifest digest
+    ▼
+repository@sha256:<digest>
     │
     │ async enqueue · exact commit + digest
     ▼
@@ -45,7 +45,7 @@ lab-deploy · lab-cd-runner
          failure ──► every chart object back to the last good release
 ```
 
-The local tar is scan input only. Publication is a second BuildKit solve against the same source revision and build context, reusing warm BuildKit state.
+The image is built once. The OCI layout that Trivy scans is the one `skopeo` pushes, and publication fails if the registry digest differs from the scanned manifest digest, so the deployed image is provably the scanned image.
 
 CI queues CD asynchronously after publication. Deployment duration does not keep the CI executor occupied.
 

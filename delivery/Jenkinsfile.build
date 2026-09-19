@@ -126,7 +126,7 @@ pipeline {
             when { expression { routed('app') } }
             steps {
                 script {
-                    timed('Build.LocalImage') {
+                    timed('Build.Image') {
                         container('buildkit') {
                             sh 'delivery/ci/build-image.sh'
                         }
@@ -145,16 +145,18 @@ pipeline {
                         }
                     }
 
-                    timed('Publish.BuildKitPush') {
-                        container('buildkit') {
+                    timed('Publish.Push') {
+                        // skopeo pushes the scanned OCI layout; nothing is rebuilt after the scan.
+                        container('ci-tools') {
                             withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                                 sh '''
                                   set +x
-                                  export DOCKER_CONFIG="$(mktemp -d)"
-                                  trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+                                  auth_dir="$(mktemp -d)"
+                                  trap 'rm -rf "$auth_dir"' EXIT
+                                  export REGISTRY_AUTH_FILE="$auth_dir/auth.json"
                                   AUTH="$(printf '%s:%s' "$DOCKER_USER" "$DOCKER_PASS" | base64 | tr -d '\n')"
-                                  printf '{"auths":{"docker.io":{"auth":"%s"},"https://index.docker.io/v1/":{"auth":"%s"}}}' "$AUTH" "$AUTH" > "$DOCKER_CONFIG/config.json"
-                                  chmod 600 "$DOCKER_CONFIG/config.json"
+                                  printf '{"auths":{"docker.io":{"auth":"%s"}}}' "$AUTH" > "$REGISTRY_AUTH_FILE"
+                                  chmod 600 "$REGISTRY_AUTH_FILE"
                                   delivery/ci/publish-image.sh
                                 '''
                             }

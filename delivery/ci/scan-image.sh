@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-[ -f app-image.tar ] || { echo "app-image.tar missing" >&2; exit 1; }
+[ -f app-image/index.json ] || { echo "app-image/ OCI layout missing" >&2; exit 1; }
 
-echo "==> Scanning local image before publish and generating CycloneDX SBOM..."
+echo "==> Scanning the image before publish and generating CycloneDX SBOM..."
 
-trivy image --input app-image.tar \
+trivy image --input app-image \
     --scanners vuln \
     --severity HIGH,CRITICAL \
     --exit-code "${TRIVY_EXIT_CODE:-0}" \
