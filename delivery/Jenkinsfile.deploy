@@ -9,6 +9,11 @@ def timed(String label, Closure body) {
     }
 }
 
+// GitHub 'error' marks an interrupted run (timeout/abort); 'failure' marks a run that finished red.
+def githubFailureState() {
+    currentBuild.currentResult == 'ABORTED' ? 'error' : 'failure'
+}
+
 pipeline {
     agent { label 'lab-cd-runner' }
     parameters {
@@ -77,11 +82,17 @@ pipeline {
                 }
             }
         }
-        failure {
+        // unsuccessful, not failure: a timeout ends the build as ABORTED and must not leave the commit pending.
+        unsuccessful {
             script {
-                container('ci-tools') {
-                    withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
-                        sh "sh delivery/ci/github-status.sh failure jenkins/deploy 'Jenkins deploy failed' '${params.COMMIT_SHA}' || true"
+                // COMMIT_SHA may be the invalid input that failed validation: pass it as data, never interpolate it into sh.
+                if (params.COMMIT_SHA ==~ /^[0-9a-f]{40}$/) {
+                    withEnv(["STATUS_STATE=${githubFailureState()}", "STATUS_DESCRIPTION=Jenkins deploy ${currentBuild.currentResult.toLowerCase()}"]) {
+                        container('ci-tools') {
+                            withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                                sh 'sh delivery/ci/github-status.sh "$STATUS_STATE" jenkins/deploy "$STATUS_DESCRIPTION" "$COMMIT_SHA" || true'
+                            }
+                        }
                     }
                 }
             }
