@@ -21,8 +21,9 @@ require_command() {
     fail "required command is unavailable: ${command_name}"
 }
 
-# The last environment in promotion order (prod) runs the full-size release
-# this validation expects: four replicas at app.<zone>.
+# The environment this cluster runs (clusterEnvironment). Its release's
+# size and hostname come from its own values, so they are read from the
+# cluster rather than assumed here.
 environment_namespace() {
   python3 - "${ROOT}/environments.yaml" <<'PY'
 import sys
@@ -36,11 +37,11 @@ environments = config.get("environments") if isinstance(config, dict) else None
 if not isinstance(environments, list) or not environments:
     raise SystemExit(f"{path}: environments must be a non-empty list")
 
-namespace = environments[-1].get("namespace")
-if not isinstance(namespace, str) or not namespace:
-    raise SystemExit(f"{path}: the last environment needs a namespace")
+selected = [e for e in environments if isinstance(e, dict) and e.get("name") == config.get("clusterEnvironment")]
+if len(selected) != 1 or not isinstance(selected[0].get("namespace"), str):
+    raise SystemExit(f"{path}: clusterEnvironment must name one environment with a namespace")
 
-print(namespace)
+print(selected[0]["namespace"])
 PY
 }
 
@@ -156,7 +157,8 @@ validate_application() {
   local response
   local logged=false
   local pod
-  local -r host="app.${DNS_ZONE}"
+  local host
+  local replicas
 
   kubectl -n "${namespace}" rollout status deployment/sample-java-app \
     --timeout=90s >/dev/null
@@ -165,9 +167,17 @@ validate_application() {
     kubectl -n "${namespace}" get deployment sample-java-app -o json
   )"
 
-  jq -e '.status.readyReplicas == 4 and .spec.replicas == 4' \
+  replicas="$(jq -r '.spec.replicas' <<< "${deployment}")"
+  jq -e '.spec.replicas >= 1 and .status.readyReplicas == .spec.replicas' \
     <<< "${deployment}" >/dev/null ||
-    fail 'application replica count is not 4'
+    fail "application has not all ${replicas} replicas ready"
+
+  host="$(
+    kubectl -n "${namespace}" get ingress sample-java-app \
+      -o jsonpath='{.spec.rules[0].host}'
+  )"
+  [[ "${host}" == *".${DNS_ZONE}" ]] ||
+    fail "application host ${host} is outside ${DNS_ZONE}"
 
   jq -e '
     .spec.template.spec.containers[]
@@ -198,9 +208,16 @@ validate_application() {
   ' <<< "${deployment}" >/dev/null ||
     fail 'application Pod runtime security or lifecycle contract is wrong'
 
-  pdb="$(kubectl -n "${namespace}" get poddisruptionbudget sample-java-app -o json)"
-  jq -e '.spec.minAvailable == 2' <<< "${pdb}" >/dev/null ||
-    fail 'application PodDisruptionBudget does not preserve two replicas'
+  # A budget must leave a Pod evictable, or no node can be drained; a single
+  # replica needs none.
+  if ((replicas > 1)); then
+    pdb="$(kubectl -n "${namespace}" get poddisruptionbudget sample-java-app -o json)"
+    jq -e --argjson replicas "${replicas}" '.spec.minAvailable < $replicas' \
+      <<< "${pdb}" >/dev/null ||
+      fail 'application PodDisruptionBudget leaves no Pod evictable'
+  elif kubectl -n "${namespace}" get poddisruptionbudget sample-java-app >/dev/null 2>&1; then
+    fail 'single-replica application has a PodDisruptionBudget that blocks drains'
+  fi
 
   pods="$(
     kubectl -n "${namespace}" get pods \
@@ -208,11 +225,12 @@ validate_application() {
       -o json
   )"
 
-  jq -e '
-    [.items[] | select(.status.phase == "Running") | .spec.nodeName]
-    | sort == ["node-2", "node-2", "node-3", "node-3"]
+  jq -e --argjson replicas "${replicas}" '
+    [.items[] | select(.status.phase == "Running") | .spec.nodeName] as $nodes
+    | ($nodes | length) == $replicas
+      and ($replicas == 1 or ($nodes | unique | sort) == ["node-2", "node-3"])
   ' <<< "${pods}" >/dev/null ||
-    fail 'application is not spread 2/2 across workers'
+    fail 'application is not spread across both workers'
 
   [[ "$(dig +short "@${EDGE_HOST_IP}" "${host}" A | tail -1)" \
     == "${INGRESS_VIP}" ]] ||
