@@ -51,8 +51,25 @@ jenkins:
                       type: DirectoryOrCreate
                   - name: buildkit-state
                     hostPath:
-                      path: /var/lib/lab-ci/buildkit
+                      path: /var/lib/lab-ci/buildkit-rootless
                       type: DirectoryOrCreate
+                initContainers:
+                  # hostPath is created root-owned; rootless BuildKit runs as uid 1000.
+                  - name: buildkit-state-owner
+                    image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
+                    command: ["chown", "1000:1000", "/state"]
+                    securityContext:
+                      runAsUser: 0
+                    volumeMounts:
+                      - name: buildkit-state
+                        mountPath: /state
+                    resources:
+                      requests:
+                        cpu: 10m
+                        memory: 16Mi
+                      limits:
+                        cpu: 100m
+                        memory: 32Mi
                 containers:
                   - name: ci-tools
                     image: docker.io/atakangul/lab-ci-agent@sha256:7ffa97e62c587bb1b8884b2512265e47bba87ae80bd6f61cfa2e41dcc0d6c5de
@@ -72,14 +89,20 @@ jenkins:
                         cpu: "1"
                         memory: 1Gi
                   - name: buildkit
-                    image: moby/buildkit:v0.12.2
+                    # Rootless: no privileged mode. buildctl finds the socket via the image's BUILDKIT_HOST.
+                    image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
                     imagePullPolicy: IfNotPresent
-                    args: ["--addr", "unix:///run/buildkit/buildkitd.sock"]
+                    args: ["--oci-worker-no-process-sandbox"]
                     securityContext:
-                      privileged: true
+                      runAsUser: 1000
+                      runAsGroup: 1000
+                      seccompProfile:
+                        type: Unconfined
+                      appArmorProfile:
+                        type: Unconfined
                     volumeMounts:
                       - name: buildkit-state
-                        mountPath: /var/lib/buildkit
+                        mountPath: /home/user/.local/share/buildkit
                     resources:
                       requests:
                         cpu: 100m

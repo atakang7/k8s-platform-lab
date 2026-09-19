@@ -21,7 +21,7 @@ platform/jenkins/jcasc/jenkins.yaml
 lab-ci-runner / lab-cd-runner
 ```
 
-The agent image contains the tools required by pipeline steps. BuildKit itself remains a separate privileged container in the CI Pod.
+The agent image contains the tools required by pipeline steps. BuildKit itself is a separate rootless (uid 1000, unprivileged) container in the CI Pod.
 
 ## Change procedure
 

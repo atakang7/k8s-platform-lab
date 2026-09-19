@@ -102,7 +102,7 @@ node-3 host state
 
 /var/lib/lab-ci/m2       ─────► Maven cache
 /var/lib/lab-ci/trivy    ─────► Trivy cache
-/var/lib/lab-ci/buildkit ─────► BuildKit state
+/var/lib/lab-ci/buildkit-rootless ► BuildKit state
                                             │
                                             ▼
                                    lab-ci-runner Pod

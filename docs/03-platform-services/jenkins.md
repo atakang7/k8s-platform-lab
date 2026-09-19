@@ -100,7 +100,7 @@ node-3 host state
 
 /var/lib/lab-ci/m2       ─────► ci-tools:/root/.m2
 /var/lib/lab-ci/trivy    ─────► ci-tools:/root/.cache/trivy
-/var/lib/lab-ci/buildkit ─────► buildkit:/var/lib/buildkit
+/var/lib/lab-ci/buildkit-rootless ─────► buildkit:/home/user/.local/share/buildkit
 
                                   mounted into
                                       │

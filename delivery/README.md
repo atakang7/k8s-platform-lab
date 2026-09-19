@@ -57,7 +57,7 @@ Persistent node-local caches on `node-3`:
 
 - Maven: `/var/lib/lab-ci/m2`
 - Trivy: `/var/lib/lab-ci/trivy`
-- BuildKit: `/var/lib/lab-ci/buildkit`
+- BuildKit (rootless, uid 1000): `/var/lib/lab-ci/buildkit-rootless`
 
 Trivy is report-only by default because `TRIVY_EXIT_CODE` defaults to `0`. The CycloneDX SBOM is still archived before publication.
 
