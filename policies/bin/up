@@ -20,8 +20,8 @@ pass() {
   printf 'PASS | %s\n' "$1"
 }
 
-# The digest desired in ENVIRONMENT's state/<name>.yaml, recorded there by
-# delivery. Admission policy is cluster-wide, so the operator chooses which
+# The image digest desired in ENVIRONMENT's state/<name>.yaml, recorded there
+# by delivery. Admission policy is cluster-wide, so the operator chooses which
 # environment's digest this cluster runs.
 resolve_state_digest() {
   local name="$1"
@@ -36,11 +36,11 @@ path, name = sys.argv[1:]
 with open(path, encoding="utf-8") as source:
     state = yaml.safe_load(source)
 
-digests = state.get("digests") if isinstance(state, dict) else None
-if not isinstance(digests, dict) or name not in digests:
-    raise SystemExit(f"{path}: digests has no entry for {name}")
+services = state.get("services") if isinstance(state, dict) else None
+if not isinstance(services, dict) or name not in services:
+    raise SystemExit(f"{path}: services has no entry for {name}")
 
-print(digests[name] or "")
+print((services[name] or {}).get("image") or "")
 PY
 }
 

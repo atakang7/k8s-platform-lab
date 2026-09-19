@@ -13,8 +13,8 @@ WORK_DIRECTORY="$(mktemp -d)"
 readonly WORK_DIRECTORY
 trap 'rm -rf -- "${WORK_DIRECTORY}"' EXIT
 
-# shellcheck source=registry-login.sh
-source "${SCRIPT_DIRECTORY}/registry-login.sh"
+# shellcheck source=registry.sh
+source "${SCRIPT_DIRECTORY}/registry.sh"
 
 read_scanned_digest() {
   local manifest_count

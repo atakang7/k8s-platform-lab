@@ -5,7 +5,7 @@
 | Path | Purpose |
 |---|---|
 | `pipeline/` | Jenkins shared library `lab-delivery`, loaded by JCasC |
-| `pipeline/vars/servicePipeline.groovy` | CI for one service; records main's digests in `state/dev.yaml` |
+| `pipeline/vars/servicePipeline.groovy` | CI for one service; records main's releases in `state/dev.yaml` |
 | `pipeline/vars/deployPipeline.groovy` | the `deploy` job: releases every environment to its `state/<name>.yaml` |
 | `pipeline/resources/lab/delivery/` | the step scripts the pipelines run |
 | `Jenkinsfile.deploy` | `deploy` job entry point |
@@ -14,7 +14,7 @@
 
 ## How it fits together
 
-Jenkins runs four multibranch jobs over this one repository, all on the `lab-delivery` library. The jobs are defined in [`platform/jenkins/jcasc/jenkins.yaml`](../platform/jenkins/jcasc/jenkins.yaml) (`services` list, `platform`, `deploy`). Jobs never call each other: service CI commits a digest to `state/dev.yaml`, and that commit is what starts the deploy job.
+Jenkins runs four multibranch jobs over this one repository, all on the `lab-delivery` library. The jobs are defined in [`platform/jenkins/jcasc/jenkins.yaml`](../platform/jenkins/jcasc/jenkins.yaml) (`services` list, `platform`, `deploy`). Jobs never call each other: service CI commits a release to `state/dev.yaml`, and that commit is what starts the deploy job.
 
 ```text
                      GitHub: atakang7/lab
@@ -31,8 +31,8 @@ Jenkins runs four multibranch jobs over this one repository, all on the `lab-del
      Validate · Build · Scan     ct lint (PR, charts/)  Verify: promoted from the
              │ main only         publish charts (main)  previous env · chart dry-run
              ▼                                                 │ main only
-     Publish image                                             ▼
-     commit digest ──► state/dev.yaml ───────────────► Deploy dev → stage → prod
+     Publish image + chart                                     ▼
+     commit release ─► state/dev.yaml ───────────────► Deploy dev → stage → prod
                                                                ▲
      promotion PR ───► state/stage.yaml, state/prod.yaml ──────┘
      (code-owner review)                                       │
@@ -55,7 +55,7 @@ Base charts live in [`charts/`](../charts/), and namespaces and deploy identitie
    ```
 
 3. One entry in the `services` list in [`platform/jenkins/jcasc/jenkins.yaml`](../platform/jenkins/jcasc/jenkins.yaml). It creates a GitHub multibranch job.
-4. One `<chart name>: null` entry under `digests` in every [`state/<environment>.yaml`](../state/).
+4. One `<chart name>: null` entry under `services` in every [`state/<environment>.yaml`](../state/).
 5. If Jenkins releases it, one entry under `releases` in [`environments.yaml`](../environments.yaml). Services not listed there (the admission webhook) are built and recorded, and the operator installs them.
 
 The chart name is the release name and the state entry, and the chart's `image.repository` is the only repository its releases accept. Per-environment values go in `values-<environment>.yaml` next to `values.yaml`.
@@ -71,15 +71,15 @@ branch or pull request ─► service job ─► changeset under `path`? ── 
         Scan       Trivy + CycloneDX SBOM of that image
         ── main only ──
         Publish    push the scanned image unchanged; digest must match
-                   commit the digest to state/dev.yaml on main
+                   publish the chart as <Chart.yaml version>-sha-<commit>
+                   commit {chart, image} to state/dev.yaml on main
                                │
                                ▼
 state/ changed ─► deploy job
-        Verify     every digest was in the previous environment first
-                   image revision label is a commit in this branch's history
-                   dry-run of that commit's chart with the environment's values
+        Verify     every image was in the previous environment first
+                   dry-run of the recorded chart with the environment's values
         ── main only ──
-        Deploy     dev, stage, prod in order; releases already on their digest are skipped
+        Deploy     dev, stage, prod in order; releases already on their chart and image are skipped
                    mint 15-minute deployer token
                    helm upgrade --wait --rollback-on-failure
 ```
@@ -88,7 +88,7 @@ Everything here is native Jenkins and Git:
 - **Jobs:** GitHub Branch Source builds every branch and pull request and posts the GitHub commit status.
 - **Only relevant changes run:** declarative `when { changeset }`. A new multibranch job has no changelog, so its first build runs the relevant bootstrap checks instead of silently skipping them.
 - **Only `main` publishes and deploys:** `when { branch 'main' }`.
-- **Release identity:** the image digest. CD reads the image's `org.opencontainers.image.revision` label and takes the chart from that commit, so a digest always ships with the chart it was tested with.
+- **Release identity:** a chart version and an image digest, published together by one CI run. The state records both, so an image always ships with the chart it was tested with.
 
 ## Identities
 
@@ -102,15 +102,15 @@ No cluster credential is stored in Jenkins.
 
 ## Environments
 
-[`environments.yaml`](../environments.yaml) lists the environments in promotion order (`dev` → `stage` → `prod`) with their namespaces, plus the chart registry and the releases Jenkins owns. What runs in an environment is its [`state/<name>.yaml`](../state/): one digest per service, `null` until first released. The Git history of those files is the deploy history.
+[`environments.yaml`](../environments.yaml) lists the environments in promotion order (`dev` → `stage` → `prod`) with their namespaces, plus the chart registry and the releases Jenkins owns. What runs in an environment is its [`state/<name>.yaml`](../state/): one `{chart, image}` release per service, `null` until first released. The Git history of those files is the deploy history.
 
 | To | Do |
 |---|---|
-| deploy to dev | merge a service change; CI commits the new digest to `state/dev.yaml` |
-| promote | pull request copying a digest into `state/stage.yaml` or `state/prod.yaml`; the deploy job verifies it, a code owner ([`.github/CODEOWNERS`](../.github/CODEOWNERS)) approves it |
+| deploy to dev | merge a service change; CI commits the new release to `state/dev.yaml` |
+| promote | pull request copying a release into `state/stage.yaml` or `state/prod.yaml`; the deploy job verifies it, a code owner ([`.github/CODEOWNERS`](../.github/CODEOWNERS)) approves it |
 | roll back | revert the state commit |
 
-A failed deploy rolls itself back and fails the build. The state file still names the new digest until someone reverts or fixes it.
+A failed deploy rolls itself back and fails the build. The state file still names the new release until someone reverts or fixes it.
 
 Jenkins pushes state commits to `main` with `github-creds`. That token needs contents write access, and branch protection must allow the push. The promotion gate holds only while `main`'s branch protection requires code-owner review; without it, anyone who can merge can deploy to prod.
 

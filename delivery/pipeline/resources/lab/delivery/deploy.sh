@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Releases one immutable service image into one environment, with that
-# environment's values (values-<ENVIRONMENT>.yaml when the chart has one). The
-# chart is the one from the image's own commit, so a release already running
-# the digest is left alone. The CD Pod itself has no deploy rights: it mints a
+# Releases one recorded release (chart CHART_VERSION, image IMAGE_DIGEST) into
+# one environment, with that environment's values (values-<ENVIRONMENT>.yaml
+# when the chart has one). A release already running both is left alone. The CD Pod itself has no deploy rights: it mints a
 # 15-minute token for the namespace-scoped deployer identity, builds a
 # temporary kubeconfig around that token, and discards it after the release.
 set -Eeuo pipefail
@@ -16,13 +15,12 @@ readonly DEPLOYER_TOKEN_DURATION=15m
 trap 'rm -rf -- "${WORK_DIRECTORY}"' EXIT
 umask 077
 
-# shellcheck source=registry-login.sh
-source "${SCRIPT_DIRECTORY}/registry-login.sh"
+# shellcheck source=registry.sh
+source "${SCRIPT_DIRECTORY}/registry.sh"
 
 prepare_chart() {
   registry_login "${WORK_DIRECTORY}" "${CHART_REF}"
-
-  helm dependency build "${CHART}" >/dev/null
+  release_chart "${WORK_DIRECTORY}"
 }
 
 write_deployer_kubeconfig() {
@@ -58,9 +56,12 @@ KUBECONFIG
 }
 
 release_is_current() {
+  local deployed_chart
   local deployed_digest
 
-  [[ -n "$(helm list --deployed --filter "^${RELEASE}\$" --short)" ]] || return 1
+  deployed_chart="$(helm list --deployed --filter "^${RELEASE}\$" --output json |
+    jq -r '.[0].chart // ""')"
+  [[ "${deployed_chart}" == "${RELEASE}-${CHART_VERSION}" ]] || return 1
   deployed_digest="$(helm get values "${RELEASE}" --output json |
     jq -r '.image.digest // ""')"
   [[ "${deployed_digest}" == "${IMAGE_DIGEST}" ]]
@@ -96,11 +97,11 @@ main() {
   export HELM_DRIVER=configmap
 
   if release_is_current; then
-    printf 'PASS | %s already runs %s in %s\n' "${RELEASE}" "${IMAGE_DIGEST}" "${ENVIRONMENT}"
+    printf 'PASS | %s already runs %s in %s\n' "${RELEASE}" "${CHART_VERSION}" "${ENVIRONMENT}"
     return
   fi
 
-  printf 'WAIT | releasing %s %s to %s\n' "${RELEASE}" "${IMAGE_DIGEST}" "${ENVIRONMENT}"
+  printf 'WAIT | releasing %s %s to %s\n' "${RELEASE}" "${CHART_VERSION}" "${ENVIRONMENT}"
   deploy_release
 }
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Server-side dry-run of a service chart in one environment's namespace, with
 # that environment's values (values-<ENVIRONMENT>.yaml when the chart has one):
-# schema validation plus the admission chain. CI runs it before the image
-# exists, so without IMAGE_DIGEST a placeholder digest stands in.
+# schema validation plus the admission chain. CI dry-runs its local CHART before
+# the image exists, so a placeholder digest stands in; the deploy job dry-runs
+# the recorded release (CHART_VERSION and IMAGE_DIGEST).
 set -Eeuo pipefail
 
 readonly PLACEHOLDER_IMAGE_DIGEST='sha256:0000000000000000000000000000000000000000000000000000000000000000'
@@ -12,13 +13,12 @@ WORK_DIRECTORY="$(mktemp -d)"
 readonly WORK_DIRECTORY
 trap 'rm -rf -- "${WORK_DIRECTORY}"' EXIT
 
-# shellcheck source=registry-login.sh
-source "${SCRIPT_DIRECTORY}/registry-login.sh"
+# shellcheck source=registry.sh
+source "${SCRIPT_DIRECTORY}/registry.sh"
 
 prepare_chart() {
   registry_login "${WORK_DIRECTORY}" "${CHART_REF}"
-
-  helm dependency build "${CHART}" >/dev/null
+  release_chart "${WORK_DIRECTORY}"
 }
 
 render_release() {

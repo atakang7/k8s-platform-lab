@@ -1,7 +1,7 @@
 // CI for one service in a GitHub multibranch job. Every branch and pull
 // request validates, builds, tests, and scans. main additionally publishes the
-// exact scanned artifact and commits its digest to the first environment's
-// state file; the deploy job releases it from there.
+// exact scanned image and its chart, and commits both to the first
+// environment's state file; the deploy job releases them from there.
 //
 //   chart:   service Helm chart; its name is the service's state entry
 //   context: BuildKit context containing the Dockerfile
@@ -35,11 +35,13 @@ def call(Map args) {
                         env.RELEASE = service.name
                         env.IMAGE_REPOSITORY = service.repository
                         // Services the deploy job does not release are only linted.
-                        env.RELEASED = config.releases.containsKey(service.name).toString()
+                        env.RELEASED = config.releases.contains(service.name).toString()
                         env.ENVIRONMENT = first.name
                         env.NAMESPACE = first.namespace
                         env.CHART_REF = config.chartRegistry
                         env.COMMIT_SHA = checkoutState.GIT_COMMIT
+                        // One chart version per commit, published with the image it was tested with.
+                        env.CHART_VERSION = "${service.version}-sha-${checkoutState.GIT_COMMIT.take(12)}"
                         env.SOURCE_URL = checkoutState.GIT_URL
 
                         delivery.installScripts()
@@ -118,12 +120,15 @@ def call(Map args) {
                                     )
                                 ]) {
                                     sh '.delivery/publish-image.sh'
+                                    withEnv(["CHART_DIR=${args.chart}"]) {
+                                        sh '.delivery/publish-chart.sh'
+                                    }
                                 }
                             }
                             script {
                                 String digest = readFile('pushed.digest').trim()
-                                delivery.recordDigest(env.ENVIRONMENT, env.RELEASE, digest)
-                                currentBuild.description = "${env.RELEASE} ${digest.take(19)} → ${env.ENVIRONMENT}"
+                                delivery.recordRelease(env.ENVIRONMENT, env.RELEASE, env.CHART_VERSION, digest)
+                                currentBuild.description = "${env.RELEASE} ${env.CHART_VERSION} → ${env.ENVIRONMENT}"
                             }
                         }
                     }

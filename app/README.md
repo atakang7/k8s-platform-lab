@@ -41,7 +41,7 @@ make container-validate
 
 `Dockerfile` is multi-stage. The final image contains the application JAR and Java runtime, not Maven, source code, or compiler tooling. The runtime process uses UID/GID `10001` and does not require root.
 
-Releases are identified by registry digest. `chart/` inherits the platform base chart ([`charts/service`](../charts/service/README.md)); `chart/values.yaml` holds this app's settings, and delivery sets the digest on every release.
+Releases are identified by chart version and registry digest, published together by CI. `chart/` inherits the platform base chart ([`charts/service`](../charts/service/README.md)); `chart/values.yaml` holds this app's settings, and delivery sets the digest on every release.
 
 ## Deployment contract
 

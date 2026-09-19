@@ -1,6 +1,7 @@
 # shellcheck shell=bash
-# Sourced. The one way delivery authenticates to registries: Helm (charts) and
-# skopeo (images) both read the Docker-format auth file written here.
+# Sourced. The one way delivery reaches registries: Helm (charts) and skopeo
+# (images) both read the Docker-format auth file registry_login writes, and
+# release_chart is the one way a step gets the chart it releases.
 #
 #   registry_login <state directory> <reference>...
 #
@@ -38,4 +39,26 @@ registry_login() {
       '{auths: ($ARGS.positional | map({key: ., value: {auth: $auth}}) | from_entries)}' \
       --args "${hosts[@]}" > "${REGISTRY_AUTH_FILE}"
   )
+}
+
+#   release_chart <state directory>
+#
+# Points CHART at the chart RELEASE is released with. A local CHART directory
+# (CI, before anything is published) gets its dependencies built; otherwise the
+# chart is pulled at CHART_VERSION, the version CI published with the image.
+# Call registry_login first.
+
+release_chart() {
+  local state_directory="$1"
+
+  if [[ -n "${CHART:-}" ]]; then
+    helm dependency build "${CHART}" >/dev/null
+    return
+  fi
+
+  helm pull "${CHART_REF}/${RELEASE}" \
+    --version "${CHART_VERSION}" \
+    --untar \
+    --destination "${state_directory}/chart"
+  CHART="${state_directory}/chart/${RELEASE}"
 }

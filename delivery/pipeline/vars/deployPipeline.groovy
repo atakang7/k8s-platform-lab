@@ -34,11 +34,11 @@ def call() {
                                 Map config = delivery.environments()
                                 env.CHART_REF = config.chartRegistry
 
-                                for (Map recorded in delivery.recordedDigests(config)) {
+                                for (Map recorded in delivery.recordedReleases(config)) {
                                     stage("Verify ${recorded.name} in ${recorded.target.name}") {
                                         delivery.requirePromoted(recorded)
-                                        if (config.releases.containsKey(recorded.name)) {
-                                            release(config, recorded, '.delivery/validate-release.sh')
+                                        if (config.releases.contains(recorded.name)) {
+                                            release(recorded, '.delivery/validate-release.sh')
                                         }
                                     }
                                 }
@@ -60,10 +60,10 @@ def call() {
                                 Map config = delivery.environments()
                                 env.CHART_REF = config.chartRegistry
 
-                                for (Map recorded in delivery.recordedDigests(config)) {
-                                    if (config.releases.containsKey(recorded.name)) {
+                                for (Map recorded in delivery.recordedReleases(config)) {
+                                    if (config.releases.contains(recorded.name)) {
                                         stage("Deploy ${recorded.name} to ${recorded.target.name}") {
-                                            release(config, recorded, '.delivery/deploy.sh')
+                                            release(recorded, '.delivery/deploy.sh')
                                         }
                                     }
                                 }
@@ -76,17 +76,9 @@ def call() {
     }
 }
 
-// Runs one release step (dry-run or deploy) for one recorded digest, with the
-// chart from the commit the image was built from.
-private void release(Map config, Map recorded, String step) {
-    String name = recorded.name
-    String digest = recorded.digest
-    Map target = recorded.target
-    Map service = delivery.service(config.releases[name])
-    if (service.name != name) {
-        error("environments.yaml: release ${name} points at chart ${service.name}")
-    }
-
+// Runs one release step (dry-run or deploy) for one recorded release: the
+// chart version and image digest CI published together.
+private void release(Map recorded, String step) {
     withCredentials([
         usernamePassword(
             credentialsId: 'dockerhub-creds',
@@ -94,20 +86,12 @@ private void release(Map config, Map recorded, String step) {
             passwordVariable: 'REGISTRY_PASSWORD'
         )
     ]) {
-        String revision
-        withEnv(["IMAGE_REPOSITORY=${service.repository}", "IMAGE_DIGEST=${digest}"]) {
-            container('ci-tools') {
-                revision = sh(returnStdout: true, script: '.delivery/image-revision.sh').trim()
-            }
-        }
-
-        String chart = delivery.chartAt(revision, config.releases[name])
         withEnv([
-            "CHART=${chart}",
-            "RELEASE=${name}",
-            "NAMESPACE=${target.namespace}",
-            "ENVIRONMENT=${target.name}",
-            "IMAGE_DIGEST=${digest}"
+            "RELEASE=${recorded.name}",
+            "CHART_VERSION=${recorded.chart}",
+            "IMAGE_DIGEST=${recorded.image}",
+            "NAMESPACE=${recorded.target.namespace}",
+            "ENVIRONMENT=${recorded.target.name}"
         ]) {
             container('ci-tools') {
                 sh(step)
