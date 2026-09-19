@@ -1,6 +1,6 @@
 # Policies
 
-`policies/` owns admission controls that protect Kubernetes desired state before it is persisted.
+`policies/` owns admission controls that reject invalid Kubernetes desired state before it is persisted.
 
 ## Resource request policy
 
@@ -14,25 +14,19 @@ Kubernetes API server
            │ AdmissionReview v1 · HTTPS
            ▼
 resource-requests-webhook
-           │
+           │ inspect containers + init containers
       ┌────┴────┐
       │         │
       ▼         ▼
-all regular   CPU or memory
-containers    request missing
-valid            │
-      │          ▼
-      ▼         deny
-     allow        │
-      │           ▼
-      ▼       reject write
-continue
-admission
+ CPU + RAM   missing either
+      │         │
+      ▼         ▼
+    allow      deny
 ```
 
-The policy applies on CREATE and UPDATE. `failurePolicy: Fail` rejects an in-scope write when the webhook cannot be reached instead of silently bypassing validation.
+The webhook applies only to namespaces carrying `delivery.lab.test/environment`. The release namespace and Kubernetes system namespaces are also excluded explicitly by namespace name, so accidentally adding the environment label cannot deadlock the webhook or core control-plane workloads.
 
-`policy-system` and Kubernetes system namespaces are excluded so the webhook cannot deadlock its own installation or core control-plane objects.
+`failurePolicy: Fail` makes in-scope Deployment writes fail closed when the webhook cannot answer.
 
 ## Build and test
 
@@ -41,41 +35,40 @@ cd policies/resource-requests-webhook
 go test ./...
 ```
 
-The runtime is a static Go binary on a distroless non-root image.
+The builder and distroless runtime bases are pinned by digest. The resulting webhook image is deployed only by immutable digest.
 
-## Deploy one policy
+## Deploy
 
-Deployments are non-interactive and use immutable image digests. Supply the
-digest on the first install; subsequent runs reuse the installed digest unless
-an explicit replacement is supplied.
+The first install needs the published image digest. Later reconciliations reuse the currently installed digest unless an explicit replacement is supplied.
 
 ```bash
 RESOURCE_REQUESTS_WEBHOOK_IMAGE_DIGEST=sha256:<published-digest> \
   make policy-up POLICY=resource-requests-webhook
 
-# Idempotent reconciliation after the first successful install.
 make policy-up POLICY=resource-requests-webhook
 ```
 
-`make policies-up` deploys every registered policy. Failed Helm upgrades roll
-back automatically instead of leaving a partially reconciled admission path.
+`make policies-up` reconciles every registered policy. Helm waits for readiness and rolls a failed upgrade back.
+
+### Serving TLS ownership
+
+The Helm release owns one private serving CA and certificate in `resource-requests-webhook-tls`.
+
+```text
+first install ──► generate CA + service certificate ──► Secret + caBundle
+upgrade       ──► reuse existing Secret              ──► stable caBundle
+delete Secret ──► next reconciliation generates a new serving identity
+```
+
+The certificate covers the webhook Service DNS names. Policy smoke verifies that the Secret CA and `ValidatingWebhookConfiguration.caBundle` are identical.
 
 ## Verify
-
-Each policy owns a smoke contract. It checks rollout and registration, then
-uses server-side dry-run so the real admission chain executes without
-persisting test workloads.
 
 ```bash
 make policy-smoke POLICY=resource-requests-webhook
 make policies-smoke
 ```
 
-```text
-valid Deployment       ──► accepted
-missing CPU request    ──► rejected
-missing memory request ──► rejected
-existing app manifest  ──► accepted
-```
+The smoke contract verifies rollout, immutable image identity, replica spread, serving TLS, fail-closed webhook registration, namespace scope, and real server-side admission decisions for regular and init containers.
 
 This webhook enforces one invariant only. ResourceQuota, LimitRange, PriorityClass, PDBs, and autoscaling remain separate Kubernetes controls.

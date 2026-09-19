@@ -28,6 +28,10 @@ podDisruptionBudget:
 
 spreadAcrossNodes: true
 
+admission:
+  environmentLabel: delivery.lab.test/environment
+  additionalExcludedNamespaces: []
+
 nodeSelector: {}
 tolerations: []
 affinity: {}

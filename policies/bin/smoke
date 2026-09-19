@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly root
-readonly environment_label=delivery.lab.test/environment
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly ROOT
+readonly POLICY_NAMESPACE=policy-system
+readonly POLICY_NAME=resource-requests-webhook
+readonly ENVIRONMENT_LABEL=delivery.lab.test/environment
+readonly KUBERNETES_NAMESPACE_LABEL=kubernetes.io/metadata.name
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
@@ -20,16 +23,121 @@ pass() {
 
 managed_namespaces() {
   kubectl get namespaces \
-    -l "${environment_label}" \
+    --selector "${ENVIRONMENT_LABEL}" \
     -o json |
-    jq -r '.items[].metadata.name'
+    jq -r '
+      .items[].metadata.name
+      | select(. != "kube-node-lease")
+      | select(. != "kube-public")
+      | select(. != "kube-system")
+      | select(. != "policy-system")
+    ' |
+    sort
+}
+
+check_webhook_deployment() {
+  local deployment
+  local pods
+
+  kubectl -n "${POLICY_NAMESPACE}" rollout status \
+    "deployment/${POLICY_NAME}" \
+    --timeout=90s >/dev/null
+
+  deployment="$(kubectl -n "${POLICY_NAMESPACE}" get deployment "${POLICY_NAME}" -o json)"
+
+  jq -e '
+    .spec.replicas == 2
+    and .status.readyReplicas == 2
+    and .spec.template.spec.automountServiceAccountToken == false
+    and (.spec.template.spec.containers | length == 1)
+    and (.spec.template.spec.containers[0].image | test("@sha256:[0-9a-f]{64}$"))
+  ' <<< "${deployment}" >/dev/null ||
+    fail 'policy Deployment replicas, service-account isolation, or immutable image invariant is wrong'
+
+  pods="$(kubectl -n "${POLICY_NAMESPACE}" get pods \
+    -l "app.kubernetes.io/instance=${POLICY_NAME}" \
+    -o json)"
+
+  jq -e '
+    [.items[] | select(.status.phase == "Running") | .spec.nodeName] as $nodes
+    | ($nodes | length == 2)
+      and ($nodes | unique | length == 2)
+  ' <<< "${pods}" >/dev/null ||
+    fail 'policy replicas are not Running on two distinct nodes'
+}
+
+check_webhook_registration() {
+  local configuration
+
+  configuration="$(kubectl get validatingwebhookconfiguration "${POLICY_NAME}" -o json)"
+
+  jq -e \
+    --arg environment_label "${ENVIRONMENT_LABEL}" \
+    --arg namespace_label "${KUBERNETES_NAMESPACE_LABEL}" \
+    --arg policy_namespace "${POLICY_NAMESPACE}" '
+      (.webhooks | length == 1)
+      and (.webhooks[0].failurePolicy == "Fail")
+      and (.webhooks[0].sideEffects == "None")
+      and (.webhooks[0].timeoutSeconds == 5)
+      and (.webhooks[0].clientConfig.service.name == "resource-requests-webhook")
+      and (.webhooks[0].clientConfig.service.namespace == $policy_namespace)
+      and (.webhooks[0].clientConfig.service.path == "/validate")
+      and (.webhooks[0].clientConfig.caBundle | length > 0)
+      and (
+        .webhooks[0].rules
+        | any(
+            (.operations | sort) == ["CREATE", "UPDATE"]
+            and .apiGroups == ["apps"]
+            and .apiVersions == ["v1"]
+            and .resources == ["deployments"]
+          )
+      )
+      and (
+        .webhooks[0].namespaceSelector.matchExpressions
+        | any(.key == $environment_label and .operator == "Exists")
+      )
+      and (
+        .webhooks[0].namespaceSelector.matchExpressions
+        | any(
+            .key == $namespace_label
+            and .operator == "NotIn"
+            and (.values | sort) == ["kube-node-lease", "kube-public", "kube-system", "policy-system"]
+          )
+      )
+    ' <<< "${configuration}" >/dev/null ||
+    fail 'ValidatingWebhookConfiguration does not match the fail-closed policy contract'
+}
+
+check_serving_tls() {
+  local secret_ca
+  local webhook_ca
+
+  secret_ca="$(kubectl -n "${POLICY_NAMESPACE}" get secret "${POLICY_NAME}-tls" \
+    -o jsonpath='{.data.ca\.crt}')"
+  webhook_ca="$(kubectl get validatingwebhookconfiguration "${POLICY_NAME}" \
+    -o jsonpath='{.webhooks[0].clientConfig.caBundle}')"
+
+  [[ -n "${secret_ca}" && "${secret_ca}" == "${webhook_ca}" ]] ||
+    fail 'serving CA does not match the webhook caBundle'
+
+  kubectl -n "${POLICY_NAMESPACE}" get secret "${POLICY_NAME}-tls" -o json |
+    jq -e '
+      .type == "kubernetes.io/tls"
+      and (.data["ca.crt"] | length > 0)
+      and (.data["tls.crt"] | length > 0)
+      and (.data["tls.key"] | length > 0)
+    ' >/dev/null ||
+    fail 'serving TLS Secret is incomplete'
 }
 
 admission_check() {
-  local namespace="$1" expectation="$2" requests="$3"
-  local output status=0
+  local namespace="$1"
+  local expectation="$2"
+  local requests="$3"
+  local output
+  local status=0
 
-  output="$(kubectl apply --dry-run=server -f - 2>&1 <<EOF
+  output="$(kubectl apply --dry-run=server -f - 2>&1 <<EOF_DEPLOYMENT
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -50,68 +158,131 @@ spec:
           image: registry.k8s.io/pause:3.10.1
           resources:
             requests: ${requests}
-EOF
+EOF_DEPLOYMENT
 )" || status=$?
 
   if [[ "${expectation}" == allow && "${status}" -eq 0 ]]; then
     return
   fi
 
-  if [[ "${expectation}" == deny && "${status}" -ne 0 && "${output}" == *denied* ]]; then
+  if [[ "${expectation}" == deny && "${status}" -ne 0 && \
+    "${output}" == *'must specify non-zero CPU and memory requests'* ]]; then
     return
   fi
 
   fail "resource-requests-webhook expected ${expectation} in ${namespace}, got: ${output}"
 }
 
+init_container_admission_check() {
+  local namespace="$1"
+  local output
+  local status=0
+
+  output="$(kubectl apply --dry-run=server -f - 2>&1 <<EOF_DEPLOYMENT
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resource-requests-policy-init-smoke
+  namespace: ${namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: resource-requests-policy-init-smoke
+  template:
+    metadata:
+      labels:
+        app: resource-requests-policy-init-smoke
+    spec:
+      initContainers:
+        - name: setup
+          image: registry.k8s.io/pause:3.10.1
+          resources:
+            requests: {memory: 16Mi}
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10.1
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+EOF_DEPLOYMENT
+)" || status=$?
+
+  if [[ "${status}" -ne 0 && \
+    "${output}" == *'init container "setup" must specify non-zero CPU and memory requests'* ]]; then
+    return
+  fi
+
+  fail "resource-requests-webhook did not reject the invalid init container in ${namespace}: ${output}"
+}
+
 smoke_resource_requests_webhook() {
   local namespace
   local -a namespaces=()
 
-  phase 'Checking resource-requests-webhook rollout and registration'
-  kubectl -n policy-system rollout status \
-    deployment/resource-requests-webhook --timeout=90s
-  kubectl get validatingwebhookconfiguration resource-requests-webhook >/dev/null
+  phase 'checking resource-requests-webhook runtime and registration'
+  check_webhook_deployment
+  check_webhook_registration
+  check_serving_tls
 
   mapfile -t namespaces < <(managed_namespaces)
   [[ "${#namespaces[@]}" -gt 0 ]] ||
-    fail "no namespace carries the ${environment_label} label"
+    fail "no namespace carries the ${ENVIRONMENT_LABEL} label"
 
-  phase 'Exercising resource request admission decisions'
+  phase 'exercising resource request admission decisions'
   for namespace in "${namespaces[@]}"; do
     admission_check "${namespace}" allow '{cpu: 10m, memory: 16Mi}'
     admission_check "${namespace}" deny '{memory: 16Mi}'
     admission_check "${namespace}" deny '{cpu: 10m}'
+    init_container_admission_check "${namespace}"
   done
 
   pass 'resource-requests-webhook enforces CPU and memory requests in managed environments'
 }
 
 smoke_policy() {
-  case "$1" in
+  local policy="$1"
+
+  case "${policy}" in
     resource-requests-webhook)
       smoke_resource_requests_webhook
       ;;
     *)
-      fail "unknown policy '$1'; supported policies: resource-requests-webhook"
+      fail "unknown policy '${policy}'; supported policies: resource-requests-webhook"
       ;;
   esac
 }
 
-main() {
-  local requested="${1:-}"
+cluster_smoke() {
+  local requested="$1"
 
-  [[ -n "${requested}" ]] ||
-    fail 'policy name is required; run make policy-smoke POLICY=resource-requests-webhook'
-
-  if [[ "${requested}" != --cluster ]]; then
-    "${root}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster "${requested}"
-    return
+  if [[ "${requested}" == all ]]; then
+    requested=resource-requests-webhook
   fi
 
-  requested="${2:-}"
-  [[ "${requested}" == all ]] && requested=resource-requests-webhook
   smoke_policy "${requested}"
+}
+
+operator_smoke() {
+  local requested="$1"
+
+  "${ROOT}/infra/edge/lib/with-kubeconfig.sh" \
+    "$0" --cluster "${requested}"
+}
+
+main() {
+  case "${1:-}" in
+    --cluster)
+      [[ "$#" -eq 2 ]] || fail 'cluster mode requires exactly one policy name'
+      cluster_smoke "$2"
+      ;;
+    '')
+      fail 'policy name is required; run make policy-smoke POLICY=resource-requests-webhook'
+      ;;
+    *)
+      [[ "$#" -eq 1 ]] || fail 'policy smoke accepts exactly one policy name'
+      operator_smoke "$1"
+      ;;
+  esac
 }
 
 main "$@"

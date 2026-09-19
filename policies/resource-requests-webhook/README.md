@@ -1,6 +1,6 @@
 # Resource request webhook
 
-This component rejects Deployment CREATE/UPDATE requests when any regular container omits either CPU or memory from `resources.requests`.
+This component rejects Deployment CREATE/UPDATE requests when any regular or init container omits a non-zero CPU or memory value from `resources.requests`.
 
 Lifecycle and install: [policies/README.md](../README.md).
 
@@ -14,7 +14,8 @@ Kubernetes API server
            │ AdmissionReview v1 · HTTPS
            ▼
 resource-requests-webhook
-           │ inspect regular containers
+           │ validate resource + operation
+           │ inspect containers + init containers
       ┌────┴────┐
       │         │
       ▼         ▼
@@ -22,13 +23,9 @@ resource-requests-webhook
       │         │
       ▼         ▼
     allow      deny
-      │         │
-      ▼         ▼
-continue     reject write
-admission
 ```
 
-`failurePolicy: Fail` makes the API fail closed for in-scope Deployments if the webhook cannot answer.
+The handler validates that it received the expected `apps/v1` Deployment CREATE/UPDATE request instead of relying only on webhook registration to route correctly. `failurePolicy: Fail` makes the API fail closed for in-scope Deployments if the webhook cannot answer.
 
 ## Test
 
@@ -37,7 +34,7 @@ cd policies/resource-requests-webhook
 go test ./...
 ```
 
-The builder Go version matches `go.mod`. The runtime image is distroless and non-root.
+Tests cover regular containers, init containers, wrong resources, unsupported operations, and empty admission objects.
 
 ## Helm
 
@@ -47,11 +44,11 @@ Chart:
 helm/resource-requests-webhook/
 ```
 
-It creates the Deployment, ClusterIP Service, serving TLS, and `ValidatingWebhookConfiguration`. The Service exposes `443` and targets the webhook HTTPS listener on `8443`.
+It creates the Deployment, ClusterIP Service, private serving CA/certificate, and `ValidatingWebhookConfiguration`. The Service exposes `443` and targets the webhook HTTPS listener on `8443`.
 
-The release namespace and Kubernetes system namespaces are excluded to prevent self-installation/system deadlocks.
+The policy requires the environment label and explicitly excludes its own release namespace plus Kubernetes system namespaces by `kubernetes.io/metadata.name`.
 
-Example install after the image and registry pull Secret exist:
+Example install after publishing the image:
 
 ```bash
 helm upgrade --install resource-requests-webhook \
@@ -64,11 +61,11 @@ helm upgrade --install resource-requests-webhook \
 
 ## Verify
 
-Use `kubectl apply --dry-run=server` so the real API server, Service/TLS path, and admission code execute without persisting test Deployments.
+`policies/bin/smoke` uses `kubectl apply --dry-run=server`, so the real API server, Service/TLS path, and admission code execute without persisting test Deployments.
 
 ```text
-CPU + memory present  ──► accepted
-CPU missing           ──► rejected
-memory missing        ──► rejected
-existing app manifest ──► accepted
+regular CPU + memory present ──► accepted
+regular CPU missing          ──► rejected
+regular memory missing       ──► rejected
+invalid init container       ──► rejected
 ```

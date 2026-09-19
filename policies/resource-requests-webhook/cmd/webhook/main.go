@@ -23,12 +23,21 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 )
 
-const maxRequestBodyBytes = 1 << 20
+const (
+	maxRequestBodyBytes = 1 << 20
+	shutdownTimeout     = 10 * time.Second
+)
 
 var (
 	runtimeScheme = runtime.NewScheme()
 	codecs        = serializer.NewCodecFactory(runtimeScheme)
 	deserializer  = codecs.UniversalDeserializer()
+
+	deploymentResource = metav1.GroupVersionResource{
+		Group:    "apps",
+		Version:  "v1",
+		Resource: "deployments",
+	}
 )
 
 func init() {
@@ -43,7 +52,10 @@ func main() {
 }
 
 func run() error {
-	var tlsCert, tlsKey, port string
+	var tlsCert string
+	var tlsKey string
+	var port string
+
 	flag.StringVar(&tlsCert, "tls-cert", "/etc/webhook/certs/tls.crt", "path to TLS certificate")
 	flag.StringVar(&tlsKey, "tls-key", "/etc/webhook/certs/tls.key", "path to TLS key")
 	flag.StringVar(&port, "port", "8443", "webhook port")
@@ -78,7 +90,7 @@ func run() error {
 		}
 		return fmt.Errorf("serve webhook: %w", err)
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 
 		if err := server.Shutdown(shutdownCtx); err != nil {
@@ -95,7 +107,7 @@ func run() error {
 
 func serveHealthz(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", http.MethodGet)
+		w.Header().Set("Allow", "GET, HEAD")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -140,7 +152,7 @@ func serveValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allowed, reason, validationErr := validateDeployment(review.Request.Object.Raw)
+	allowed, reason, validationErr := validateAdmissionRequest(review.Request)
 	response := &admissionv1.AdmissionResponse{
 		UID:     review.Request.UID,
 		Allowed: allowed && validationErr == nil,
@@ -160,17 +172,26 @@ func serveValidate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func writeJSON(w http.ResponseWriter, value any) {
-	payload, err := json.Marshal(value)
-	if err != nil {
-		http.Error(w, "could not encode response", http.StatusInternalServerError)
-		return
+func validateAdmissionRequest(request *admissionv1.AdmissionRequest) (bool, string, error) {
+	if request.Resource != deploymentResource || request.SubResource != "" {
+		return false, "", fmt.Errorf(
+			"unsupported admission resource %s/%s/%s subresource %q",
+			request.Resource.Group,
+			request.Resource.Version,
+			request.Resource.Resource,
+			request.SubResource,
+		)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if _, err := w.Write(payload); err != nil {
-		log.Printf("write response: %v", err)
+	if request.Operation != admissionv1.Create && request.Operation != admissionv1.Update {
+		return false, "", fmt.Errorf("unsupported admission operation %q", request.Operation)
 	}
+
+	if len(request.Object.Raw) == 0 {
+		return false, "", errors.New("admission object is empty")
+	}
+
+	return validateDeployment(request.Object.Raw)
 }
 
 func validateDeployment(raw []byte) (bool, string, error) {
@@ -205,4 +226,17 @@ func validateContainers(kind string, containers []corev1.Container) (bool, strin
 	}
 
 	return true, ""
+}
+
+func writeJSON(w http.ResponseWriter, value any) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		http.Error(w, "could not encode response", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(payload); err != nil {
+		log.Printf("write response: %v", err)
+	}
 }
