@@ -37,7 +37,7 @@ source Deployment
       │
       + immutable IMAGE_REF
       ▼
-kubectl set image --local
+kubectl patch --local (app container image)
       │
       ▼
 kubectl apply

@@ -185,7 +185,7 @@ Ansible applies the runtime ConfigMap, Service, and Ingress, then renders the De
 immutable IMAGE_REF
        │
        ▼
-kubectl set image --local
+kubectl patch --local (app container image)
        │ renders Deployment YAML only
        ▼
 kubectl apply

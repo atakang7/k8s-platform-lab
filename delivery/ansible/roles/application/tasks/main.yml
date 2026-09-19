@@ -29,10 +29,13 @@
     chdir: "{{ playbook_dir }}/../.."
   changed_when: true
 
+# kubectl patch, not "kubectl set image": set image --local prints nothing when
+# the image already equals the committed one, which fed an empty stream to apply.
 - name: Render Deployment with immutable image and apply it
   ansible.builtin.shell: |
     set -o pipefail
-    kubectl set image -f app/k8s/deployment.yaml app={{ image_ref | quote }} --local -o yaml \
+    kubectl patch -f app/k8s/deployment.yaml --local --type=strategic -o yaml \
+      -p {{ {'spec': {'template': {'spec': {'containers': [{'name': 'app', 'image': image_ref}]}}}} | to_json | quote }} \
       | kubectl apply -f -
   args:
     executable: /bin/bash
