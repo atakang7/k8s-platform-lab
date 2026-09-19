@@ -36,6 +36,10 @@ metrics:
   interval: 30s
   serviceMonitorLabels:
     release: observability   # label the platform Prometheus selects
+smokeTest:
+  enabled: true
+  path: /           # one real request the service must answer with 2xx after every release
+  image: curlimages/curl:8.22.0@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
 configMaps: {}      # <key>: data, created as <release>-<key>; changes restart Pods
 volumes: []         # rendered with tpl: "{{ .Release.Name }}" works
 volumeMounts: []

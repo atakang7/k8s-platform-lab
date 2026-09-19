@@ -1,6 +1,6 @@
 # service base chart
 
-Library chart for a stateless HTTP service: Deployment, Service, and optional Ingress, ServiceMonitor, ConfigMaps, and PodDisruptionBudget. Apps inherit it instead of copying platform boilerplate.
+Library chart for a stateless HTTP service: Deployment, Service, a Helm smoke test, and optional Ingress, ServiceMonitor, ConfigMaps, and PodDisruptionBudget. Apps inherit it instead of copying platform boilerplate.
 
 A consumer calls the library once:
 
@@ -14,7 +14,7 @@ and pins a published library version in its chart dependency:
 ```yaml
 dependencies:
   - name: service
-    version: 1.1.0
+    version: 1.2.0
     repository: oci://registry-1.docker.io/atakangul
 ```
 
@@ -42,6 +42,17 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 2
 ```
+
+## Smoke test
+
+Every release carries a Helm test that sends one request through the Service to `smokeTest.path` and expects a 2xx answer. Delivery runs it after each deploy and rolls the release back when it fails. Point it at a real endpoint, not only a health check:
+
+```yaml
+smokeTest:
+  path: /api/foos
+```
+
+Further Helm test hooks in the app chart run with it; they are the service's end-to-end tests.
 
 ## Release rule
 

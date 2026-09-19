@@ -60,6 +60,9 @@ metrics:
   enabled: true
   path: /actuator/prometheus
 
+smokeTest:
+  path: /api/foos
+
 configMaps:
   fluent-bit:
     fluent-bit.conf: |

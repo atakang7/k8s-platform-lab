@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Releases one recorded release (app APP_VERSION, image IMAGE_DIGEST) into
 # one environment, with that environment's values (values-<ENVIRONMENT>.yaml
-# when the chart has one). A release already running both is left alone.
+# when the chart has one), then runs the chart's Helm tests (the base chart's
+# smoke test plus the service's own). A failed test rolls the release back to
+# its previous revision and fails. A release already running both is left alone.
 # Kubernetes access is the Pod's own: the deploy job runs each environment
 # under that environment's deploy identity, which can release only there.
 set -Eeuo pipefail
@@ -53,6 +55,25 @@ deploy_release() {
     --history-max 5
 }
 
+# Returns the release to its last good state: the previous revision, or
+# nothing when this was its first install.
+roll_back_release() {
+  if [[ "$(helm history "${RELEASE}" --namespace "${NAMESPACE}" --output json | jq length)" -gt 1 ]]; then
+    helm rollback "${RELEASE}" --namespace "${NAMESPACE}" --wait --timeout 5m
+  else
+    helm uninstall "${RELEASE}" --namespace "${NAMESPACE}" --wait --timeout 5m
+  fi
+}
+
+test_release() {
+  helm test "${RELEASE}" --namespace "${NAMESPACE}" --timeout 5m --logs && return
+
+  printf 'FAIL | %s %s failed its tests in %s; rolling back\n' \
+    "${RELEASE}" "${APP_VERSION}" "${ENVIRONMENT}" >&2
+  roll_back_release
+  exit 1
+}
+
 main() {
   prepare_chart
 
@@ -67,6 +88,8 @@ main() {
 
   printf 'WAIT | releasing %s %s to %s\n' "${RELEASE}" "${APP_VERSION}" "${ENVIRONMENT}"
   deploy_release
+  test_release
+  printf 'PASS | %s %s released and tested in %s\n' "${RELEASE}" "${APP_VERSION}" "${ENVIRONMENT}"
 }
 
 main "$@"

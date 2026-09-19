@@ -17,6 +17,10 @@
 ---
 {{ include "service.servicemonitor" $ctx }}
 {{- end }}
+{{- if $values.smokeTest.enabled }}
+---
+{{ include "service.smoketest" $ctx }}
+{{- end }}
 {{- range $key, $data := $values.configMaps }}
 ---
 apiVersion: v1
@@ -216,4 +220,56 @@ spec:
     - port: http
       path: {{ .Values.metrics.path }}
       interval: {{ .Values.metrics.interval }}
+{{- end }}
+
+{{- /* Helm test: one real request through the Service. Delivery runs
+`helm test` after every release and rolls the release back when it fails.
+Its labels differ from the selector labels so the Service never routes to it. */}}
+{{- define "service.smoketest" -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-smoke-test
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-smoke-test
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: smoke-test
+      image: {{ .Values.smokeTest.image }}
+      args:
+        - --fail
+        - --silent
+        - --show-error
+        - --max-time
+        - "10"
+        - --retry
+        - "3"
+        - --retry-all-errors
+        - http://{{ .Release.Name }}:{{ .Values.service.port }}{{ .Values.smokeTest.path }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {cpu: 100m, memory: 32Mi}
 {{- end }}

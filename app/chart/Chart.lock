@@ -1,6 +1,6 @@
 dependencies:
 - name: service
   repository: oci://registry-1.docker.io/atakangul
-  version: 1.1.0
-digest: sha256:73da9d03c4bd740ef111ba7f11acb55696aec1a98bc628d3ccee746c643a874e
-generated: "2026-09-19T15:39:16.802111454+03:00"
+  version: 1.2.0
+digest: sha256:86f72636269958564470b399d1bd58f6b46a0805eaca0ab895160d6b7af519fc
+generated: "2026-09-19T12:00:00+03:00"
