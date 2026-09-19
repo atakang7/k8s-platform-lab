@@ -11,13 +11,16 @@ def call() {
             buildDiscarder(logRotator(numToKeepStr: '50'))
         }
         stages {
-            // The first build has no changelog to compare, so it must run.
+            // Runs for state changes, and again after any build that did not succeed:
+            // a change is judged against the previous build only, so without the retry a
+            // failed release would never be attempted again. The first build has no
+            // previous build and always runs.
             stage('State') {
                 when {
                     anyOf {
                         changeset 'state/**'
                         changeset 'environments.yaml'
-                        expression { currentBuild.previousBuild == null }
+                        expression { currentBuild.previousBuild?.result != 'SUCCESS' }
                     }
                 }
                 stages {

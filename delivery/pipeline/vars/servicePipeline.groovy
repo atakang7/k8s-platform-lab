@@ -53,12 +53,14 @@ def call(Map args) {
                 }
             }
 
-            // The first build has no changelog to compare, so it must run.
+            // Runs for changes under `path`, and again after any build that did not
+            // succeed: a change is judged against the previous build only, so without the
+            // retry a failed main build would never publish. The first build always runs.
             stage('Service') {
                 when {
                     anyOf {
                         changeset pattern: serviceChanges
-                        expression { currentBuild.previousBuild == null }
+                        expression { currentBuild.previousBuild?.result != 'SUCCESS' }
                     }
                 }
                 stages {

@@ -49,15 +49,10 @@ pipeline {
 
         stage('Chart publish') {
             when {
-                allOf {
-                    branch 'main'
-                    anyOf {
-                        changeset 'charts/**'
-                        // First main build must publish the current base charts so a
-                        // fresh Jenkins controller can bootstrap an empty registry.
-                        expression { currentBuild.previousBuild == null }
-                    }
-                }
+                // Every main build: publish-chart.sh skips versions already in the
+                // registry, so this is idempotent, and a version whose publish failed
+                // (or a fresh, empty registry) is caught up by the next build.
+                branch 'main'
             }
             steps {
                 script {
