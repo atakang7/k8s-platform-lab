@@ -7,6 +7,11 @@ metadata:
   name: __NAMESPACE__
   labels:
     delivery.lab.test/environment: __ENVIRONMENT__
+    # The deploy identity creates Pods (releases, Helm tests); the restricted
+    # Pod Security standard keeps any Pod here from being privileged, reaching
+    # the host, or running as root. The base chart's defaults satisfy it.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
 ---
 # Deploy identity of this environment. The deploy job releases this
 # environment from an agent Pod running as this ServiceAccount

@@ -35,6 +35,8 @@ PDB                 opt-in
 
 Applications can override these values when they have a real requirement. In particular, a service that needs Kubernetes API credentials must opt into service-account token mounting rather than receiving ambient credentials by default.
 
+Delivery namespaces enforce the restricted Pod Security standard. The defaults meet it (non-root, no privilege escalation, all capabilities dropped, RuntimeDefault seccomp); an app that overrides `securityContext` or `sidecars` must keep them compliant or its Pods are rejected.
+
 PDB support is opt-in because the correct availability budget depends on replica count and cluster capacity:
 
 ```yaml

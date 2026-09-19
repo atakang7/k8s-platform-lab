@@ -9,10 +9,14 @@ containerPort: 8080
 probes: {}         # startup / readiness / liveness, as Kubernetes probe specs (port: http)
 resources: {}
 env: []
-podSecurityContext: {}
+podSecurityContext:  # with securityContext, meets the restricted Pod Security standard apps namespaces enforce
+  seccompProfile:
+    type: RuntimeDefault
 securityContext:
   runAsNonRoot: true
   allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
 automountServiceAccountToken: false
 enableServiceLinks: false
 terminationGracePeriodSeconds: 30
