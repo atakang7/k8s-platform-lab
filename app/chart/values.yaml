@@ -61,7 +61,7 @@ metrics:
   path: /actuator/prometheus
 
 smokeTest:
-  path: /api/foos?val=smoke   # val is required; without it the app answers 400
+  path: /stress-test-missing   # T2: deliberately broken release
 
 configMaps:
   fluent-bit:
