@@ -14,6 +14,11 @@ def githubFailureState() {
     currentBuild.currentResult == 'ABORTED' ? 'error' : 'failure'
 }
 
+// True when delivery/ci/route.sh selected this flow for the commit range.
+def routed(String flow) {
+    env.CI_FLOWS.tokenize(',').contains(flow)
+}
+
 pipeline {
     agent { label 'lab-ci-runner' }
     options {
@@ -28,15 +33,16 @@ pipeline {
         CI_COMPLETE = 'false'
     }
     stages {
-        stage('Test') {
+        stage('Route') {
             steps {
                 script {
-                    timed('Test.Checkout') {
+                    timed('Route.Checkout') {
                         def scmVars = checkout scm
                         env.COMMIT_SHA = scmVars.GIT_COMMIT
+                        env.ROUTE_BASE = scmVars.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: ''
                     }
 
-                    timed('Test.GitHubPending') {
+                    timed('Route.GitHubPending') {
                         container('ci-tools') {
                             withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
                                 sh 'sh delivery/ci/github-status.sh pending jenkins/ci "Jenkins CI running" "$COMMIT_SHA"'
@@ -44,6 +50,48 @@ pipeline {
                         }
                     }
 
+                    // Runs in the default agent container: it owns the checkout, so git
+                    // accepts the workspace (ci-tools runs as root and would not).
+                    env.CI_FLOWS = sh(script: 'delivery/ci/route.sh "$ROUTE_BASE" "$COMMIT_SHA"', returnStdout: true).trim().tokenize('\n').join(',')
+                    echo "Change router: ${env.ROUTE_BASE ?: 'first build'}..${env.COMMIT_SHA} -> ${env.CI_FLOWS ?: 'no flow'}"
+                }
+            }
+        }
+
+        stage('Platform Checks') {
+            when { expression { routed('platform') } }
+            steps {
+                script {
+                    timed('Platform.Checks') {
+                        container('ci-tools') {
+                            sh '''
+                              helm lint policies/resource-requests-webhook/helm/resource-requests-webhook
+                              hadolint policies/resource-requests-webhook/Dockerfile
+                              delivery/ci/check-shell-syntax.sh platform policies
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Infra Checks') {
+            when { expression { routed('infra') } }
+            steps {
+                script {
+                    timed('Infra.Checks') {
+                        container('ci-tools') {
+                            sh 'delivery/ci/check-shell-syntax.sh infra validation'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Test') {
+            when { expression { routed('app') } }
+            steps {
+                script {
                     def checks = [:]
 
                     checks['Unit Tests'] = {
@@ -83,6 +131,7 @@ pipeline {
         }
 
         stage('Build') {
+            when { expression { routed('app') } }
             steps {
                 script {
                     timed('Build.LocalImage') {
@@ -95,6 +144,7 @@ pipeline {
         }
 
         stage('Scan & Publish') {
+            when { expression { routed('app') } }
             steps {
                 script {
                     timed('Publish.TrivyAndSBOM') {
@@ -138,6 +188,7 @@ pipeline {
         }
 
         stage('Trigger CD') {
+            when { expression { routed('app') } }
             steps {
                 script {
                     timed('CD.Enqueue') {
@@ -147,6 +198,21 @@ pipeline {
                             string(name: 'COMMIT_SHA', value: env.COMMIT_SHA)
                         ], wait: false
                     }
+                }
+            }
+        }
+
+        stage('Report') {
+            when { expression { !routed('app') } }
+            steps {
+                script {
+                    env.STATUS_DESCRIPTION = env.CI_FLOWS ? "Jenkins CI passed: ${env.CI_FLOWS} checks" : 'Jenkins CI: no CI flow for this change'
+                    container('ci-tools') {
+                        withCredentials([usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')]) {
+                            sh 'sh delivery/ci/github-status.sh success jenkins/ci "$STATUS_DESCRIPTION" "$COMMIT_SHA"'
+                        }
+                    }
+                    env.CI_COMPLETE = 'true'
                 }
             }
         }

@@ -14,10 +14,15 @@ GitHub main
     ▼
 lab-build · lab-ci-runner
     │
-    ├── parallel validation
-    │    ├─ Maven tests
-    │    ├─ Dockerfile lint
-    │    └─ Helm lint + chart server dry-run
+    ▼
+change router ─── platform/infra only ──► static checks ──► done
+    │          └── docs/markdown only ───► no flow ─────────► done
+    │ app/ or delivery/ changed
+    ▼
+parallel validation
+    ├─ Maven tests
+    ├─ Dockerfile lint
+    └─ Helm lint + chart server dry-run
     │
     ▼
 BuildKit solve #1
@@ -44,6 +49,25 @@ lab-deploy · lab-cd-runner
 The local tar is scan input only. Publication is a second BuildKit solve against the same source revision and build context, reusing warm BuildKit state.
 
 CI queues CD asynchronously after publication. Deployment duration does not keep the CI executor occupied.
+
+## Change router
+
+> **Scope.** This router is intentionally small and written for this repository's four top-level areas. It is **not** a production blueprint for monorepo CI: it has no dependency graph between areas, no per-area pipelines or owners, and it validates rather than applies infrastructure. If the repository grows beyond these areas, replace it with per-area jobs rather than extending the table.
+
+`lab-build` polls `main` for every commit, then `delivery/ci/route.sh` decides which flows run. It diffs the new commit against the **last successful** build, so a change whose build failed is routed again on the next commit until it passes. The first build, or a base missing from history, runs every flow.
+
+| Changed paths | Flow | What runs |
+|---|---|---|
+| `app/`, `delivery/` | app | tests, lint, chart dry-run, build, scan, publish, **deploy** |
+| `platform/`, `policies/` | platform | webhook chart `helm lint`, webhook Dockerfile `hadolint`, shell syntax |
+| `infra/`, `validation/`, `Vagrantfile`, `Makefile` | infra | shell syntax |
+| `*.md`, `docs/`, anything else | none | GitHub status only |
+
+A commit touching several areas runs each matching flow.
+
+Platform and infra are **never applied** from Jenkins: Jenkins runs inside the cluster those layers create, including Jenkins itself. The operator applies them with the `make` targets and validates them live (`make cluster-validate`, `edge-validate`, `e2e-validate`). Their CI flows are static checks only, limited to tools in the CI agent image; Ansible syntax and the webhook's Go tests are not run in CI.
+
+A change under `delivery/` (pipeline, deploy script, agent image) runs the app flow and therefore redeploys the application; that exercises the changed delivery path end to end.
 
 ## CI
 
