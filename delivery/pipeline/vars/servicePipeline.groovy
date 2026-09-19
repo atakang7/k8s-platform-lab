@@ -1,6 +1,6 @@
 // CI for one service in a GitHub multibranch job (release flow steps 1-3 in
-// delivery/README.md). Every branch and pull request validates, builds, tests,
-// and scans; a pull request must also raise the app version. main publishes the
+// delivery/README.md). main and every pull request validate, build, test,
+// and scan; a pull request must also raise the app version. main publishes the
 // exact scanned image and its chart as that version and commits the release to
 // the first environment's state file; the deploy job releases it from there.
 //
