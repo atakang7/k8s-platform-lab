@@ -24,7 +24,13 @@ registry_login() {
 
   for reference in "$@"; do
     host="${reference#oci://}"
-    hosts+=("${host%%/*}")
+    host="${host%%/*}"
+    hosts+=("${host}")
+    # Docker Hub credentials are looked up under this key by Helm and cosign,
+    # whichever Docker Hub host a reference names.
+    case "${host}" in
+      docker.io | registry-1.docker.io | index.docker.io) hosts+=("https://index.docker.io/v1/") ;;
+    esac
   done
   encoded_auth="$(printf '%s:%s' "${REGISTRY_USERNAME}" "${REGISTRY_PASSWORD}" |
     base64 | tr -d '\n')"
