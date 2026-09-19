@@ -27,7 +27,7 @@ Jenkins Secrets
 make jenkins-up
 ```
 
-The command creates/reuses the Vault identity, waits for VSO-managed Secrets, removes any legacy long-lived agent token, checks that neither agent identity has cluster-wide rights, and reconciles the pinned Helm release with JCasC.
+The command creates/reuses the Vault identity, reconciles external credentials only when their values changed, waits for VSO-managed Secrets, removes any legacy long-lived agent token, checks that neither agent identity has cluster-wide rights, and reconciles the pinned Helm release with JCasC. Unchanged credentials are not rewritten, avoiding needless Vault versions and controller restarts.
 
 Endpoint: `https://jenkins.lab.test`.
 
@@ -46,6 +46,6 @@ Do not make durable job, agent, or credential changes in the UI. Put them in JCa
 
 ## CI agent image
 
-The tools image is built from `delivery/jenkins/ci-agent.Dockerfile` and referenced by immutable digest in JCasC. Tooling changes require a new image, a new digest, and then `make jenkins-up`.
+The tools image is built from `delivery/jenkins/ci-agent.Dockerfile` and referenced by immutable digest in JCasC. Tooling changes require a new image, a new digest, and then `make jenkins-up`. Agent Pods disable Kubernetes service-link environment injection; their service-account tokens remain intentional because CI performs server-side dry-runs and CD mints short-lived deployer tokens.
 
 See [`delivery/README.md`](../../delivery/README.md) for pipeline behavior.

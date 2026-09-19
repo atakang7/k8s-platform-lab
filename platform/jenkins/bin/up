@@ -41,6 +41,20 @@ vault_fields_are_present() {
   done
 }
 
+vault_username_token_matches() {
+  local path="$1"
+  local username="$2"
+  local token="$3"
+
+  vault kv get -format=json "${path}" 2>/dev/null |
+    jq -e \
+      --arg username "${username}" \
+      --arg token "${token}" '
+        .data.data.username == $username
+        and .data.data.token == $token
+      ' >/dev/null
+}
+
 reconcile_username_token_secret() {
   local path="$1"
   local username="$2"
@@ -59,6 +73,10 @@ reconcile_username_token_secret() {
     fail "${username_variable} is required when ${token_variable} is set"
   [[ -n "${token}" ]] ||
     fail "${token_variable} is required when ${username_variable} is set"
+
+  if vault_username_token_matches "${path}" "${username}" "${token}"; then
+    return 0
+  fi
 
   jq -n \
     --arg username "${username}" \
@@ -370,9 +388,11 @@ cluster_reconcile() {
 main() {
   case "${1:-}" in
     --cluster)
+      [[ "$#" -eq 1 ]] || fail 'Jenkins cluster mode does not accept extra arguments'
       cluster_reconcile
       ;;
     '')
+      [[ "$#" -eq 0 ]] || fail 'Jenkins reconciliation does not accept arguments'
       operator_reconcile
       ;;
     *)
