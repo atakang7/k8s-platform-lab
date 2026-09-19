@@ -60,7 +60,9 @@ def call() {
                         options { timeout(time: 30, unit: 'MINUTES') }
                         steps {
                             script {
-                                podTemplate(inheritFrom: 'cd-runner', serviceAccount: "jenkins-deploy-${env.CLUSTER_ENVIRONMENT}") {
+                                // A template per build is never reused, so its Pod must not
+                                // idle: cd-runner's idleMinutes would hold node memory.
+                                podTemplate(inheritFrom: 'cd-runner', serviceAccount: "jenkins-deploy-${env.CLUSTER_ENVIRONMENT}", idleMinutes: 0) {
                                     node(POD_LABEL) {
                                         checkout scm
                                         delivery.installScripts()
