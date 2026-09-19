@@ -12,7 +12,7 @@ buildctl build \
   --local context="${BUILD_CONTEXT}" \
   --local dockerfile="${BUILD_CONTEXT}" \
   --opt build-arg:SOURCE_REPOSITORY="${SOURCE_URL}" \
-  --opt build-arg:SOURCE_REVISION="${COMMIT_SHA}" \
+  --opt build-arg:SOURCE_REVISION="${SERVICE_REVISION}" \
   --output "type=oci,tar=false,dest=app-image"
 
 printf 'PASS | image ready: app-image/\n'

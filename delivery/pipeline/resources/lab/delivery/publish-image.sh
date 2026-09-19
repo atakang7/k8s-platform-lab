@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Pushes the exact OCI layout that was scanned as <IMAGE_REPOSITORY>:<APP_VERSION>
 # and writes its registry digest to pushed.digest. A version is published once:
-# when the tag exists and the service's source (SERVICE_PATH) is unchanged since
-# the commit it was published from, its digest is reused (a rebuild, or a later
-# main commit that did not touch the service); otherwise publication fails and
-# the version must be raised. Publication
+# when the tag exists and was published from this service source
+# (SERVICE_REVISION, the last commit that changed the service), its digest is
+# reused (a rebuild, or a later main commit that did not touch the service);
+# otherwise publication fails and the version must be raised. Publication
 # also fails if the registry digest differs from the scanned manifest digest.
 # The published digest is then signed with the delivery signing key
 # (COSIGN_PRIVATE_KEY, COSIGN_PASSWORD); the deploy job verifies it.
@@ -48,10 +48,9 @@ read_published_digest() {
     --authfile "${REGISTRY_AUTH_FILE}" \
     "docker://${IMAGE_REPOSITORY}:${APP_VERSION}" |
     jq -r '.config.Labels["org.opencontainers.image.revision"] // ""')"
-  # The workspace belongs to the agent user, not this container's; trust it for this read.
-  git -c safe.directory="${PWD}" diff --quiet "${published_revision}" "${COMMIT_SHA}" -- "${SERVICE_PATH}" || {
-    printf 'FAIL | %s %s was published from %s, and %s changed since; raise the version\n' \
-      "${IMAGE_REPOSITORY}" "${APP_VERSION}" "${published_revision:-<unknown>}" "${SERVICE_PATH}" >&2
+  [[ "${published_revision}" == "${SERVICE_REVISION}" ]] || {
+    printf 'FAIL | %s %s was published from source %s, this is %s; raise the version\n' \
+      "${IMAGE_REPOSITORY}" "${APP_VERSION}" "${published_revision:-<unknown>}" "${SERVICE_REVISION}" >&2
     return 1
   }
 

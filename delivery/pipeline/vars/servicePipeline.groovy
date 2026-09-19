@@ -32,7 +32,10 @@ def call(Map args) {
                         Map cluster = delivery.clusterTarget(config)
 
                         env.CHART = args.chart
-                        env.SERVICE_PATH = args.path
+                        // The service's source identity: the last commit that changed its
+                        // path. The image carries it as its revision label, and a published
+                        // version is reused only for the same source (publish-image.sh).
+                        env.SERVICE_REVISION = sh(returnStdout: true, script: "git log -1 --format=%H -- '${args.path}'").trim()
                         env.BUILD_CONTEXT = args.context
                         env.RELEASE = service.name
                         env.IMAGE_REPOSITORY = service.repository
