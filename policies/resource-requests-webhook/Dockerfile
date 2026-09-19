@@ -5,8 +5,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY cmd/ ./cmd/
-RUN go test ./...
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /app/webhook ./cmd/webhook
+RUN go test ./... \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /app/webhook ./cmd/webhook
 
 FROM gcr.io/distroless/static:nonroot@sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
 ARG SOURCE_REPOSITORY=unknown
