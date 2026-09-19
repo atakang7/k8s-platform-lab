@@ -1,42 +1,66 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
-readonly root
-source "${root}/infra/edge/lib/operator-state.sh"
-source "${root}/infra/edge/lib/vault-approle.sh"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly ROOT
+readonly ENVIRONMENT_CONFIG="${ROOT}/environment.yaml"
+readonly ENVIRONMENT_MANIFEST="${ROOT}/platform/environment/namespace.yaml"
+readonly REGISTRY_POLICY="${ROOT}/platform/environment/registry-pull-read.hcl"
+
+source "${ROOT}/infra/edge/lib/operator-state.sh"
+source "${ROOT}/infra/edge/lib/vault-approle.sh"
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
   exit 1
 }
 
-read_environment() {
-  python3 - "${root}/environment.yaml" <<'PY'
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+read_environment_field() {
+  local field="$1"
+
+  python3 - "${ENVIRONMENT_CONFIG}" "${field}" <<'PY'
 import sys
 import yaml
 
-with open(sys.argv[1], encoding="utf-8") as source:
-    environment = yaml.safe_load(source)
+config_path, field = sys.argv[1:]
+with open(config_path, encoding="utf-8") as source:
+    config = yaml.safe_load(source)
 
-print(environment["name"], environment["namespace"])
+if not isinstance(config, dict):
+    raise SystemExit(f"{config_path}: expected a YAML mapping")
+
+value = config.get(field)
+if not isinstance(value, str) or not value:
+    raise SystemExit(f"{config_path}: {field} must be a non-empty string")
+
+print(value)
 PY
 }
 
-validate_environment_name() {
-  local name="$1" namespace="$2"
-  [[ "${name}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] ||
-    fail "environment name is not a DNS label: ${name}"
-  [[ "${namespace}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] ||
+validate_environment_identity() {
+  local environment_name="$1"
+  local namespace="$2"
+  local -r dns_label_pattern='^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+
+  [[ "${environment_name}" =~ ${dns_label_pattern} ]] ||
+    fail "environment name is not a DNS label: ${environment_name}"
+  [[ "${namespace}" =~ ${dns_label_pattern} ]] ||
     fail "namespace is not a DNS label: ${namespace}"
 }
 
-configure_vault() {
+reconcile_registry_vault_access() {
+  phase 'reconciling runtime registry access in Vault'
+
   require_vault_operator_token
+
   vault kv get secret/runtime/dockerhub >/dev/null 2>&1 ||
     fail 'secret/runtime/dockerhub is missing; store the runtime registry credential in Vault first'
 
-  vault policy write registry-pull-read "${root}/platform/environment/registry-pull-read.hcl" >/dev/null
+  vault policy write registry-pull-read "${REGISTRY_POLICY}" >/dev/null
   vault write auth/approle/role/registry-pull-vso \
     token_policies=registry-pull-read \
     token_ttl=1h \
@@ -49,36 +73,47 @@ reconcile_registry_identity() (
   set -Eeuo pipefail
 
   local namespace="$1"
-  local temporary installed_secret
+  local temporary_directory
+  local installed_secret_id
 
-  temporary="$(mktemp -d)"
-  trap 'rm -rf -- "${temporary}"' EXIT
-  chmod 0700 "${temporary}"
-  installed_secret="${temporary}/installed-secret-id"
+  temporary_directory="$(mktemp -d)"
+  trap 'rm -rf -- "${temporary_directory}"' EXIT
+  chmod 0700 "${temporary_directory}"
 
+  installed_secret_id="${temporary_directory}/installed-secret-id"
   kubectl -n "${namespace}" get secret registry-pull-approle \
     -o jsonpath='{.data.id}' 2>/dev/null |
-    base64 --decode > "${installed_secret}" || true
+    base64 --decode > "${installed_secret_id}" || true
 
-  if ! vault_approle_secret_is_valid registry-pull-vso "${installed_secret}"; then
-    umask 077
-    vault write -field=secret_id -f auth/approle/role/registry-pull-vso/secret-id \
-      > "${temporary}/new-secret-id"
-    kubectl -n "${namespace}" create secret generic registry-pull-approle \
-      --from-file="id=${temporary}/new-secret-id" \
-      --dry-run=client -o yaml |
-      kubectl apply -f - >/dev/null
+  if vault_approle_secret_is_valid registry-pull-vso "${installed_secret_id}"; then
+    return
   fi
+
+  umask 077
+  vault write -field=secret_id -f \
+    auth/approle/role/registry-pull-vso/secret-id \
+    > "${temporary_directory}/new-secret-id"
+
+  kubectl -n "${namespace}" create secret generic registry-pull-approle \
+    --from-file="id=${temporary_directory}/new-secret-id" \
+    --dry-run=client -o yaml |
+    kubectl apply -f - >/dev/null
 )
 
-apply_environment() {
-  local environment="$1" namespace="$2" role_id="$3"
+apply_environment_manifest() {
+  local environment_name="$1"
+  local namespace="$2"
+  local role_id="$3"
 
+  [[ -n "${role_id}" ]] || fail 'registry-pull-vso role ID is empty'
+
+  # namespace.yaml deliberately uses three plain placeholders. Keep the render
+  # visible here instead of hiding a one-file template behind another tool.
   sed \
     -e "s/__NAMESPACE__/${namespace}/g" \
-    -e "s/__ENVIRONMENT__/${environment}/g" \
+    -e "s/__ENVIRONMENT__/${environment_name}/g" \
     -e "s/__ROLE_ID__/${role_id}/g" \
-    "${root}/platform/environment/namespace.yaml" |
+    "${ENVIRONMENT_MANIFEST}" |
     kubectl apply -f - >/dev/null
 
   kubectl -n "${namespace}" create secret generic vault-ca \
@@ -87,27 +122,43 @@ apply_environment() {
     kubectl apply -f - >/dev/null
 }
 
-verify_access_model() {
-  local namespace="$1" output
-  local -r cd_agent=system:serviceaccount:jenkins:jenkins-agent
-  local -r ci_agent=system:serviceaccount:jenkins:jenkins-ci
+verify_cd_access() {
+  local namespace="$1"
+  local -r cd_identity=system:serviceaccount:jenkins:jenkins-agent
 
   [[ "$(kubectl auth can-i create serviceaccounts/deployer \
-    --subresource=token -n "${namespace}" --as="${cd_agent}")" == yes ]] ||
+    --subresource=token \
+    --namespace "${namespace}" \
+    --as="${cd_identity}")" == yes ]] ||
     fail 'CD cannot mint deployer tokens'
 
   [[ "$(kubectl auth can-i create deployments \
-    -n "${namespace}" --as="${cd_agent}")" == no ]] ||
+    --namespace "${namespace}" \
+    --as="${cd_identity}")" == no ]] ||
     fail 'CD holds deploy rights directly'
+}
 
-  if output="$(kubectl -n "${namespace}" create configmap delivery-probe \
-    --from-literal=probe=1 --as="${ci_agent}" 2>&1)"; then
+verify_ci_dry_run_only() {
+  local namespace="$1"
+  local denial
+  local -r ci_identity=system:serviceaccount:jenkins:jenkins-ci
+
+  if denial="$(kubectl -n "${namespace}" create configmap delivery-probe \
+    --from-literal=probe=1 \
+    --as="${ci_identity}" 2>&1)"; then
     kubectl -n "${namespace}" delete configmap delivery-probe >/dev/null
     fail 'jenkins-ci can write to the cluster'
   fi
 
-  [[ "${output}" == *jenkins-ci-dry-run-only* ]] ||
-    fail "unexpected CI denial: ${output}"
+  [[ "${denial}" == *jenkins-ci-dry-run-only* ]] ||
+    fail "unexpected CI denial: ${denial}"
+}
+
+verify_access_model() {
+  local namespace="$1"
+
+  verify_cd_access "${namespace}"
+  verify_ci_dry_run_only "${namespace}"
 }
 
 verify_registry_secret() {
@@ -122,28 +173,43 @@ verify_registry_secret() {
 }
 
 cluster_reconcile() {
-  local environment namespace role_id
+  local environment_name
+  local namespace
+  local role_id
 
-  read -r environment namespace < <(read_environment)
-  validate_environment_name "${environment}" "${namespace}"
+  environment_name="$(read_environment_field name)"
+  namespace="$(read_environment_field namespace)"
+  validate_environment_identity "${environment_name}" "${namespace}"
 
   role_id="$(vault read -field=role_id auth/approle/role/registry-pull-vso/role-id)"
-  apply_environment "${environment}" "${namespace}" "${role_id}"
+
+  phase "reconciling environment ${environment_name} in namespace ${namespace}"
+  apply_environment_manifest "${environment_name}" "${namespace}" "${role_id}"
   reconcile_registry_identity "${namespace}"
   verify_access_model "${namespace}"
   verify_registry_secret "${namespace}"
 
-  printf 'PASS | environment %s (%s)\n' "${environment}" "${namespace}"
+  printf 'PASS | environment %s (%s)\n' "${environment_name}" "${namespace}"
+}
+
+operator_reconcile() {
+  reconcile_registry_vault_access
+  phase 'reconciling application environment through the Kubernetes API tunnel'
+  "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
 }
 
 main() {
-  if [[ "${1:-}" == --cluster ]]; then
-    cluster_reconcile
-    return
-  fi
-
-  configure_vault
-  "${root}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+  case "${1:-}" in
+    --cluster)
+      cluster_reconcile
+      ;;
+    '')
+      operator_reconcile
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
 }
 
 main "$@"

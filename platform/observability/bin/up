@@ -1,99 +1,220 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
-readonly root
-source "${root}/platform/observability/versions.env"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly ROOT
+readonly OBSERVABILITY_DIRECTORY="${ROOT}/platform/observability"
+readonly NAMESPACE=observability
+readonly MINIMUM_WORKER_MEMORY_KI=1450000
 
-phase='startup'
+source "${OBSERVABILITY_DIRECTORY}/versions.env"
+
+CURRENT_PHASE='startup'
+
 begin_phase() {
-  phase="$1"
-  printf 'WAIT | %s\n' "${phase}"
+  CURRENT_PHASE="$1"
+  printf 'WAIT | %s\n' "${CURRENT_PHASE}"
 }
 
 complete_phase() {
-  printf 'PASS | %s\n' "${phase}"
+  printf 'PASS | %s\n' "${CURRENT_PHASE}"
 }
 
 report_failure() {
   local status=$?
-  printf 'FAIL | %s (exit %s)\n' "${phase}" "${status}" >&2
+  printf 'FAIL | %s (exit %s)\n' "${CURRENT_PHASE}" "${status}" >&2
   exit "${status}"
 }
 trap report_failure ERR
 
-if [[ "${1:-}" != --cluster ]]; then
-  begin_phase 'Running observability reconciliation through the Kubernetes API tunnel'
-  "${root}/infra/edge/lib/with-kubeconfig.sh" "${root}/platform/observability/bin/up" --cluster
-  phase='Observability reconciliation completed'
+validate_worker_capacity() {
+  local node
+  local allocatable_memory
+
+  begin_phase 'validating worker readiness and memory capacity'
+
+  # This layout needs room for Prometheus on node-2 and Grafana beside
+  # Jenkins on node-3.
+  for node in node-2 node-3; do
+    kubectl wait --for=condition=Ready "node/${node}" --timeout=5s >/dev/null
+    allocatable_memory="$(kubectl get node "${node}" \
+      -o jsonpath='{.status.allocatable.memory}')"
+
+    if [[ "${allocatable_memory}" != *Ki ]]; then
+      printf 'FAIL | %s reports unsupported allocatable memory: %s\n' \
+        "${node}" "${allocatable_memory}" >&2
+      return 1
+    fi
+
+    if (( ${allocatable_memory%Ki} < MINIMUM_WORKER_MEMORY_KI )); then
+      printf 'FAIL | %s needs at least %sKi allocatable memory; found %s\n' \
+        "${node}" "${MINIMUM_WORKER_MEMORY_KI}" "${allocatable_memory}" >&2
+      return 1
+    fi
+  done
+
   complete_phase
-  exit
-fi
+}
 
-readonly namespace=observability
-# This layout needs room for Prometheus on node-2 and Grafana beside Jenkins on node-3.
-begin_phase 'Validating worker readiness and memory capacity'
-for node in node-2 node-3; do
-  kubectl wait --for=condition=Ready "node/${node}" --timeout=5s >/dev/null
-  allocatable="$(kubectl get node "${node}" -o jsonpath='{.status.allocatable.memory}')"
-  if [[ "${allocatable}" != *Ki ]] || (( ${allocatable%Ki} < 1450000 )); then
-    printf 'FAIL | %s needs at least 1450000Ki allocatable memory; found %s\n' "${node}" "${allocatable}" >&2
-    exit 1
-  fi
-done
-complete_phase
+prepare_foundation() {
+  begin_phase 'preparing the observability namespace and Helm repositories'
 
-begin_phase 'Preparing the observability namespace and Helm repositories'
-kubectl create namespace "${namespace}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update >/dev/null
-helm repo add fluent https://fluent.github.io/helm-charts --force-update >/dev/null
-helm repo update prometheus-community fluent >/dev/null
-complete_phase
+  kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml |
+    kubectl apply -f - >/dev/null
 
-begin_phase 'Reconciling kube-prometheus-stack (timeout: 10m)'
-helm upgrade --install observability prometheus-community/kube-prometheus-stack \
-  --namespace "${namespace}" --version "${KUBE_PROMETHEUS_STACK_CHART_VERSION}" \
-  --values "${root}/platform/observability/kube-prometheus-stack/values.yaml" \
-  --wait --rollback-on-failure --timeout 10m --history-max 5 --hide-notes
-complete_phase
+  helm repo add prometheus-community \
+    https://prometheus-community.github.io/helm-charts \
+    --force-update >/dev/null
+  helm repo add fluent \
+    https://fluent.github.io/helm-charts \
+    --force-update >/dev/null
+  helm repo update prometheus-community fluent >/dev/null
 
-begin_phase 'Waiting for Alertmanager readiness (timeout: 3m)'
-kubectl -n "${namespace}" rollout status \
-  statefulset/alertmanager-observability-kube-prometh-alertmanager --timeout=3m
-complete_phase
+  complete_phase
+}
 
-begin_phase 'Applying Elasticsearch and alerting resources'
-kubectl apply -f "${root}/platform/observability/elasticsearch/resources.yaml"
-kubectl apply -f "${root}/platform/observability/alerts/pod-restarts.yaml"
-complete_phase
+install_prometheus_stack() {
+  begin_phase 'reconciling kube-prometheus-stack (timeout: 10m)'
 
-begin_phase 'Reconciling Grafana dashboards'
-kubectl -n "${namespace}" create configmap lab-cluster-dashboard \
-  --from-file=cluster.json="${root}/platform/observability/dashboards/cluster.json" \
-  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-kubectl -n "${namespace}" label configmap lab-cluster-dashboard \
-  grafana_dashboard=1 --overwrite >/dev/null
+  helm upgrade --install observability prometheus-community/kube-prometheus-stack \
+    --namespace "${NAMESPACE}" \
+    --version "${KUBE_PROMETHEUS_STACK_CHART_VERSION}" \
+    --values "${OBSERVABILITY_DIRECTORY}/kube-prometheus-stack/values.yaml" \
+    --wait \
+    --rollback-on-failure \
+    --timeout 10m \
+    --history-max 5 \
+    --hide-notes
 
-kubectl -n "${namespace}" create configmap lab-logs-dashboard \
-  --from-file=logs.json="${root}/platform/observability/dashboards/logs.json" \
-  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-kubectl -n "${namespace}" label configmap lab-logs-dashboard \
-  grafana_dashboard=1 --overwrite >/dev/null
-complete_phase
+  complete_phase
+}
 
-begin_phase 'Waiting for Elasticsearch readiness (timeout: 8m)'
-kubectl -n "${namespace}" rollout status statefulset/logs-es --timeout=8m
-complete_phase
+wait_for_alertmanager() {
+  begin_phase 'waiting for Alertmanager readiness (timeout: 3m)'
 
-begin_phase 'Reconciling Fluent Bit (timeout: 5m)'
-helm upgrade --install fluent-bit fluent/fluent-bit \
-  --namespace "${namespace}" --version "${FLUENT_BIT_CHART_VERSION}" \
-  --values "${root}/platform/observability/fluent-bit/values.yaml" \
-  --wait --rollback-on-failure --timeout 5m --history-max 5 --hide-notes
-complete_phase
+  kubectl -n "${NAMESPACE}" rollout status \
+    statefulset/alertmanager-observability-kube-prometh-alertmanager \
+    --timeout=3m
 
-begin_phase 'Applying the observability ingress'
-kubectl -n "${namespace}" delete ingress observability-elasticsearch --ignore-not-found
-kubectl apply -f "${root}/platform/observability/ingress.yaml"
-complete_phase
-printf 'PASS | observability components reconciled; run make observability-smoke\n'
+  complete_phase
+}
+
+apply_elasticsearch_and_alerts() {
+  begin_phase 'applying Elasticsearch and alerting resources'
+
+  kubectl apply \
+    -f "${OBSERVABILITY_DIRECTORY}/elasticsearch/resources.yaml"
+  kubectl apply \
+    -f "${OBSERVABILITY_DIRECTORY}/alerts/pod-restarts.yaml"
+
+  complete_phase
+}
+
+reconcile_dashboard() {
+  local configmap_name="$1"
+  local key="$2"
+  local dashboard_file="$3"
+
+  kubectl -n "${NAMESPACE}" create configmap "${configmap_name}" \
+    --from-file="${key}=${dashboard_file}" \
+    --dry-run=client -o yaml |
+    kubectl apply -f - >/dev/null
+
+  kubectl -n "${NAMESPACE}" label configmap "${configmap_name}" \
+    grafana_dashboard=1 \
+    --overwrite >/dev/null
+}
+
+reconcile_grafana_dashboards() {
+  begin_phase 'reconciling Grafana dashboards'
+
+  reconcile_dashboard \
+    lab-cluster-dashboard \
+    cluster.json \
+    "${OBSERVABILITY_DIRECTORY}/dashboards/cluster.json"
+
+  reconcile_dashboard \
+    lab-logs-dashboard \
+    logs.json \
+    "${OBSERVABILITY_DIRECTORY}/dashboards/logs.json"
+
+  complete_phase
+}
+
+wait_for_elasticsearch() {
+  begin_phase 'waiting for Elasticsearch readiness (timeout: 8m)'
+
+  kubectl -n "${NAMESPACE}" rollout status \
+    statefulset/logs-es \
+    --timeout=8m
+
+  complete_phase
+}
+
+install_fluent_bit() {
+  begin_phase 'reconciling Fluent Bit (timeout: 5m)'
+
+  helm upgrade --install fluent-bit fluent/fluent-bit \
+    --namespace "${NAMESPACE}" \
+    --version "${FLUENT_BIT_CHART_VERSION}" \
+    --values "${OBSERVABILITY_DIRECTORY}/fluent-bit/values.yaml" \
+    --wait \
+    --rollback-on-failure \
+    --timeout 5m \
+    --history-max 5 \
+    --hide-notes
+
+  complete_phase
+}
+
+apply_observability_ingress() {
+  begin_phase 'applying the observability ingress'
+
+  # Remove the retired split Elasticsearch ingress when reconciling clusters
+  # created by an older repository revision.
+  kubectl -n "${NAMESPACE}" delete ingress \
+    observability-elasticsearch \
+    --ignore-not-found
+
+  kubectl apply -f "${OBSERVABILITY_DIRECTORY}/ingress.yaml"
+
+  complete_phase
+}
+
+cluster_reconcile() {
+  validate_worker_capacity
+  prepare_foundation
+  install_prometheus_stack
+  wait_for_alertmanager
+  apply_elasticsearch_and_alerts
+  reconcile_grafana_dashboards
+  wait_for_elasticsearch
+  install_fluent_bit
+  apply_observability_ingress
+
+  printf 'PASS | observability components reconciled; run make observability-smoke\n'
+}
+
+operator_reconcile() {
+  begin_phase 'running observability reconciliation through the Kubernetes API tunnel'
+  "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+  CURRENT_PHASE='observability reconciliation completed'
+  complete_phase
+}
+
+main() {
+  case "${1:-}" in
+    --cluster)
+      cluster_reconcile
+      ;;
+    '')
+      operator_reconcile
+      ;;
+    *)
+      printf 'FAIL | unknown argument: %s\n' "$1" >&2
+      return 1
+      ;;
+  esac
+}
+
+main "$@"

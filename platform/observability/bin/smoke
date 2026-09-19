@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
-readonly root
-readonly namespace=observability
-readonly host=observability.lab.test
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly ROOT
+readonly NAMESPACE=observability
+readonly HOST=observability.lab.test
+readonly INGRESS_VIP=192.168.56.200
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
@@ -17,53 +18,134 @@ phase() {
 
 diagnose() {
   local status=$?
+
   printf 'FAIL | Observability smoke failed (exit %s)\n' "${status}" >&2
-  kubectl -n "${namespace}" get pods -o wide >&2 || true
-  kubectl -n "${namespace}" get events --sort-by=.lastTimestamp 2>/dev/null | tail -20 >&2 || true
+  kubectl -n "${NAMESPACE}" get pods -o wide >&2 || true
+  kubectl -n "${NAMESPACE}" get events \
+    --sort-by=.lastTimestamp 2>/dev/null |
+    tail -20 >&2 || true
+
   exit "${status}"
 }
 
 cluster_api() {
-  kubectl get --raw "$1"
+  local path="$1"
+  kubectl get --raw "${path}"
 }
 
-if [[ "${1:-}" != --cluster ]]; then
-  "${root}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
-  exit
-fi
-trap diagnose ERR
+wait_for_workloads() {
+  phase 'waiting for observability workloads (timeout: 90s each)'
 
-phase 'Waiting for observability workloads (timeout: 90s each)'
-kubectl -n "${namespace}" rollout status deployment/observability-grafana --timeout=90s
-kubectl -n "${namespace}" rollout status deployment/observability-kube-prometh-operator --timeout=90s
-kubectl -n "${namespace}" rollout status statefulset/logs-es --timeout=90s
-kubectl -n "${namespace}" rollout status daemonset/fluent-bit --timeout=90s
-kubectl -n "${namespace}" rollout status statefulset/prometheus-observability-kube-prometh-prometheus --timeout=90s
-kubectl -n "${namespace}" rollout status statefulset/alertmanager-observability-kube-prometh-alertmanager --timeout=90s
+  kubectl -n "${NAMESPACE}" rollout status \
+    deployment/observability-grafana --timeout=90s
+  kubectl -n "${NAMESPACE}" rollout status \
+    deployment/observability-kube-prometh-operator --timeout=90s
+  kubectl -n "${NAMESPACE}" rollout status \
+    statefulset/logs-es --timeout=90s
+  kubectl -n "${NAMESPACE}" rollout status \
+    daemonset/fluent-bit --timeout=90s
+  kubectl -n "${NAMESPACE}" rollout status \
+    statefulset/prometheus-observability-kube-prometh-prometheus --timeout=90s
+  kubectl -n "${NAMESPACE}" rollout status \
+    statefulset/alertmanager-observability-kube-prometh-alertmanager --timeout=90s
+}
 
-phase 'Checking persistent storage and loaded alert rules'
-kubectl -n "${namespace}" get pvc -o json |
-  jq -e '[.items[] | select(.status.phase == "Bound")] | length >= 2' >/dev/null
-rules="$(curl --noproxy '*' --silent --show-error --fail --max-time 10 \
-  "https://${host}/prometheus/api/v1/rules")"
-jq -e '.status == "success" and (.data.groups | any(.name == "lab.pod-health"))' \
-  <<<"${rules}" >/dev/null
+check_storage_and_alert_rules() {
+  local rules
 
-phase 'Checking DNS, public TLS endpoints, and internal service health'
-resolved="$(getent ahostsv4 "${host}" | awk 'NR == 1 {print $1}')"
-[[ "${resolved}" == 192.168.56.200 ]] || fail "DNS resolved ${host} to ${resolved}"
-curl --noproxy '*' --silent --show-error --fail --max-time 10 "https://${host}/grafana/api/health" >/dev/null
-curl --noproxy '*' --silent --show-error --fail --max-time 10 "https://${host}/prometheus/-/ready" >/dev/null
-cluster_api '/api/v1/namespaces/observability/services/http:observability-kube-prometh-alertmanager:9093/proxy/-/ready' >/dev/null
-health="$(cluster_api '/api/v1/namespaces/observability/services/http:logs-es-http:9200/proxy/_cluster/health')"
-jq -e '.status == "green" or .status == "yellow"' <<<"${health}" >/dev/null
+  phase 'checking persistent storage and loaded alert rules'
 
-phase 'Checking Fluent Bit log delivery'
-indices=''
-for _ in {1..6}; do
-  indices="$(cluster_api '/api/v1/namespaces/observability/services/http:logs-es-http:9200/proxy/_cat/indices/kubernetes-*?h=index' 2>/dev/null || true)"
-  [[ -n "${indices}" ]] && break
-  sleep 5
-done
-[[ -n "${indices}" ]] || fail 'Fluent Bit has not written a Kubernetes index'
-printf 'PASS | Observability workloads, storage, endpoints, rules, and log delivery are healthy\n'
+  kubectl -n "${NAMESPACE}" get pvc -o json |
+    jq -e '[.items[] | select(.status.phase == "Bound")] | length >= 2' >/dev/null
+
+  rules="$(curl \
+    --noproxy '*' \
+    --silent \
+    --show-error \
+    --fail \
+    --max-time 10 \
+    "https://${HOST}/prometheus/api/v1/rules")"
+
+  jq -e '
+    .status == "success"
+    and (.data.groups | any(.name == "lab.pod-health"))
+  ' <<< "${rules}" >/dev/null
+}
+
+check_endpoints() {
+  local resolved_address
+  local elasticsearch_health
+
+  phase 'checking DNS, public TLS endpoints, and internal service health'
+
+  resolved_address="$(getent ahostsv4 "${HOST}" | awk 'NR == 1 {print $1}')"
+  [[ "${resolved_address}" == "${INGRESS_VIP}" ]] ||
+    fail "DNS resolved ${HOST} to ${resolved_address}"
+
+  curl --noproxy '*' --silent --show-error --fail --max-time 10 \
+    "https://${HOST}/grafana/api/health" >/dev/null
+  curl --noproxy '*' --silent --show-error --fail --max-time 10 \
+    "https://${HOST}/prometheus/-/ready" >/dev/null
+
+  cluster_api \
+    '/api/v1/namespaces/observability/services/http:observability-kube-prometh-alertmanager:9093/proxy/-/ready' \
+    >/dev/null
+
+  elasticsearch_health="$(cluster_api \
+    '/api/v1/namespaces/observability/services/http:logs-es-http:9200/proxy/_cluster/health')"
+
+  jq -e '.status == "green" or .status == "yellow"' \
+    <<< "${elasticsearch_health}" >/dev/null
+}
+
+check_log_delivery() {
+  local attempt
+  local indices=''
+
+  phase 'checking Fluent Bit log delivery'
+
+  for attempt in {1..6}; do
+    indices="$(cluster_api \
+      '/api/v1/namespaces/observability/services/http:logs-es-http:9200/proxy/_cat/indices/kubernetes-*?h=index' \
+      2>/dev/null || true)"
+
+    if [[ -n "${indices}" ]]; then
+      return
+    fi
+
+    sleep 5
+  done
+
+  fail 'Fluent Bit has not written a Kubernetes index'
+}
+
+cluster_smoke() {
+  trap diagnose ERR
+
+  wait_for_workloads
+  check_storage_and_alert_rules
+  check_endpoints
+  check_log_delivery
+
+  printf 'PASS | Observability workloads, storage, endpoints, rules, and log delivery are healthy\n'
+}
+
+operator_smoke() {
+  "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+}
+
+main() {
+  case "${1:-}" in
+    --cluster)
+      cluster_smoke
+      ;;
+    '')
+      operator_smoke
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+}
+
+main "$@"
