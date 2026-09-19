@@ -271,7 +271,7 @@
             mapfile -t pods < <(
               kubectl -n stage1-validation get pods -l app=network-check -o name
             )
-            [[ "${#pods[@]}" -eq 2 ]]
+            [[ -n "${pods[1]:-}" && -z "${pods[2]:-}" ]]
             target_ip="$(
               kubectl -n stage1-validation get "${pods[1]}"                 -o jsonpath='{.status.podIP}'
             )"
