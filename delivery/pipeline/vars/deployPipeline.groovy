@@ -35,9 +35,11 @@ def call() {
                                 env.CHART_REF = config.chartRegistry
 
                                 for (Map recorded in delivery.recordedDigests(config)) {
-                                    delivery.requirePromoted(recorded)
-                                    if (config.releases.containsKey(recorded.name)) {
-                                        release(config, recorded, '.delivery/validate-release.sh')
+                                    stage("Verify ${recorded.name} in ${recorded.target.name}") {
+                                        delivery.requirePromoted(recorded)
+                                        if (config.releases.containsKey(recorded.name)) {
+                                            release(config, recorded, '.delivery/validate-release.sh')
+                                        }
                                     }
                                 }
                             }
@@ -60,7 +62,9 @@ def call() {
 
                                 for (Map recorded in delivery.recordedDigests(config)) {
                                     if (config.releases.containsKey(recorded.name)) {
-                                        release(config, recorded, '.delivery/deploy.sh')
+                                        stage("Deploy ${recorded.name} to ${recorded.target.name}") {
+                                            release(config, recorded, '.delivery/deploy.sh')
+                                        }
                                     }
                                 }
                             }
@@ -98,7 +102,6 @@ private void release(Map config, Map recorded, String step) {
         }
 
         String chart = delivery.chartAt(revision, config.releases[name])
-        currentBuild.description = "${name} → ${target.name} · ${digest.take(19)}"
         withEnv([
             "CHART=${chart}",
             "RELEASE=${name}",
