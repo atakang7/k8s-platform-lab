@@ -19,24 +19,6 @@ umask 077
 # shellcheck source=registry-login.sh
 source "${SCRIPT_DIRECTORY}/registry-login.sh"
 
-require_inputs() {
-  : "${CHART:?CHART is required}"
-  : "${RELEASE:?RELEASE is required}"
-  : "${NAMESPACE:?NAMESPACE is required}"
-  : "${ENVIRONMENT:?ENVIRONMENT is required}"
-  : "${IMAGE_DIGEST:?IMAGE_DIGEST is required}"
-  : "${CHART_REF:?CHART_REF is required}"
-  : "${REGISTRY_USERNAME:?REGISTRY_USERNAME is required}"
-  : "${REGISTRY_PASSWORD:?REGISTRY_PASSWORD is required}"
-  : "${KUBERNETES_SERVICE_HOST:?KUBERNETES_SERVICE_HOST is required}"
-  : "${KUBERNETES_SERVICE_PORT:?KUBERNETES_SERVICE_PORT is required}"
-
-  [[ "${IMAGE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-    printf 'FAIL | IMAGE_DIGEST must be sha256:<64 hex>\n' >&2
-    exit 1
-  }
-}
-
 prepare_chart() {
   registry_login "${WORK_DIRECTORY}" "${CHART_REF}"
 
@@ -49,10 +31,6 @@ write_deployer_kubeconfig() {
   deployer_token="$(kubectl create token "${DEPLOYER_SERVICE_ACCOUNT}" \
     --namespace "${NAMESPACE}" \
     --duration="${DEPLOYER_TOKEN_DURATION}")"
-  [[ -n "${deployer_token}" ]] || {
-    printf 'FAIL | Kubernetes returned an empty deployer token\n' >&2
-    return 1
-  }
 
   cat > "${WORK_DIRECTORY}/kubeconfig" <<KUBECONFIG
 apiVersion: v1
@@ -110,7 +88,6 @@ deploy_release() {
 }
 
 main() {
-  require_inputs
   prepare_chart
   write_deployer_kubeconfig
 

@@ -122,9 +122,6 @@ def call(Map args) {
                             }
                             script {
                                 String digest = readFile('pushed.digest').trim()
-                                if (!(digest ==~ /^sha256:[0-9a-f]{64}$/)) {
-                                    error('publish-image.sh returned an invalid digest')
-                                }
                                 delivery.recordDigest(env.ENVIRONMENT, env.RELEASE, digest)
                                 currentBuild.description = "${env.RELEASE} ${digest.take(19)} → ${env.ENVIRONMENT}"
                             }

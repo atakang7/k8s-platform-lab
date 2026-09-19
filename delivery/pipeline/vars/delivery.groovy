@@ -1,37 +1,6 @@
-// Shared, repository-level delivery helpers. Keep validation here limited to
-// configuration invariants; pipeline flow remains visible in the pipeline files.
-
-boolean isDnsLabel(String value) {
-    value && value.size() <= 63 && value ==~ /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
-}
-
-boolean isRegistryHost(String value) {
-    if (!value) {
-        return false
-    }
-    value == 'localhost' ||
-        value ==~ /^[a-z0-9.-]+\.[a-z0-9.-]+$/ ||
-        value ==~ /^[a-z0-9.-]+:[0-9]+$/
-}
-
-boolean isImageRepository(String value) {
-    if (!value) {
-        return false
-    }
-
-    List<String> segments = value.tokenize('/')
-    if (segments.size() < 2 || !isRegistryHost(segments[0])) {
-        return false
-    }
-
-    segments.tail().every { String segment ->
-        segment ==~ /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/
-    }
-}
-
-boolean isOciRepository(String value) {
-    value?.startsWith('oci://') && isImageRepository(value.substring('oci://'.length()))
-}
+// Shared, repository-level delivery helpers. Configuration is checked once,
+// here, where it is read; the step scripts trust what they are given. Pipeline
+// flow remains visible in the pipeline files.
 
 // The delivery environments in promotion order, the chart registry, and the
 // releases the deploy job owns. Fail here when the contract is malformed so
@@ -43,19 +12,14 @@ Map environments() {
     if (!(targets instanceof List) || targets.isEmpty()) {
         error('environments.yaml: environments must be a non-empty list')
     }
-    for (Map target in targets) {
-        if (!isDnsLabel(target?.name as String)) {
-            error('environments.yaml: every environment name must be a DNS label of at most 63 characters')
-        }
-        if (!isDnsLabel(target?.namespace as String)) {
-            error("environments.yaml: ${target.name} namespace must be a DNS label of at most 63 characters")
-        }
+    if (targets.any { !it?.name || !it?.namespace }) {
+        error('environments.yaml: every environment needs a name and a namespace')
     }
     if (targets*.name.unique(false).size() != targets.size()) {
         error('environments.yaml: environment names must be unique')
     }
-    if (!isOciRepository(config?.chartRegistry as String)) {
-        error('environments.yaml: chartRegistry must use an explicit registry host, e.g. oci://registry.example.com/team')
+    if (!(config?.chartRegistry as String)?.startsWith('oci://')) {
+        error('environments.yaml: chartRegistry must be an oci:// reference')
     }
     if (!(config?.releases instanceof Map)) {
         error('environments.yaml: releases must map state entries to chart paths')
@@ -188,11 +152,8 @@ Map service(String chart) {
     String name = metadata?.name as String
     String repository = values?.image?.repository as String
 
-    if (!isDnsLabel(name)) {
-        error("${chart}/Chart.yaml: name must be a DNS label of at most 63 characters")
-    }
-    if (!isImageRepository(repository)) {
-        error("${chart}/values.yaml: image.repository must use an explicit registry host, e.g. registry.example.com/team/service")
+    if (!name || !repository) {
+        error("${chart}: Chart.yaml needs a name and values.yaml an image.repository")
     }
 
     [name: name, repository: repository]

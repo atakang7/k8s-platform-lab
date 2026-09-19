@@ -14,18 +14,6 @@ trap 'rm -rf -- "${WORK_DIRECTORY}"' EXIT
 # shellcheck source=registry-login.sh
 source "${SCRIPT_DIRECTORY}/registry-login.sh"
 
-require_inputs() {
-  : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
-  : "${IMAGE_DIGEST:?IMAGE_DIGEST is required}"
-  : "${REGISTRY_USERNAME:?REGISTRY_USERNAME is required}"
-  : "${REGISTRY_PASSWORD:?REGISTRY_PASSWORD is required}"
-
-  [[ "${IMAGE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-    printf 'FAIL | IMAGE_DIGEST must be sha256:<64 hex>\n' >&2
-    exit 1
-  }
-}
-
 read_image_revision() {
   local image_reference
   local image_revision
@@ -46,7 +34,6 @@ read_image_revision() {
 }
 
 main() {
-  require_inputs
   registry_login "${WORK_DIRECTORY}" "${IMAGE_REPOSITORY}"
   read_image_revision
 }

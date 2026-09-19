@@ -4,10 +4,6 @@
 # publish-image.sh pushes; nothing is rebuilt after the scan.
 set -eu
 
-: "${BUILD_CONTEXT:?BUILD_CONTEXT is required}"
-: "${COMMIT_SHA:?COMMIT_SHA is required}"
-: "${SOURCE_URL:?SOURCE_URL is required}"
-
 printf 'WAIT | building %s at %s into app-image/\n' "${BUILD_CONTEXT}" "${COMMIT_SHA}"
 
 rm -rf app-image

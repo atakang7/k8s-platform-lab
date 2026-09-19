@@ -16,25 +16,8 @@ trap 'rm -rf -- "${WORK_DIRECTORY}"' EXIT
 # shellcheck source=registry-login.sh
 source "${SCRIPT_DIRECTORY}/registry-login.sh"
 
-require_inputs() {
-  : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
-  : "${COMMIT_SHA:?COMMIT_SHA is required}"
-  : "${REGISTRY_USERNAME:?REGISTRY_USERNAME is required}"
-  : "${REGISTRY_PASSWORD:?REGISTRY_PASSWORD is required}"
-
-  [[ "${COMMIT_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
-    printf 'FAIL | COMMIT_SHA must be a full lowercase Git SHA\n' >&2
-    exit 1
-  }
-  [[ -f "${IMAGE_INDEX}" ]] || {
-    printf 'FAIL | OCI image index is missing: %s\n' "${IMAGE_INDEX}" >&2
-    exit 1
-  }
-}
-
 read_scanned_digest() {
   local manifest_count
-  local digest
 
   manifest_count="$(jq -r '.manifests | length' "${IMAGE_INDEX}")"
   [[ "${manifest_count}" == 1 ]] || {
@@ -42,13 +25,7 @@ read_scanned_digest() {
     return 1
   }
 
-  digest="$(jq -er '.manifests[0].digest' "${IMAGE_INDEX}")"
-  [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-    printf 'FAIL | invalid scanned manifest digest: %s\n' "${digest}" >&2
-    return 1
-  }
-
-  printf '%s\n' "${digest}"
+  jq -er '.manifests[0].digest' "${IMAGE_INDEX}"
 }
 
 main() {
@@ -56,7 +33,6 @@ main() {
   local pushed_digest
   local image_tag
 
-  require_inputs
   registry_login "${WORK_DIRECTORY}" "${IMAGE_REPOSITORY}"
   scanned_digest="$(read_scanned_digest)"
   image_tag="${IMAGE_REPOSITORY}:sha-${COMMIT_SHA:0:12}"

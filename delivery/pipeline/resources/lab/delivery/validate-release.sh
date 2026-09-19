@@ -15,16 +15,6 @@ trap 'rm -rf -- "${WORK_DIRECTORY}"' EXIT
 # shellcheck source=registry-login.sh
 source "${SCRIPT_DIRECTORY}/registry-login.sh"
 
-require_inputs() {
-  : "${CHART:?CHART is required}"
-  : "${RELEASE:?RELEASE is required}"
-  : "${NAMESPACE:?NAMESPACE is required}"
-  : "${ENVIRONMENT:?ENVIRONMENT is required}"
-  : "${CHART_REF:?CHART_REF is required}"
-  : "${REGISTRY_USERNAME:?REGISTRY_USERNAME is required}"
-  : "${REGISTRY_PASSWORD:?REGISTRY_PASSWORD is required}"
-}
-
 prepare_chart() {
   registry_login "${WORK_DIRECTORY}" "${CHART_REF}"
 
@@ -52,7 +42,6 @@ validate_with_api_server() {
 }
 
 main() {
-  require_inputs
   prepare_chart
   render_release
   validate_with_api_server
