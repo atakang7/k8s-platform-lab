@@ -1,4 +1,4 @@
-FROM eclipse-temurin:11.0.32_9-jdk-jammy@sha256:d47c552b2078dcb4d21471c3914194d501f351d7e85ec18a3f2bb1e452adecf9 AS build
+FROM eclipse-temurin:21.0.12_8-jdk-jammy@sha256:c7d5863b5dd8f26b90c64f1d80cc2b0e5a5e4642f8db9955a370d348edd8f438 AS build
 
 WORKDIR /workspace
 
@@ -10,7 +10,7 @@ COPY src/ src/
 RUN sh ./mvnw --batch-mode --no-transfer-progress package \
 && cp target/app-0.0.1-SNAPSHOT.jar /workspace/application.jar
 
-FROM eclipse-temurin:11.0.32_9-jre-ubi9-minimal@sha256:6bca03a0f51a7b8af331c3c5db0cfc47d5f5853dda33b5a125031d08250c3f88
+FROM eclipse-temurin:21.0.12_8-jre-ubi9-minimal@sha256:12f0fdd1ebb06c0c480353ec2d3855cca638462f531c9eb03981321629010511
 
 ARG SOURCE_REPOSITORY=unknown
 ARG SOURCE_REVISION=unknown
