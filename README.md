@@ -124,7 +124,7 @@ Later reconciliations normally use `make edge-up && make edge-smoke`.
 `make jenkins-up` stores the CI credentials in Vault from these variables when `secret/ci/github`, `secret/ci/dockerhub` and `secret/ci/cosign` are absent; later runs reuse Vault:
 
 ```bash
-export GITHUB_USERNAME=... GITHUB_TOKEN=...          # repository + commit-status access
+export GITHUB_USERNAME=... GITHUB_TOKEN=...          # contents, commit statuses, pull requests
 export DOCKERHUB_USERNAME=... DOCKERHUB_TOKEN=...    # image and chart publication
 export COSIGN_PASSWORD=... COSIGN_PRIVATE_KEY="$(cat cosign.key)"   # image signing
 ```

@@ -125,7 +125,7 @@ reconcile_external_credentials() {
   cat >&2 <<'MESSAGE'
 Inject the variables for each missing path and rerun:
   export GITHUB_USERNAME='<GitHub username>'
-  export GITHUB_TOKEN='<GitHub token with repository/status access>'
+  export GITHUB_TOKEN='<GitHub token with contents, commit-status and pull-request access>'
   export DOCKERHUB_USERNAME='<Docker Hub username>'
   export DOCKERHUB_TOKEN='<Docker Hub access token>'
   export COSIGN_PASSWORD='<new signing key password>'

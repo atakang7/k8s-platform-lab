@@ -148,6 +148,80 @@ void tagRelease(String environment) {
     }
 }
 
+// Opens, or refreshes, the pull request that promotes each release running in
+// `environment` to the next environment, where it does not run yet. Merging
+// it is the promotion: review and the deploy job's checks gate it.
+void openPromotions(Map config, String environment) {
+    List<String> names = config.environments*.name
+    int position = names.indexOf(environment)
+    if (position == names.size() - 1) {
+        return
+    }
+
+    String next = names[position + 1]
+    Map current = releases(environment)
+    Map promoted = releases(next)
+    for (String name in current.keySet()) {
+        if (current[name] != null && current[name] != promoted[name]) {
+            openPromotion(next, name, current[name])
+        }
+    }
+}
+
+// One promotion pull request, on branch promote/<environment>/<service>: main's
+// state/<environment>.yaml with this release. The branch is force-pushed, so
+// a newer release replaces the one an open pull request proposes.
+private void openPromotion(String environment, String name, Map release) {
+    String worktree = ".promote/${environment}-${name}"
+    withEnv([
+        "BRANCH=promote/${environment}/${name}",
+        "WORKTREE=${worktree}",
+        "STATE_PATH=state/${environment}.yaml",
+        "TITLE=Promote ${name} ${release.version} to ${environment}",
+        "BODY=Deploys ${name} ${release.version} (${release.image}) to ${environment}. The deploy job verifies it on this pull request; merging deploys it."
+    ]) {
+        withCredentials([
+            gitUsernamePassword(credentialsId: 'github-creds'),
+            usernamePassword(credentialsId: 'github-creds', usernameVariable: 'GITHUB_USER', passwordVariable: 'GITHUB_TOKEN')
+        ]) {
+            sh '''
+              git fetch --no-tags origin main
+              rm -rf "$WORKTREE"
+              git worktree add --force --detach "$WORKTREE" FETCH_HEAD
+            '''
+            Map state = readYaml(file: "${worktree}/state/${environment}.yaml")
+            state.services[name] = release
+            writeYaml(file: "${worktree}/state/${environment}.yaml", data: state, overwrite: true)
+            sh '''
+              if git -C "$WORKTREE" diff --quiet; then
+                echo "PASS | main already promotes this release"
+              else
+                git -C "$WORKTREE" -c user.name=lab-delivery -c user.email=delivery@lab.test \
+                  commit --quiet --message "$TITLE" -- "$STATE_PATH"
+                git -C "$WORKTREE" push --force origin "HEAD:refs/heads/$BRANCH"
+                repository="$(git config --get remote.origin.url | sed -E 's#^https://github.com/##; s#\\.git$##')"
+                status="$(jq -n --arg title "$TITLE" --arg head "$BRANCH" --arg body "$BODY" \
+                    '{title: $title, head: $head, base: "main", body: $body}' |
+                  curl --silent --show-error --output .promote/response.json --write-out '%{http_code}' \
+                    --request POST \
+                    --header "Authorization: Bearer $GITHUB_TOKEN" \
+                    --header 'Accept: application/vnd.github+json' \
+                    --data @- \
+                    "https://api.github.com/repos/$repository/pulls")"
+                case "$status" in
+                  201) echo "PASS | opened $(jq -r .html_url .promote/response.json)" ;;
+                  422) jq -e '.errors[]?.message | select(test("already exists"))' .promote/response.json >/dev/null ||
+                         { echo "FAIL | GitHub refused the pull request: $(cat .promote/response.json)" >&2; exit 1; }
+                       echo "PASS | refreshed the open pull request for $BRANCH" ;;
+                  *) echo "FAIL | GitHub returned $status: $(cat .promote/response.json)" >&2; exit 1 ;;
+                esac
+              fi
+              git worktree remove --force "$WORKTREE"
+            '''
+        }
+    }
+}
+
 // A pull request that changes a service must raise its app version (the
 // chart's version) above the target branch's. A service new to the target
 // branch has nothing to compare against.

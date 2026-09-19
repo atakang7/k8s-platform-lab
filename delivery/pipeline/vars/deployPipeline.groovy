@@ -74,6 +74,7 @@ def call() {
                                             }
                                             // Reached only when every release above passed its tests.
                                             delivery.tagRelease(environment)
+                                            delivery.openPromotions(config, environment)
                                         }
                                     }
                                 }
