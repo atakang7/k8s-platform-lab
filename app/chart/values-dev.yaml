@@ -7,3 +7,6 @@ strategy:
     maxSurge: 1
 ingress:
   host: app-dev.lab.test
+# One replica: a budget would leave no Pod evictable and block every drain.
+podDisruptionBudget:
+  enabled: false
