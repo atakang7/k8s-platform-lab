@@ -27,4 +27,4 @@ COPY --from=build --chown=10001:10001 /workspace/application.jar ./application.j
 USER 10001:10001
 EXPOSE 9001
 
-ENTRYPOINT ["java", "-jar", "/app/application.jar"]
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "/app/application.jar"]
