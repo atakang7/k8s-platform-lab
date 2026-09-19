@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Scans the OCI layout build-image.sh produced and writes its CycloneDX SBOM.
-# Any CRITICAL vulnerability fails the build, so nothing critical is published.
+# Scans the OCI layout build-image.sh produced, prints every CRITICAL
+# vulnerability in the build log, and writes the image's CycloneDX SBOM. Any
+# CRITICAL vulnerability fails the build, so nothing critical is published.
 set -Eeuo pipefail
 
 readonly IMAGE_LAYOUT=app-image
+readonly REPORT_FILE=trivy-report.json
 readonly SBOM_FILE=sbom.json
 
 [[ -f "${IMAGE_LAYOUT}/index.json" ]] || {
@@ -13,13 +15,23 @@ readonly SBOM_FILE=sbom.json
 
 printf 'WAIT | scanning image for CRITICAL vulnerabilities\n'
 
+# One scan: the report lists every package (for the SBOM) and the findings.
+status=0
 trivy image \
   --input "${IMAGE_LAYOUT}" \
   --scanners vuln \
   --severity CRITICAL \
+  --list-all-pkgs \
   --exit-code 1 \
-  --format cyclonedx \
-  --output "${SBOM_FILE}" \
-  --no-progress
+  --format json \
+  --output "${REPORT_FILE}" \
+  --no-progress || status=$?
 
-printf 'PASS | pre-publish scan completed; SBOM: %s\n' "${SBOM_FILE}"
+trivy convert --format table "${REPORT_FILE}"
+trivy convert --format cyclonedx --output "${SBOM_FILE}" "${REPORT_FILE}"
+
+if [[ "${status}" -ne 0 ]]; then
+  printf 'FAIL | CRITICAL vulnerabilities found (listed above); SBOM: %s\n' "${SBOM_FILE}" >&2
+  exit "${status}"
+fi
+printf 'PASS | no CRITICAL vulnerabilities; SBOM: %s\n' "${SBOM_FILE}"
