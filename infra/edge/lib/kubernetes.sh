@@ -98,7 +98,10 @@ verify_dns_secret() (
   trap 'rm -rf -- "${temporary_directory}"' EXIT
 
   vault kv get -format=json secret/edge/dns/tsig > "${temporary_directory}/vault.json"
-  kubectl -n external-dns get secret rfc2136-tsig -o json > "${temporary_directory}/kubernetes.json"
+  # Through tee: a snap-confined kubectl cannot write a redirected file in
+  # the host /tmp ("write /dev/stdout: bad file descriptor").
+  kubectl -n external-dns get secret rfc2136-tsig -o json |
+    tee "${temporary_directory}/kubernetes.json" >/dev/null
 
   jq -e --slurpfile installed "${temporary_directory}/kubernetes.json" '
     .data.data as $wanted
@@ -116,7 +119,10 @@ verify_tls_secret() (
   trap 'rm -rf -- "${temporary_directory}"' EXIT
 
   vault kv get -format=json secret/edge/tls/wildcard > "${temporary_directory}/vault.json"
-  kubectl -n ingress-nginx get secret lab-wildcard -o json > "${temporary_directory}/kubernetes.json"
+  # Through tee: a snap-confined kubectl cannot write a redirected file in
+  # the host /tmp ("write /dev/stdout: bad file descriptor").
+  kubectl -n ingress-nginx get secret lab-wildcard -o json |
+    tee "${temporary_directory}/kubernetes.json" >/dev/null
 
   jq -e --slurpfile installed "${temporary_directory}/kubernetes.json" '
     .data.data as $wanted
