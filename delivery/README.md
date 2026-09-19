@@ -77,12 +77,12 @@ No cluster credential is stored in Jenkins.
 | To | Do |
 |---|---|
 | deploy to dev | merge a service change; CI commits the new digest to `state/dev.yaml` |
-| promote | pull request copying a digest into `state/stage.yaml` or `state/prod.yaml`; the deploy job verifies it, review approves it |
+| promote | pull request copying a digest into `state/stage.yaml` or `state/prod.yaml`; the deploy job verifies it, a code owner ([`.github/CODEOWNERS`](../.github/CODEOWNERS)) approves it |
 | roll back | revert the state commit |
 
 A failed deploy rolls itself back and fails the build. The state file still names the new digest until someone reverts or fixes it.
 
-Jenkins pushes state commits to `main` with `github-creds`. That token needs contents write access, and branch protection must allow the push.
+Jenkins pushes state commits to `main` with `github-creds`. That token needs contents write access, and branch protection must allow the push. The promotion gate holds only while `main`'s branch protection requires code-owner review; without it, anyone who can merge can deploy to prod.
 
 ## Operating rules
 
