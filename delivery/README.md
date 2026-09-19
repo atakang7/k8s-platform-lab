@@ -60,36 +60,46 @@ Base charts live in [`charts/`](../charts/), and namespaces and deploy identitie
 
 The chart name is the release name and the state entry, and the chart's `image.repository` is the only repository its releases accept. Per-environment values go in `values-<environment>.yaml` next to `values.yaml`.
 
-## Pipeline
+## Release flow
+
+One immutable image moves from pull request to prod. Machines check every step; people decide only at the two promotion pull requests and the merge.
 
 ```text
-branch or pull request ─► service job ─► changeset under `path`? ── no ──► done
-                               │ yes
-                               ▼
-        Validate   hadolint · helm dry-run in dev through the API server and admission
-        Build      BuildKit, once; unit tests run inside the Dockerfile
-        Scan       Trivy + CycloneDX SBOM of that image
-        ── main only ──
-        Publish    push the scanned image unchanged; digest must match
-                   publish the chart as <Chart.yaml version>-sha-<commit>
-                   commit {chart, image} to state/dev.yaml on main
-                               │
-                               ▼
-state/ changed ─► deploy job
-        Verify     every image was in the previous environment first
-                   dry-run of the recorded chart with the environment's values
-        ── main only ──
-        Deploy     dev, stage, prod in order, one agent Pod each running as that
-                   environment's jenkins-deploy-<name>; releases already on their
-                   chart and image are skipped
-                   helm upgrade --wait --rollback-on-failure
+ 1. CODE        developer opens a PR, bumps the app version
+                        │
+ 2. CHECK       build · test · scan · dry-run          ✗ fail → PR blocked
+                        │
+                   [ review + merge ]
+                        │
+ 3. PUBLISH     image + chart pushed as v1.4.2, signed
+                        │
+ 4. DEV         auto-deploy → smoke test               ✗ fail → auto-rollback
+                        │   tag dev-2026.09.19.1
+                   [ promotion PR ]
+                        │
+ 5. STAGE       deploy → end-to-end tests              ✗ fail → auto-rollback
+                        │   tag stage-2026.09.19.1
+                   [ promotion PR + owner approval ]
+                        │
+ 6. PROD        canary 10% → watch metrics → 100%      ✗ bad metrics → auto-rollback
+                        │   tag prod-2026.09.19.1
+                        │
+ 7. ROLLBACK    PR restoring an earlier prod-… tag
 ```
 
-Everything here is native Jenkins and Git:
-- **Jobs:** GitHub Branch Source builds every branch and pull request and posts the GitHub commit status.
-- **Only relevant changes run:** declarative `when { changeset }`. A new multibranch job has no changelog, so its first build runs the relevant bootstrap checks instead of silently skipping them.
-- **Only `main` publishes and deploys:** `when { branch 'main' }`.
-- **Release identity:** a chart version and an image digest, published together by one CI run. The state records both, so an image always ships with the chart it was tested with.
+| Step | What happens | Where |
+|---|---|---|
+| 1 Code | The app version is `version` in the service chart's `Chart.yaml`. A pull request that changes a service must raise it. | `servicePipeline` Validate |
+| 2 Check | hadolint; BuildKit builds once with unit tests inside the Dockerfile; Trivy fails on CRITICAL and writes a CycloneDX SBOM; server-side dry-run of the chart in dev through the API server and admission. | `servicePipeline`, `build-image.sh`, `scan-image.sh`, `validate-release.sh` |
+| 3 Publish | main only. The scanned bytes are pushed as `<image>:<version>` (never rebuilt), the chart as `<chart>:<version>`, and the image is signed with cosign. A version already published from another commit is refused. CI commits `{version, image}` to `state/dev.yaml`. | `publish-image.sh`, `publish-chart.sh`, `delivery.recordRelease` |
+| 4 Dev | The state commit starts the deploy job. It verifies the promotion rule, the signature and a dry-run, releases with `helm upgrade --wait`, then runs the chart's Helm tests. A failed test rolls the release back. A healthy environment is tagged, and a pull request promoting the release to stage opens. | `deployPipeline`, `deploy.sh` |
+| 5 Stage | Same as dev. A service's own Helm tests are its end-to-end tests; the base chart's smoke test runs for every service. Success opens the promotion pull request to prod. | same |
+| 6 Prod | Environments with `canary` in `environments.yaml` first release `<service>-canary` with one replica behind 10% of the ingress traffic and watch its 5xx rate in Prometheus. Bad metrics remove the canary and leave the stable release untouched; good metrics release the stable version and remove the canary. | `deploy.sh` |
+| 7 Rollback | `git checkout prod-2026.09.19.1 -- state/prod.yaml` in a pull request. The promotion rule accepts it because every image in it was in stage before. | Git |
+
+Every step leaves a record in Git: a state commit per deploy and a `<environment>-<date>.<n>` tag per healthy environment.
+
+Jobs run only for relevant changes (`when { changeset }`); a new multibranch job has no changelog, so its first build runs every check instead of silently skipping them.
 
 ## Identities
 
