@@ -396,6 +396,15 @@ install_jenkins() {
   pass 'Jenkins release reconciled'
 }
 
+# Agent Pods stay up for idleMinutes and are reused as they are, so after a
+# template change (a new tools image, a new identity) the next build would
+# still run on the old Pod. Remove them; the next build starts a current one.
+remove_agent_pods() {
+  kubectl -n "${JENKINS_NAMESPACE}" delete pods \
+    --selector component=jenkins-agent \
+    --ignore-not-found --wait=false >/dev/null
+}
+
 cluster_reconcile() {
   prepare_namespace
   reconcile_jenkins_approle
@@ -404,6 +413,7 @@ cluster_reconcile() {
   verify_vault_secrets
   verify_agent_cluster_scope
   install_jenkins
+  remove_agent_pods
 }
 
 main() {
