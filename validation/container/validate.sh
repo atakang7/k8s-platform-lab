@@ -188,6 +188,26 @@ wait_for_application() {
   fail 'HTTP endpoint did not become ready within 60 seconds'
 }
 
+validate_health_endpoints() {
+  local host_port="$1"
+  local endpoint
+
+  for endpoint in liveness readiness; do
+    curl \
+      --silent \
+      --show-error \
+      --fail \
+      --output "${RESPONSE_FILE}" \
+      "http://127.0.0.1:${host_port}/actuator/health/${endpoint}" ||
+      fail "Actuator ${endpoint} endpoint is unavailable"
+
+    grep --fixed-strings --quiet '"status":"UP"' "${RESPONSE_FILE}" ||
+      fail "Actuator ${endpoint} endpoint did not report UP"
+  done
+
+  pass 'Actuator liveness and readiness endpoints report UP'
+}
+
 validate_application_log() {
   local attempt
 
@@ -296,6 +316,7 @@ main() {
 
   host_port="$(start_application "${image_reference}" "${git_sha}")"
   wait_for_application "${host_port}"
+  validate_health_endpoints "${host_port}"
   validate_application_log
   validate_metrics "${host_port}"
   validate_runtime_image

@@ -1,6 +1,6 @@
 # Application
 
-`app/` owns the Java service, container image definition, Kubernetes runtime manifests, probes, resource contract, and application file logging.
+`app/` owns the Java service, container image definition, Kubernetes runtime settings, probes, resource contract, and application logging.
 
 ## Request path
 
@@ -21,7 +21,7 @@ node-2     node-3
 2 Pods     2 Pods
 ```
 
-Each Pod contains the Java application and its Fluent Bit file-log sidecar. The service listens on `9001`. `GET /api/foos?val=<value>` returns `QueryStringValue: <value>` and writes the request to the application log.
+Each Pod contains the Java application and its Fluent Bit file-log sidecar. The service listens on `9001`. `GET /api/foos?val=<value>` returns `QueryStringValue: <value>` and records the request through the normal application logger.
 
 ## Image
 
@@ -70,40 +70,40 @@ maxSurge:       4
 
 Replacement Pods must become Ready before old capacity is intentionally removed.
 
-## Health
+## Health and shutdown
+
+Health traffic never calls the business endpoint.
 
 | Probe | Path | Role |
 |---|---|---|
-| startup | `/api/foos?val=startup` | gates readiness/liveness until JVM startup succeeds |
-| readiness | `/api/foos?val=ready` | gates Service traffic |
-| liveness | `/api/foos?val=liveness` | restarts the container after repeated failure |
+| startup | `/actuator/health/liveness` | gives the JVM up to 120 seconds to start before liveness/readiness take over |
+| readiness | `/actuator/health/readiness` | controls whether the Pod receives Service traffic |
+| liveness | `/actuator/health/liveness` | restarts a process whose application context is no longer live |
 
-Readiness is the traffic decision. A running container is not considered ready until this probe passes.
+Spring's Kubernetes probe groups are enabled explicitly. On SIGTERM the application uses graceful shutdown with a 20-second Spring shutdown phase, allowing in-flight requests to finish before the container exits.
 
 `/actuator/prometheus` exposes HTTP and JVM metrics to the Git-managed ServiceMonitor. The management web surface is limited to health and Prometheus.
 
-## File logging
+## Logging
 
 ```text
-Java request thread
-      │
-      ▼
-async Logback appender
-      │
-      ▼
-/var/log/app/app.log
-      │ shared emptyDir
-      ▼
-Fluent Bit sidecar
-      │
-      ▼
-Elasticsearch
+                         ┌──► stdout ──► Kubernetes container log
+Java application logger ─┤
+                         └──► async file appender
+                                  │
+                                  ▼
+                         /var/log/app/app.log
+                                  │ shared emptyDir
+                                  ▼
+                         Fluent Bit sidecar
+                                  │
+                                  ▼
+                            Elasticsearch
 ```
 
-Logback rotates daily and by size. Retained file history is capped at 1 GiB total. Remote log transport is outside the Java request path.
+The console stream preserves the normal Kubernetes logging path. The file appender exists for the explicit sidecar requirement; it rotates daily and by size, with retained file history capped at 1 GiB. Remote log transport stays outside the Java request path.
 
-The platform-level Fluent Bit still collects normal Kubernetes container logs. This sidecar exists for the explicit application file log.
-Its tail offset database lives on the Pod's shared volume, so a sidecar restart resumes without replaying the file.
+The sidecar's tail offset database lives on the Pod's shared volume, so a sidecar restart resumes from its recorded position instead of replaying the whole file.
 
 ## Chart
 

@@ -14,14 +14,14 @@ strategy:
 
 probes:
   startup:
-    httpGet: {path: "/api/foos?val=startup", port: http}
+    httpGet: {path: /actuator/health/liveness, port: http}
     failureThreshold: 60
     periodSeconds: 2
   readiness:
-    httpGet: {path: "/api/foos?val=ready", port: http}
+    httpGet: {path: /actuator/health/readiness, port: http}
     periodSeconds: 2
   liveness:
-    httpGet: {path: "/api/foos?val=liveness", port: http}
+    httpGet: {path: /actuator/health/liveness, port: http}
     periodSeconds: 10
 
 resources:
