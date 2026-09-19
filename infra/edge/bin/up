@@ -62,7 +62,7 @@ wait_for_current_tsig() (
       "\nkey \"" + .data.data.key_name + "\" {" +
       "\n  algorithm hmac-sha256;" +
       "\n  secret \"" + .data.data.secret + "\";" +
-      "\n};"
+      "\n};\n"
     ' > "${expected_tsig}"
 
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
