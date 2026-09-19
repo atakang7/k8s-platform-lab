@@ -7,7 +7,7 @@
 # it, the deploy job releases only it, and `make policies-up` installs its
 # policy digests. The other environments keep their place in promotion order
 # and their state in Git; each runs on its own cluster.
-clusterEnvironment: prod
+clusterEnvironment: dev
 chartRegistry: oci://registry-1.docker.io/atakangul
 # Prometheus the deploy job judges canaries with (platform/observability).
 metrics: http://observability-kube-prometh-prometheus.observability.svc:9090/prometheus
