@@ -1,13 +1,15 @@
 # shellcheck shell=bash
-# Sourced. The one way delivery reaches registries: Helm (charts) and skopeo
-# (images) both read the Docker-format auth file registry_login writes, and
-# release_chart is the one way a step gets the chart it releases.
+# Sourced. The one way delivery reaches registries: Helm (charts), skopeo
+# (images) and cosign (signatures) all read the Docker-format auth file
+# registry_login writes, and release_chart is the one way a step gets the chart
+# it releases.
 #
 #   registry_login <state directory> <reference>...
 #
 # Each reference is an image repository or an oci:// chart reference; its host
 # gets REGISTRY_USERNAME/REGISTRY_PASSWORD. Exports REGISTRY_AUTH_FILE and
-# points Helm's registry config and cache into the state directory.
+# DOCKER_CONFIG, and points Helm's registry config and cache into the state
+# directory.
 
 registry_login() {
   local state_directory="$1"
@@ -27,7 +29,8 @@ registry_login() {
   encoded_auth="$(printf '%s:%s' "${REGISTRY_USERNAME}" "${REGISTRY_PASSWORD}" |
     base64 | tr -d '\n')"
 
-  export REGISTRY_AUTH_FILE="${state_directory}/registry-auth.json"
+  export DOCKER_CONFIG="${state_directory}"
+  export REGISTRY_AUTH_FILE="${DOCKER_CONFIG}/config.json"
   export HELM_REGISTRY_CONFIG="${REGISTRY_AUTH_FILE}"
   export HELM_REPOSITORY_CONFIG="${state_directory}/helm-repositories.yaml"
   export HELM_REPOSITORY_CACHE="${state_directory}/helm-cache"

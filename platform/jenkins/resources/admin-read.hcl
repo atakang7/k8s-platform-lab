@@ -9,3 +9,7 @@ path "secret/data/ci/dockerhub" {
 path "secret/data/ci/github" {
   capabilities = ["read"]
 }
+
+path "secret/data/ci/cosign" {
+  capabilities = ["read"]
+}

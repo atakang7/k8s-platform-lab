@@ -3,7 +3,9 @@
 # that environment's values (values-<ENVIRONMENT>.yaml when the chart has one):
 # schema validation plus the admission chain. CI dry-runs its local CHART before
 # the image exists, so a placeholder digest stands in; the deploy job dry-runs
-# the recorded release (APP_VERSION and IMAGE_DIGEST).
+# the recorded release (APP_VERSION and IMAGE_DIGEST), and first verifies that
+# every image the release runs at that digest carries the delivery signature
+# (cosign.pub, installed by the deploy job from the delivery library).
 set -Eeuo pipefail
 
 readonly PLACEHOLDER_IMAGE_DIGEST='sha256:0000000000000000000000000000000000000000000000000000000000000000'
@@ -35,6 +37,26 @@ render_release() {
     > "${WORK_DIRECTORY}/release.yaml"
 }
 
+verify_signatures() {
+  local images=()
+  local image
+
+  mapfile -t images < <(grep -oE "[^\"' ]+@${IMAGE_DIGEST}" "${WORK_DIRECTORY}/release.yaml" | sort -u)
+  [[ "${#images[@]}" -gt 0 ]] || {
+    printf 'FAIL | %s does not run %s\n' "${RELEASE}" "${IMAGE_DIGEST}" >&2
+    exit 1
+  }
+
+  registry_login "${WORK_DIRECTORY}" "${CHART_REF}" "${images[@]}"
+  for image in "${images[@]}"; do
+    cosign verify \
+      --key "${SCRIPT_DIRECTORY}/cosign.pub" \
+      --insecure-ignore-tlog=true \
+      "${image}" >/dev/null
+    printf 'PASS | %s is signed by delivery\n' "${image}"
+  done
+}
+
 validate_with_api_server() {
   kubectl apply \
     --dry-run=server \
@@ -44,6 +66,10 @@ validate_with_api_server() {
 main() {
   prepare_chart
   render_release
+  # CI dry-runs before the image exists; only a recorded release has a digest.
+  if [[ -n "${IMAGE_DIGEST:-}" ]]; then
+    verify_signatures
+  fi
   validate_with_api_server
 }
 

@@ -181,6 +181,18 @@ credentials:
               description: DockerHub CI credential
               username: "${DOCKERHUB_USERNAME}"
               password: "${DOCKERHUB_TOKEN}"
+          # Delivery image signing key (cosign); its public half ships in the
+          # delivery library as cosign.pub.
+          - string:
+              scope: GLOBAL
+              id: cosign-private-key
+              description: Delivery image signing key
+              secret: "${COSIGN_PRIVATE_KEY}"
+          - string:
+              scope: GLOBAL
+              id: cosign-password
+              description: Delivery image signing key password
+              secret: "${COSIGN_PASSWORD}"
 
 jobs:
   - script: |
@@ -197,21 +209,11 @@ jobs:
       def githubMultibranch = { String name, String jenkinsfile ->
         multibranchPipelineJob(name) {
           branchSources {
-            branchSource {
-              source {
-                github {
-                  id(name)
-                  repoOwner(githubOwner)
-                  repository(githubRepository)
-                  repositoryUrl("https://github.com/${githubOwner}/${githubRepository}")
-                  configuredByUrl(true)
-                  credentialsId('github-creds')
-                  traits {
-                    gitHubBranchDiscovery { strategyId(1) }          // branches that are not pull requests
-                    gitHubPullRequestDiscovery { strategyId(1) }     // pull requests merged with their target
-                  }
-                }
-              }
+            github {
+              id(name)
+              repoOwner(githubOwner)
+              repository(githubRepository)
+              scanCredentialsId('github-creds')
             }
           }
           factory { workflowBranchProjectFactory { scriptPath(jenkinsfile) } }

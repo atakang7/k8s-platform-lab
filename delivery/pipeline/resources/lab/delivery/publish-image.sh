@@ -4,6 +4,8 @@
 # when the tag exists from this commit (a rebuild), its digest is reused; from
 # another commit, publication fails and the version must be raised. Publication
 # also fails if the registry digest differs from the scanned manifest digest.
+# The published digest is then signed with the delivery signing key
+# (COSIGN_PRIVATE_KEY, COSIGN_PASSWORD); the deploy job verifies it.
 set -Eeuo pipefail
 
 readonly IMAGE_LAYOUT=app-image
@@ -53,6 +55,20 @@ read_published_digest() {
     "docker://${IMAGE_REPOSITORY}:${APP_VERSION}" | jq -r '.Digest'
 }
 
+# Key-based signature stored beside the image. Nothing goes to the public
+# transparency log, which would publish the image names; the deploy job
+# verifies against the key instead (validate-release.sh).
+sign_image() {
+  local digest="$1"
+
+  cosign sign --yes \
+    --key env://COSIGN_PRIVATE_KEY \
+    --tlog-upload=false \
+    --use-signing-config=false \
+    "${IMAGE_REPOSITORY}@${digest}" >/dev/null
+  printf 'PASS | signed %s@%s\n' "${IMAGE_REPOSITORY}" "${digest}"
+}
+
 main() {
   local scanned_digest
   local published_digest
@@ -67,6 +83,7 @@ main() {
     printf '%s\n' "${published_digest}" > "${DIGEST_FILE}"
     printf 'PASS | %s is already published from this commit as %s\n' \
       "${image_tag}" "${published_digest}"
+    sign_image "${published_digest}"
     return
   fi
 
@@ -88,6 +105,7 @@ main() {
   }
 
   printf 'PASS | published %s@%s\n' "${IMAGE_REPOSITORY}" "${pushed_digest}"
+  sign_image "${pushed_digest}"
 }
 
 main "$@"

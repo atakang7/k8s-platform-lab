@@ -111,6 +111,11 @@ reconcile_external_credentials() {
     token "${DOCKERHUB_TOKEN:-}" DOCKERHUB_TOKEN ||
     missing_paths+=('secret/ci/dockerhub')
 
+  reconcile_external_secret secret/ci/cosign \
+    private_key "${COSIGN_PRIVATE_KEY:-}" COSIGN_PRIVATE_KEY \
+    password "${COSIGN_PASSWORD:-}" COSIGN_PASSWORD ||
+    missing_paths+=('secret/ci/cosign')
+
   if [[ "${#missing_paths[@]}" -eq 0 ]]; then
     return
   fi
@@ -118,11 +123,14 @@ reconcile_external_credentials() {
   printf 'FAIL | missing external Jenkins credentials\n' >&2
   printf 'Missing Vault path: %s\n' "${missing_paths[@]}" >&2
   cat >&2 <<'MESSAGE'
-Inject all four variables and rerun:
+Inject the variables for each missing path and rerun:
   export GITHUB_USERNAME='<GitHub username>'
   export GITHUB_TOKEN='<GitHub token with repository/status access>'
   export DOCKERHUB_USERNAME='<Docker Hub username>'
   export DOCKERHUB_TOKEN='<Docker Hub access token>'
+  export COSIGN_PASSWORD='<new signing key password>'
+  cosign generate-key-pair   # commit cosign.pub (see README.md), keep cosign.key out of Git
+  export COSIGN_PRIVATE_KEY="$(cat cosign.key)"
   make jenkins-up
 MESSAGE
   exit 1
@@ -350,6 +358,13 @@ verify_vault_secrets() {
     dockerhub-creds \
     username \
     token
+
+  wait_for_vault_secret \
+    cosign-signing \
+    secret/ci/cosign \
+    cosign-signing \
+    private_key \
+    password
 
   pass 'Vault-managed Jenkins Secrets match Vault'
 }

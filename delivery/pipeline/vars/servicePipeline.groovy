@@ -121,7 +121,9 @@ def call(Map args) {
                                         credentialsId: 'dockerhub-creds',
                                         usernameVariable: 'REGISTRY_USERNAME',
                                         passwordVariable: 'REGISTRY_PASSWORD'
-                                    )
+                                    ),
+                                    string(credentialsId: 'cosign-private-key', variable: 'COSIGN_PRIVATE_KEY'),
+                                    string(credentialsId: 'cosign-password', variable: 'COSIGN_PASSWORD')
                                 ]) {
                                     sh '.delivery/publish-image.sh'
                                     withEnv(["CHART_DIR=${args.chart}"]) {

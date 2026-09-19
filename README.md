@@ -121,12 +121,15 @@ Later reconciliations normally use `make edge-up && make edge-smoke`.
 
 ### 3. Load external credentials
 
-`make jenkins-up` stores the CI credentials in Vault from these variables when `secret/ci/github` and `secret/ci/dockerhub` are absent; later runs reuse Vault:
+`make jenkins-up` stores the CI credentials in Vault from these variables when `secret/ci/github`, `secret/ci/dockerhub` and `secret/ci/cosign` are absent; later runs reuse Vault:
 
 ```bash
 export GITHUB_USERNAME=... GITHUB_TOKEN=...          # repository + commit-status access
 export DOCKERHUB_USERNAME=... DOCKERHUB_TOKEN=...    # image and chart publication
+export COSIGN_PASSWORD=... COSIGN_PRIVATE_KEY="$(cat cosign.key)"   # image signing
 ```
+
+Create the signing key once with `cosign generate-key-pair`. Commit `cosign.pub` as `delivery/pipeline/resources/lab/delivery/cosign.pub` and keep `cosign.key` out of Git; the deploy job refuses images not signed with it.
 
 The runtime image-pull credential is written once:
 

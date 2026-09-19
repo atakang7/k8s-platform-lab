@@ -36,6 +36,16 @@ controller:
         secretKeyRef:
           name: dockerhub-creds
           key: token
+    - name: COSIGN_PRIVATE_KEY
+      valueFrom:
+        secretKeyRef:
+          name: cosign-signing
+          key: private_key
+    - name: COSIGN_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: cosign-signing
+          key: password
   resources:
     requests:
       cpu: 100m

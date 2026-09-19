@@ -168,6 +168,19 @@ Map service(String chart) {
     [name: name, version: version, repository: repository]
 }
 
+// The public half of the delivery signing key, which publish-image.sh signs
+// with. It ships in this library, which always loads from main, so a branch
+// cannot change the key its images are verified against.
+void installSigningKey() {
+    String key
+    try {
+        key = libraryResource('lab/delivery/cosign.pub')
+    } catch (Exception missing) {
+        error("delivery signing key is missing: commit cosign.pub to delivery/pipeline/resources/lab/delivery/ (README.md, Load external credentials): ${missing.message}")
+    }
+    writeFile(file: '.delivery/cosign.pub', text: key)
+}
+
 // Materialize the library's shell resources into the workspace. The pipeline
 // invokes each resulting script explicitly; sourcing is used only for the
 // side-effect-free registry functions.

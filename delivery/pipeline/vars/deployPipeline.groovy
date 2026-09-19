@@ -22,8 +22,9 @@ def call() {
                 }
                 stages {
                     // An image may enter an environment only after it was in the
-                    // previous one. Released services must also pass a server-side
-                    // dry-run of their chart with the target environment's values.
+                    // previous one. Released services must also carry the delivery
+                    // signature and pass a server-side dry-run of their chart with
+                    // the target environment's values.
                     stage('Verify') {
                         agent { label 'lab-ci-runner' }
                         options { timeout(time: 15, unit: 'MINUTES') }
@@ -31,6 +32,7 @@ def call() {
                             script {
                                 checkout scm
                                 delivery.installScripts()
+                                delivery.installSigningKey()
                                 Map config = delivery.environments()
                                 env.CHART_REF = config.chartRegistry
                                 env.DELIVERY_ENVIRONMENTS = config.environments*.name.join(' ')
