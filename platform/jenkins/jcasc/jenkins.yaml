@@ -53,9 +53,11 @@ jenkins:
                       type: DirectoryOrCreate
                 initContainers:
                   # hostPaths are created root-owned; BuildKit and ci-tools run as uid 1000.
+                  # BuildKit keeps its own state private, so only the Trivy cache,
+                  # written earlier as root, is chowned recursively.
                   - name: cache-owner
                     image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
-                    command: ["chown", "-R", "1000:1000", "/state", "/trivy"]
+                    command: ["sh", "-c", "chown 1000:1000 /state && chown -R 1000:1000 /trivy"]
                     securityContext:
                       runAsUser: 0
                       runAsGroup: 0
@@ -216,7 +218,7 @@ credentials:
 
 jobs:
   - script: |
-      // GitHub multibranch jobs: every branch and pull request is built, and
+      // GitHub multibranch jobs: main and every pull request are built, and
       // GitHub Branch Source posts the commit statuses. Onboarding a service is
       // one entry here plus its chart and a two-line Jenkinsfile.
       def services = [
@@ -229,11 +231,27 @@ jobs:
       def githubMultibranch = { String name, String jenkinsfile ->
         multibranchPipelineJob(name) {
           branchSources {
-            github {
-              id(name)
-              repoOwner(githubOwner)
-              repository(githubRepository)
-              scanCredentialsId('github-creds')
+            branchSource {
+              source {
+                github {
+                  id(name)
+                  repoOwner(githubOwner)
+                  repository(githubRepository)
+                  repositoryUrl("https://github.com/${githubOwner}/${githubRepository}")
+                  configuredByUrl(true)
+                  credentialsId('github-creds')
+                  traits {
+                    gitHubBranchDiscovery { strategyId(1) }          // branches that are not pull requests
+                    gitHubPullRequestDiscovery { strategyId(1) }     // pull requests from this repository, merged with their target
+                    // Build main and pull requests only: other branches reach CI
+                    // through their pull request.
+                    headWildcardFilter {
+                      includes('main PR-*')
+                      excludes('')
+                    }
+                  }
+                }
+              }
             }
           }
           factory { workflowBranchProjectFactory { scriptPath(jenkinsfile) } }
