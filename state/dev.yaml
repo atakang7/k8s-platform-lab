@@ -3,4 +3,6 @@ services:
   sample-java-app:
     version: 1.2.0
     image: sha256:ea3e538be00539b6500f72b555ebae94c1c903cfecccc3e248c1613ab239820f
-  resource-requests-webhook: null
+  resource-requests-webhook:
+    version: 0.2.1
+    image: sha256:b1abaf468057a3024d2641d479f45ede546f7fcad7805ce0cf688c9959e3a3ae
