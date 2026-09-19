@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+source "${root}/infra/edge/lib/vault-approle.sh"
+
 for namespace in external-dns ingress-nginx; do
   kubectl create namespace "${namespace}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl -n "${namespace}" create secret generic vault-ca \
@@ -12,14 +15,25 @@ temporary="$(mktemp -d)"
 chmod 0700 "${temporary}"
 trap 'rm -rf -- "${temporary}"' EXIT
 umask 077
-for pair in 'external-dns dns-vso dns' 'ingress-nginx tls-vso tls'; do
-  read -r namespace role name <<< "${pair}"
+read_kubernetes_secret() {
+  local namespace="$1" output="$2"
+  kubectl -n "${namespace}" get secret approle-id -o jsonpath='{.data.id}' 2>/dev/null |
+    base64 --decode > "${output}" || true
+}
+
+reconcile_identity() {
+  local namespace="$1" role="$2" name="$3"
+  local role_id installed_role_id secret_file
+  secret_file="${temporary}/${namespace}-secret-id"
   role_id="$(vault read -field=role_id "auth/approle/role/${role}/role-id")"
-  if ! kubectl -n "${namespace}" get secret approle-id >/dev/null 2>&1; then
-    vault write -field=secret_id -f "auth/approle/role/${role}/secret-id" > "${temporary}/id"
+  read_kubernetes_secret "${namespace}" "${secret_file}"
+  installed_role_id="$(kubectl -n "${namespace}" get vaultauth "${name}" -o jsonpath='{.spec.appRole.roleId}' 2>/dev/null || true)"
+  if [[ "${installed_role_id}" != "${role_id}" ]] ||
+     ! vault_approle_secret_is_valid "${role}" "${secret_file}"; then
+    vault write -field=secret_id -f "auth/approle/role/${role}/secret-id" > "${temporary}/new-secret-id"
     kubectl -n "${namespace}" create secret generic approle-id \
-      --from-file="id=${temporary}/id" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-    rm -f "${temporary}/id"
+      --from-file="id=${temporary}/new-secret-id" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    rm -f "${temporary}/new-secret-id"
   fi
   kubectl apply -f - >/dev/null <<EOF
 apiVersion: secrets.hashicorp.com/v1beta1
@@ -35,4 +49,7 @@ spec:
     roleId: ${role_id}
     secretRef: approle-id
 EOF
-done
+}
+
+reconcile_identity external-dns dns-vso dns
+reconcile_identity ingress-nginx tls-vso tls

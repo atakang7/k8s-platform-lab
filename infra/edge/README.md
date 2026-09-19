@@ -17,12 +17,11 @@ Shared addresses are in `config.env`. Pinned component versions are in `versions
 
 ```bash
 make edge-up
-VAULT_INIT_OUTPUT=/secure/path/vault-init.json make vault-init
-make vault-unseal
-make edge-up
 ```
 
-Vault initialization and unseal are intentionally explicit operator actions. Init output and root/unseal material stay outside Git.
+`edge-up` initializes and unseals the local lab automatically. Root/unseal
+material stays outside Git in the mode-0600 operator-state file configured by
+`VAULT_INIT_OUTPUT`.
 
 ## Normal operation
 
@@ -31,18 +30,16 @@ make edge-up
 make edge-smoke
 ```
 
+On later runs, `edge-up` automatically unseals Vault from operator state and
+resumes reconciliation without a prompt.
+
 Deep verification:
 
 ```bash
 make edge-validate
 ```
 
-After host reboot:
-
-```bash
-make vault-unseal
-make edge-up
-```
+After a host reboot, run `make edge-up` normally.
 
 ## Flow
 

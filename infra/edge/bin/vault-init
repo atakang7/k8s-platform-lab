@@ -1,25 +1,32 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+source "${root}/infra/edge/config.env"
 export VAULT_ADDR=https://127.0.0.1:8200
-[[ -n "${VAULT_INIT_OUTPUT:-}" ]] || { echo 'FAIL | set VAULT_INIT_OUTPUT to an absolute path outside this repository, on protected offline/operator storage' >&2; exit 1; }
-[[ "${VAULT_INIT_OUTPUT}" = /* && ! -e "${VAULT_INIT_OUTPUT}" ]] || { echo 'FAIL | output must be a new absolute path' >&2; exit 1; }
+[[ "${VAULT_INIT_OUTPUT}" = /* ]] || { echo 'FAIL | Vault init output must be an absolute path' >&2; exit 1; }
 VAULT_INIT_OUTPUT="$(realpath -m -- "${VAULT_INIT_OUTPUT}")"
 case "${VAULT_INIT_OUTPUT}" in
-  "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"/*) echo 'FAIL | root-of-trust output cannot be inside the repository' >&2; exit 1;;
+  "${root}"/*) echo 'FAIL | root-of-trust output cannot be inside the repository' >&2; exit 1;;
   /var/lib/vault/*|/etc/vault/*|/etc/lab-ca/*) echo 'FAIL | root-of-trust output cannot be stored beside Vault or the local CA' >&2; exit 1;;
 esac
 init_status=0
 vault operator init -status >/dev/null 2>&1 || init_status=$?
 if [[ "${init_status}" == 0 ]]; then
-  echo 'FAIL | Vault is already initialized' >&2
-  exit 1
+  [[ -s "${VAULT_INIT_OUTPUT}" ]] || { echo "FAIL | Vault is initialized but ${VAULT_INIT_OUTPUT} is missing; restore that file or reset Vault explicitly" >&2; exit 1; }
+  echo "PASS | Vault is already initialized and its local-lab root of trust is present"
+  exit 0
 fi
 [[ "${init_status}" == 2 ]] || { echo 'FAIL | cannot determine Vault initialization state' >&2; exit 1; }
 umask 077
+install -d -m 0700 "$(dirname -- "${VAULT_INIT_OUTPUT}")"
+if [[ -e "${VAULT_INIT_OUTPUT}" ]]; then
+  rm -f -- "${VAULT_INIT_OUTPUT}"
+  echo 'PASS | Removed init output that belonged to an absent Vault state'
+fi
 if ! vault operator init -key-shares=1 -key-threshold=1 -format=json > "${VAULT_INIT_OUTPUT}"; then
   rm -f -- "${VAULT_INIT_OUTPUT}"
   echo 'FAIL | Vault initialization failed; partial output removed' >&2
   exit 1
 fi
-echo "PASS | Vault initialized; root-of-trust material written to ${VAULT_INIT_OUTPUT} (mode 0600). Move it to protected operator storage."
+echo "PASS | Vault initialized; local-lab root of trust written to ${VAULT_INIT_OUTPUT} (mode 0600)"

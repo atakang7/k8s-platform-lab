@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+source "${root}/infra/edge/config.env"
 export VAULT_ADDR=https://127.0.0.1:8200
 status_code=0
 status_json="$(vault status -format=json 2>/dev/null)" || status_code=$?
 [[ "${status_code}" == 0 || "${status_code}" == 2 ]] || { echo 'FAIL | cannot read Vault state' >&2; exit 1; }
-if python3 -c 'import json,sys; sys.exit(not json.load(sys.stdin)["sealed"])' <<< "${status_json}"; then
-  echo 'Vault is sealed; enter an operator-held unseal key at the hidden prompt.'
-  vault operator unseal
+if jq -e '.sealed' <<< "${status_json}" >/dev/null; then
+  [[ -s "${VAULT_INIT_OUTPUT}" ]] || { echo "FAIL | ${VAULT_INIT_OUTPUT} is missing; Vault cannot be unsealed without its original key" >&2; exit 1; }
+  unseal_key="$(jq -er '.unseal_keys_b64[0]' "${VAULT_INIT_OUTPUT}")"
+  vault operator unseal -format=json "${unseal_key}" >/dev/null
+  unset unseal_key
+  echo 'PASS | Vault unsealed from local-lab operator state'
 else
   echo 'PASS | Vault is already unsealed'
 fi

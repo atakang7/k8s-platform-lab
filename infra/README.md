@@ -110,9 +110,6 @@ First bootstrap:
 
 ```bash
 make edge-up
-VAULT_INIT_OUTPUT=/secure/path/vault-init.json make vault-init
-make vault-unseal
-make edge-up
 ```
 
 Normal operation:
@@ -121,6 +118,9 @@ Normal operation:
 make edge-up
 make edge-smoke
 ```
+
+If Vault was sealed by a host reboot or service restart, `edge-up` unseals it
+from the retained local-lab operator state and continues without a prompt.
 
 Deep integration check:
 

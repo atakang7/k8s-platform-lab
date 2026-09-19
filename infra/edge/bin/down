@@ -4,16 +4,7 @@ set -Eeuo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 source "${root}/infra/edge/config.env"
 cd "${root}"
-"${root}/infra/edge/lib/with-kubeconfig.sh" bash -c '
-  for release in "external-dns external-dns" "ingress-nginx ingress-nginx" "metallb metallb-system"; do
-    read -r name namespace <<< "$release"
-    helm --namespace "$namespace" uninstall "$name" --ignore-not-found
-  done
-  kubectl -n external-dns delete vaultstaticsecret rfc2136-tsig --ignore-not-found --wait=true
-  kubectl -n ingress-nginx delete vaultstaticsecret lab-wildcard --ignore-not-found --wait=true
-  helm --namespace vault-secrets-operator uninstall vault-secrets-operator --ignore-not-found
-  kubectl delete namespace external-dns ingress-nginx metallb-system vault-secrets-operator stage3-validation --ignore-not-found --wait=true
-'
+"${root}/infra/edge/lib/with-kubeconfig.sh" "${root}/infra/edge/lib/kubernetes.sh" down
 sudo ANSIBLE_CONFIG="${root}/infra/ansible/ansible.cfg" ansible-playbook -i localhost, -c local infra/ansible/playbooks/edge-host.yml \
   --tags resolver -e "edge_host_ip=${EDGE_HOST_IP}" -e "dns_zone=${DNS_ZONE}" -e resolver_state=down
 sudo systemctl stop vault-agent named vault

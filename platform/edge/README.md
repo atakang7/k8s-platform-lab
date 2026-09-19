@@ -36,6 +36,7 @@ MetalLB ── assigns + L2-advertises ──► ingress Service · 192.168.56.2
 | `ingress-nginx/` | two-replica host-facing ingress |
 | `external-dns/` | `lab.test` record reconciliation |
 | `vault-secrets-operator/` | runtime secret delivery from Vault |
+| `health/` | retained DNS, TLS, and ingress health endpoint |
 
 MetalLB automatic allocation is disabled. ingress-nginx explicitly owns `192.168.56.200`.
 

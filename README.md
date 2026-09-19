@@ -89,7 +89,9 @@ GitHub and Docker Hub credentials are **not** required to create the cluster. Th
 
 ## Fresh setup
 
-Run all commands from the repository root. The first `make edge-up` is expected to stop at the Vault initialization gate after preparing the host edge services. That stop is intentional: Vault initialization and unsealing remain explicit operator actions.
+Run all commands from the repository root. `make edge-up` initializes and unseals
+the local lab Vault automatically. Its root-of-trust file is retained outside
+the repository at `${XDG_DATA_HOME:-$HOME/.local/share}/lab-operator/vault-init.json`.
 
 ### 1. Create and validate the Kubernetes foundation
 
@@ -100,26 +102,13 @@ make cluster-validate
 
 ### 2. Bootstrap edge, trust, and Vault
 
-Prepare the host edge first:
-
 ```bash
 make edge-up
 ```
 
-On a new host, the command exits with the instruction to initialize Vault. Store the init output outside the repository:
-
-```bash
-SECRETS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/lab-operator"
-install -d -m 700 "$SECRETS_DIR"
-
-VAULT_INIT_OUTPUT="$SECRETS_DIR/vault-init.json" make vault-init
-make vault-unseal
-make edge-up
-```
-
-Keep the generated init file in protected operator storage. The second `make edge-up` may request the operator-held Vault bootstrap token through a hidden prompt.
-
-For the **first build**, run the deep edge validation once. It proves ExternalDNS create/delete behavior and establishes the retained HTTPS validation backend consumed by the lightweight smoke check:
+For the **first build**, run the deep edge validation once. It proves
+ExternalDNS create/delete behavior beyond the retained health endpoint managed
+by `edge-up`:
 
 ```bash
 make edge-validate

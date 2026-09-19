@@ -63,6 +63,7 @@
     CAROOT: /tmp/lab-ca-user
   become: true
   become_user: "{{ lookup('env', 'SUDO_USER') }}"
+  changed_when: false
   when: lookup('env', 'SUDO_USER') | length > 0
   tags: tls-trust
 

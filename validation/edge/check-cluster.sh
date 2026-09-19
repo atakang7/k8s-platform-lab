@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "${root}/infra/edge/versions.env"
 pass() { printf 'PASS | %s\n' "$1"; }
 fail() { printf 'FAIL | %s\n' "$1" >&2; exit 1; }
+
+check_smoke_workloads() {
+  [[ "$(kubectl get nodes --no-headers | awk '$2 == "Ready" { count++ } END { print count+0 }')" == 3 ]] ||
+    fail 'not all three Kubernetes nodes are Ready'
+  kubectl -n metallb-system rollout status deployment/metallb-controller --timeout=30s >/dev/null
+  kubectl -n metallb-system rollout status daemonset/metallb-speaker --timeout=30s >/dev/null
+  kubectl -n vault-secrets-operator rollout status deployment/vault-secrets-operator-controller-manager --timeout=30s >/dev/null
+  kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=30s >/dev/null
+  kubectl -n external-dns rollout status deployment/external-dns --timeout=30s >/dev/null
+}
+
+if [[ "${1:-}" == --smoke ]]; then
+  check_smoke_workloads
+  exit 0
+fi
 
 [[ "$(kubectl get nodes --no-headers | awk '$2 == "Ready" { count++ } END { print count+0 }')" == 3 ]] || fail 'not all three Kubernetes nodes are Ready'
 pass 'three Kubernetes nodes remain Ready'
@@ -40,66 +53,11 @@ jq -e '[.spec.template.spec.containers[0].args[]] | any(. == "--source=ingress")
 jq -e '.spec.template.spec.containers[0].env[] | select(.name == "EXTERNAL_DNS_RFC2136_TSIG_SECRET") | .valueFrom.secretKeyRef.name == "rfc2136-tsig"' <<< "${deployment}" >/dev/null || fail 'ExternalDNS TSIG does not come from a Secret'
 pass 'ExternalDNS has restricted sync, TXT ownership, and both sources'
 
-kubectl create namespace stage3-validation --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-retain_backend=0
+# shellcheck disable=SC2329
 cleanup() {
   kubectl -n stage3-validation delete service explicit-edge no-edge-request --ignore-not-found --wait=true >/dev/null || :
-  if [[ "${retain_backend}" != 1 ]]; then
-    kubectl delete namespace stage3-validation --ignore-not-found --wait=true >/dev/null
-  fi
 }
 trap cleanup EXIT
-kubectl apply -f - >/dev/null <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: backend
-  namespace: stage3-validation
-spec:
-  replicas: 1
-  selector:
-    matchLabels: {app: stage3-backend}
-  template:
-    metadata:
-      labels: {app: stage3-backend}
-    spec:
-      containers:
-        - name: http
-          image: ${VALIDATION_IMAGE}
-          args: ["-listen=:5678", "-text=stage3-edge-ok"]
-          ports: [{containerPort: 5678}]
-          resources:
-            requests: {cpu: 10m, memory: 16Mi}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: backend
-  namespace: stage3-validation
-spec:
-  selector: {app: stage3-backend}
-  ports: [{port: 80, targetPort: 5678}]
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: backend
-  namespace: stage3-validation
-spec:
-  ingressClassName: nginx
-  tls:
-    - hosts: [stage3.lab.test]
-  rules:
-    - host: stage3.lab.test
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: backend
-                port: {number: 80}
-EOF
 kubectl -n stage3-validation rollout status deployment/backend --timeout=180s >/dev/null
 kubectl -n stage3-validation apply -f - >/dev/null <<'EOF'
 apiVersion: v1
@@ -154,7 +112,6 @@ for _ in {1..90}; do
   if [[ "$(dig +short @192.168.56.1 stage3.lab.test A | tail -1)" == 192.168.56.200 ]] &&
      [[ "$(curl --noproxy '*' --silent --show-error --fail --max-time 3 https://stage3.lab.test 2>/dev/null)" == stage3-edge-ok ]]; then
     pass 'Ingress source created DNS; trusted HTTPS reaches the Stage 3 hostname'
-    retain_backend=1
     exit 0
   fi
   sleep 2

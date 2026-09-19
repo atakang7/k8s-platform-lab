@@ -46,6 +46,11 @@
     name: named
     masked: false
 
+- name: Clear an earlier BIND start-limit failure
+  ansible.builtin.command: systemctl reset-failed named.service
+  changed_when: false
+  failed_when: false
+
 - name: Start authoritative BIND
   ansible.builtin.systemd:
     name: named

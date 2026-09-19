@@ -13,6 +13,7 @@ app/target/
 !.env.example
 
 *kubeconfig*
+!infra/edge/lib/with-kubeconfig.sh
 *init.json
 *.pem
 *.key
