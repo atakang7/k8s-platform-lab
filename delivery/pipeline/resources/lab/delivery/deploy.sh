@@ -24,10 +24,10 @@ release_is_current() {
   local deployed_chart
   local deployed_digest
 
-  deployed_chart="$(helm list --deployed --filter "^${RELEASE}\$" --output json |
+  deployed_chart="$(helm list --namespace "${NAMESPACE}" --deployed --filter "^${RELEASE}\$" --output json |
     jq -r '.[0].chart // ""')"
   [[ "${deployed_chart}" == "${RELEASE}-${APP_VERSION}" ]] || return 1
-  deployed_digest="$(helm get values "${RELEASE}" --output json |
+  deployed_digest="$(helm get values "${RELEASE}" --namespace "${NAMESPACE}" --output json |
     jq -r '.image.digest // ""')"
   [[ "${deployed_digest}" == "${IMAGE_DIGEST}" ]]
 }
