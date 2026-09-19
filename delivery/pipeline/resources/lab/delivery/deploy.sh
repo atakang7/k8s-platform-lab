@@ -16,8 +16,8 @@ readonly DEPLOYER_TOKEN_DURATION=15m
 trap 'rm -rf -- "${WORK_DIRECTORY}"' EXIT
 umask 077
 
-# shellcheck source=helm-registry-login.sh
-source "${SCRIPT_DIRECTORY}/helm-registry-login.sh"
+# shellcheck source=registry-login.sh
+source "${SCRIPT_DIRECTORY}/registry-login.sh"
 
 require_inputs() {
   : "${CHART:?CHART is required}"
@@ -38,11 +38,7 @@ require_inputs() {
 }
 
 prepare_chart() {
-  helm_registry_login \
-    "${WORK_DIRECTORY}" \
-    "${CHART_REF}" \
-    "${REGISTRY_USERNAME}" \
-    "${REGISTRY_PASSWORD}"
+  registry_login "${WORK_DIRECTORY}" "${CHART_REF}"
 
   helm dependency build "${CHART}" >/dev/null
 }

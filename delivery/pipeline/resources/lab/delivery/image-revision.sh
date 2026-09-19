@@ -5,10 +5,14 @@
 # the registry or does not declare a full commit SHA.
 set -Eeuo pipefail
 
+SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIRECTORY
 WORK_DIRECTORY="$(mktemp -d)"
 readonly WORK_DIRECTORY
 trap 'rm -rf -- "${WORK_DIRECTORY}"' EXIT
-umask 077
+
+# shellcheck source=registry-login.sh
+source "${SCRIPT_DIRECTORY}/registry-login.sh"
 
 require_inputs() {
   : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
@@ -22,28 +26,13 @@ require_inputs() {
   }
 }
 
-write_image_registry_auth() {
-  local registry_host
-  local encoded_auth
-
-  registry_host="${IMAGE_REPOSITORY%%/*}"
-  encoded_auth="$(printf '%s:%s' "${REGISTRY_USERNAME}" "${REGISTRY_PASSWORD}" |
-    base64 | tr -d '\n')"
-
-  jq -n \
-    --arg host "${registry_host}" \
-    --arg auth "${encoded_auth}" \
-    '{auths: {($host): {auth: $auth}}}' \
-    > "${WORK_DIRECTORY}/image-registry-auth.json"
-}
-
 read_image_revision() {
   local image_reference
   local image_revision
 
   image_reference="${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
   image_revision="$(skopeo inspect \
-    --authfile "${WORK_DIRECTORY}/image-registry-auth.json" \
+    --authfile "${REGISTRY_AUTH_FILE}" \
     --config "docker://${image_reference}" |
     jq -r '.config.Labels["org.opencontainers.image.revision"] // ""')"
 
@@ -58,7 +47,7 @@ read_image_revision() {
 
 main() {
   require_inputs
-  write_image_registry_auth
+  registry_login "${WORK_DIRECTORY}" "${IMAGE_REPOSITORY}"
   read_image_revision
 }
 

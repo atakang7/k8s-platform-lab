@@ -7,9 +7,14 @@ set -Eeuo pipefail
 readonly IMAGE_LAYOUT=app-image
 readonly IMAGE_INDEX="${IMAGE_LAYOUT}/index.json"
 readonly DIGEST_FILE=pushed.digest
+SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIRECTORY
 WORK_DIRECTORY="$(mktemp -d)"
 readonly WORK_DIRECTORY
 trap 'rm -rf -- "${WORK_DIRECTORY}"' EXIT
+
+# shellcheck source=registry-login.sh
+source "${SCRIPT_DIRECTORY}/registry-login.sh"
 
 require_inputs() {
   : "${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}"
@@ -25,22 +30,6 @@ require_inputs() {
     printf 'FAIL | OCI image index is missing: %s\n' "${IMAGE_INDEX}" >&2
     exit 1
   }
-}
-
-write_registry_auth() {
-  local registry_host
-  local encoded_auth
-
-  registry_host="${IMAGE_REPOSITORY%%/*}"
-  encoded_auth="$(printf '%s:%s' "${REGISTRY_USERNAME}" "${REGISTRY_PASSWORD}" |
-    base64 | tr -d '\n')"
-
-  umask 077
-  jq -n \
-    --arg host "${registry_host}" \
-    --arg auth "${encoded_auth}" \
-    '{auths: {($host): {auth: $auth}}}' \
-    > "${WORK_DIRECTORY}/auth.json"
 }
 
 read_scanned_digest() {
@@ -68,7 +57,7 @@ main() {
   local image_tag
 
   require_inputs
-  write_registry_auth
+  registry_login "${WORK_DIRECTORY}" "${IMAGE_REPOSITORY}"
   scanned_digest="$(read_scanned_digest)"
   image_tag="${IMAGE_REPOSITORY}:sha-${COMMIT_SHA:0:12}"
 
@@ -76,7 +65,7 @@ main() {
     "${scanned_digest}" "${image_tag}"
 
   skopeo copy \
-    --authfile "${WORK_DIRECTORY}/auth.json" \
+    --authfile "${REGISTRY_AUTH_FILE}" \
     --digestfile "${DIGEST_FILE}" \
     "oci:${IMAGE_LAYOUT}" \
     "docker://${image_tag}"

@@ -200,7 +200,7 @@ Map service(String chart) {
 
 // Materialize the library's shell resources into the workspace. The pipeline
 // invokes each resulting script explicitly; sourcing is used only for the
-// side-effect-free Helm registry function.
+// side-effect-free registry login function.
 void installScripts() {
     List<String> scripts = [
         'build-image.sh',
@@ -210,7 +210,7 @@ void installScripts() {
         'deploy.sh',
         'image-revision.sh',
         'publish-chart.sh',
-        'helm-registry-login.sh'
+        'registry-login.sh'
     ]
 
     for (String name in scripts) {

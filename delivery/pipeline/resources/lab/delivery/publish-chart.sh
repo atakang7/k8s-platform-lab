@@ -9,8 +9,8 @@ WORK_DIRECTORY="$(mktemp -d)"
 readonly WORK_DIRECTORY
 trap 'rm -rf -- "${WORK_DIRECTORY}"' EXIT
 
-# shellcheck source=helm-registry-login.sh
-source "${SCRIPT_DIRECTORY}/helm-registry-login.sh"
+# shellcheck source=registry-login.sh
+source "${SCRIPT_DIRECTORY}/registry-login.sh"
 
 require_inputs() {
   : "${CHART_DIR:?CHART_DIR is required}"
@@ -33,11 +33,7 @@ main() {
   local package_path
 
   require_inputs
-  helm_registry_login \
-    "${WORK_DIRECTORY}" \
-    "${CHART_REF}" \
-    "${REGISTRY_USERNAME}" \
-    "${REGISTRY_PASSWORD}"
+  registry_login "${WORK_DIRECTORY}" "${CHART_REF}"
 
   chart_metadata="$(helm show chart "${CHART_DIR}")"
   chart_name="$(read_chart_identity "${chart_metadata}" name)"
