@@ -102,7 +102,7 @@ validate_jenkins() {
       fail "Jenkins prerequisite ${secret} is missing"
   done
 
-  kubectl -n "${namespace}" rollout status deployment/jenkins \
+  kubectl -n "${namespace}" rollout status statefulset/jenkins \
     --timeout=90s >/dev/null
 
   controller_pod="$(
