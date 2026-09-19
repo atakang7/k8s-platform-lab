@@ -43,11 +43,11 @@ make container-validate
 
 `Dockerfile` is multi-stage. The final image contains the application JAR and Java runtime, not Maven, source code, or compiler tooling. The runtime process uses UID/GID `10001` and does not require root.
 
-Production releases are identified by registry digest, not by the image value committed in `k8s/deployment.yaml`. CI publishes the digest; CD renders the Deployment with that digest and verifies the live value after rollout.
+Production releases are identified by registry digest, not by the image value committed in `chart/values.yaml`. CI publishes the digest; CD releases the chart with that digest through Helm, which waits for readiness and rolls back on failure. See [`chart/`](chart/README.md).
 
 ## Deployment contract
 
-`k8s/deployment.yaml` maintains four replicas.
+`chart/templates/deployment.yaml` maintains four replicas.
 
 ```text
 sample-java-app · replicas 4
@@ -123,10 +123,10 @@ Do not commit registry credentials.
 
 | File | Owns |
 |---|---|
-| `k8s/deployment.yaml` | replicas, placement, probes, resources, security, sidecar |
-| `k8s/service.yaml` | `:80` → application `:9001` |
-| `k8s/ingress.yaml` | `app.lab.test` + wildcard TLS |
-| `k8s/fluent-bit-config.yaml` | application file-log shipping |
+| `chart/templates/deployment.yaml` | replicas, placement, probes, resources, security, sidecar |
+| `chart/templates/service.yaml` | `:80` → application `:9001` |
+| `chart/templates/ingress.yaml` | `app.lab.test` + wildcard TLS |
+| `chart/templates/fluent-bit-config.yaml` | application file-log shipping |
 | `k8s/registry-secret.yaml` | Vault-backed Docker Hub pull Secret |
 | `k8s/vault-connection.yaml` | application namespace Vault connection |
 

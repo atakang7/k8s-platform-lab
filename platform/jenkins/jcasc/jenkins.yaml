@@ -73,7 +73,7 @@ jenkins:
                         memory: 32Mi
                 containers:
                   - name: ci-tools
-                    image: docker.io/atakangul/lab-ci-agent@sha256:7fb5ec3790aa7873d00bbf9358fc6281c754392e860860c0e214d49262403073
+                    image: docker.io/atakangul/lab-ci-agent@sha256:07d47b2132a5f349d34790bd4a421d4d3636668cc20bbc29743716b7212faa1e
                     imagePullPolicy: IfNotPresent
                     command: ["sh", "-c", "sleep infinity"]
                     tty: true
@@ -136,7 +136,7 @@ jenkins:
                   - name: dockerhub-registry
                 containers:
                   - name: ci-tools
-                    image: docker.io/atakangul/lab-ci-agent@sha256:7fb5ec3790aa7873d00bbf9358fc6281c754392e860860c0e214d49262403073
+                    image: docker.io/atakangul/lab-ci-agent@sha256:07d47b2132a5f349d34790bd4a421d4d3636668cc20bbc29743716b7212faa1e
                     imagePullPolicy: IfNotPresent
                     command: ["sh", "-c", "sleep infinity"]
                     tty: true

@@ -1,24 +1,10 @@
-# Application Kubernetes runtime
+# Application registry bootstrap
 
-`app/k8s/` defines the stable application runtime. Release automation consumes these manifests; it does not replace their ownership.
+`app/k8s/` holds the one-time objects that let the application pull its private image. The runtime itself is the Helm chart in [`../chart/`](../chart/README.md).
 
 ```text
-deployment.yaml
-    │
-    ├──► 4 replicas
-    ├──► worker-only placement
-    ├──► topology spread
-    ├──► probes + resources
-    └──► Java + Fluent Bit sidecar
-
-service.yaml ──► :80 → :9001
-
-ingress.yaml ──► app.lab.test + wildcard TLS
-
 registry-secret.yaml ◄── VSO ◄── Vault runtime/dockerhub
 ```
-
-## Registry bootstrap
 
 After Vault and VSO are healthy and `secret/runtime/dockerhub` contains `username` and `token`:
 
@@ -27,24 +13,3 @@ After Vault and VSO are healthy and `secret/runtime/dockerhub` contains `usernam
 ```
 
 This creates the application Vault policy/AppRole, Kubernetes `VaultAuth`, and applies the VSO registry Secret declaration.
-
-## Release behavior
-
-Do not manually edit `deployment.yaml` to the latest pushed tag. The committed digest is a published reference image for dry-run and bootstrap checks. Normal CD renders the `app` container image locally with the immutable digest passed from CI:
-
-```text
-source Deployment
-      │
-      + immutable IMAGE_REF
-      ▼
-kubectl patch --local (app container image)
-      │
-      ▼
-kubectl apply
-```
-
-The committed manifest stays readable and reusable; release identity comes from the CI digest.
-
-## Validation
-
-CI uses server-side dry-run on the ConfigMap, Service, Ingress, and Deployment. This exercises API validation and active admission policies without creating test resources.

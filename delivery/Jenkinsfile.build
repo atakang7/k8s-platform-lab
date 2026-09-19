@@ -23,7 +23,7 @@ pipeline {
         timeout(time: 30, unit: 'MINUTES')
     }
     environment {
-        // CD accepts only this repository: image_repository in delivery/ansible/deploy.yml.
+        // CD accepts only this repository: image.repository in app/chart/values.yaml.
         IMAGE_REPOSITORY = 'docker.io/atakangul/sample-java-app'
         CI_COMPLETE = 'false'
     }
@@ -65,21 +65,12 @@ pipeline {
                     checks['Kubernetes Dry Run'] = {
                         timed('Test.KubernetesDryRun') {
                             container('ci-tools') {
+                                // Rendered to a file, not piped: /bin/sh (dash) has no pipefail.
                                 sh '''
-                                  kubectl apply --dry-run=server -f app/k8s/fluent-bit-config.yaml
-                                  kubectl apply --dry-run=server -f app/k8s/service.yaml
-                                  kubectl apply --dry-run=server -f app/k8s/service-monitor.yaml
-                                  kubectl apply --dry-run=server -f app/k8s/ingress.yaml
-                                  kubectl apply --dry-run=server -f app/k8s/deployment.yaml
+                                  helm lint app/chart
+                                  helm template sample-java-app app/chart > rendered-chart.yaml
+                                  kubectl apply --dry-run=server -f rendered-chart.yaml
                                 '''
-                            }
-                        }
-                    }
-
-                    checks['Ansible Syntax'] = {
-                        timed('Test.AnsibleSyntax') {
-                            container('ci-tools') {
-                                sh 'ansible-playbook --syntax-check delivery/ansible/deploy.yml'
                             }
                         }
                     }

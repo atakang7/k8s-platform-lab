@@ -30,7 +30,7 @@ pipeline {
             steps {
                 script {
                     timed('Deploy.ValidateInput') {
-                        // IMAGE_REF is validated by the Ansible role, which pins the repository.
+                        // IMAGE_REF is validated by the chart (app/chart), which pins the repository.
                         if (!(params.COMMIT_SHA ==~ /^[0-9a-f]{40}$/)) {
                             error('COMMIT_SHA must be a full Git SHA')
                         }
@@ -55,14 +55,10 @@ pipeline {
         stage('Deploy') {
             steps {
                 script {
-                    timed('Deploy.Ansible') {
+                    timed('Deploy.Helm') {
                         container('ci-tools') {
                             withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-                                sh '''
-                                  set -eu
-                                  export K8S_AUTH_KUBECONFIG="$KUBECONFIG"
-                                  ansible-playbook delivery/ansible/deploy.yml -e "image_ref=${IMAGE_REF}"
-                                '''
+                                sh 'delivery/ci/deploy.sh'
                             }
                         }
                     }

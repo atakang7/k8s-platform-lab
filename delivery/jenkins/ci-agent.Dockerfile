@@ -11,12 +11,14 @@ ARG HADOLINT_VERSION=v2.14.0
 ARG HADOLINT_SHA256=6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47
 ARG TRIVY_VERSION=0.74.0
 ARG TRIVY_SHA256=2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+ARG HELM_VERSION=v4.3.0
+ARG HELM_SHA256=86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
 
 USER root
 
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl git jq python3 python3-pip python3-venv skopeo \
+      ca-certificates curl git jq python3 skopeo \
  && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSLo /usr/local/bin/kubectl \
@@ -31,21 +33,18 @@ RUN curl -fsSLo /usr/local/bin/kubectl \
       "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
  && echo "${TRIVY_SHA256}  /tmp/trivy.tar.gz" | sha256sum -c - \
  && tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
- && rm /tmp/trivy.tar.gz
-
-RUN python3 -m venv /opt/ansible \
- && /opt/ansible/bin/pip install --no-cache-dir 'ansible-core==2.17.14' 'kubernetes>=30,<31' \
- && /opt/ansible/bin/ansible-galaxy collection install 'kubernetes.core:==6.6.0' \
- && ln -s /opt/ansible/bin/ansible /usr/local/bin/ansible \
- && ln -s /opt/ansible/bin/ansible-playbook /usr/local/bin/ansible-playbook \
- && ln -s /opt/ansible/bin/ansible-galaxy /usr/local/bin/ansible-galaxy
+ && rm /tmp/trivy.tar.gz \
+ && curl -fsSLo /tmp/helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
+ && echo "${HELM_SHA256}  /tmp/helm.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/helm.tar.gz -C /usr/local/bin --strip-components=1 linux-amd64/helm \
+ && rm /tmp/helm.tar.gz
 
 RUN mvn --version \
  && kubectl version --client=true \
  && hadolint --version \
  && trivy --version \
  && skopeo --version \
- && ansible-playbook --version
+ && helm version
 
 WORKDIR /home/jenkins/agent
 CMD ["sh", "-c", "sleep infinity"]

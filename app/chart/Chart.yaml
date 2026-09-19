@@ -1,0 +1,5 @@
+apiVersion: v2
+name: sample-java-app
+description: Lab sample Java application runtime
+type: application
+version: 0.1.0

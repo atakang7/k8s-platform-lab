@@ -1,3 +1,8 @@
+{{- /* The chart owns release-image validation: only image.repository, pinned by digest. */}}
+{{- $pattern := printf "^%s@sha256:[0-9a-f]{64}$" (regexQuoteMeta .Values.image.repository) }}
+{{- if not (regexMatch $pattern .Values.image.reference) }}
+{{- fail (printf "image.reference must be %s@sha256:<64 hex>, got %q" .Values.image.repository .Values.image.reference) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -48,7 +53,7 @@ spec:
           name: fluent-bit-config
       containers:
       - name: app
-        image: docker.io/atakangul/sample-java-app@sha256:0c81155a4581e5affa528cce2e8d205d58236ded419ff4427e71d963d48cfe86
+        image: {{ .Values.image.reference }}
         ports:
         - containerPort: 9001
         securityContext:

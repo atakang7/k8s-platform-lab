@@ -1,14 +1,13 @@
 # CI helpers
 
-`delivery/ci/` contains the executable steps used by `Jenkinsfile.build`.
+`delivery/ci/` contains the executable steps used by `Jenkinsfile.build` and `Jenkinsfile.deploy`.
 
 ```text
 checkout
    │
    ├──► test.sh
    ├──► Dockerfile lint
-   ├──► Kubernetes server dry-run
-   └──► Ansible syntax
+   └──► Helm lint + chart server dry-run
             │
             ▼
       build-image.sh
@@ -43,6 +42,7 @@ The local tar is scan input only. `publish-image.sh` performs a second BuildKit 
 | `scan-image.sh` | scans before publish and writes `sbom.json` |
 | `publish-image.sh` | rebuilds from warm cache, pushes, records immutable digest |
 | `github-status.sh` | updates commit status contexts |
+| `deploy.sh` | CD: releases `IMAGE_REF` with `app/chart` through Helm; waits, rolls back on failure |
 
 Trivy scans HIGH/CRITICAL findings but is report-only by default because `TRIVY_EXIT_CODE` defaults to `0`.
 

@@ -1,0 +1,6 @@
+image:
+  # The only repository the chart accepts. Must match IMAGE_REPOSITORY in
+  # delivery/Jenkinsfile.build.
+  repository: docker.io/atakangul/sample-java-app
+  # Known-good reference release. CD overrides it with the digest CI published.
+  reference: docker.io/atakangul/sample-java-app@sha256:0c81155a4581e5affa528cce2e8d205d58236ded419ff4427e71d963d48cfe86

@@ -17,8 +17,7 @@ lab-build · lab-ci-runner
     ├── parallel validation
     │    ├─ Maven tests
     │    ├─ Dockerfile lint
-    │    ├─ Kubernetes server dry-run
-    │    └─ Ansible syntax
+    │    └─ Helm lint + chart server dry-run
     │
     ▼
 BuildKit solve #1
@@ -38,10 +37,8 @@ lab-deploy · lab-cd-runner
     │
     ├─ validate immutable inputs
     ├─ checkout exact commit
-    ├─ Ansible apply
-    ├─ rollout status
-    ├─ assert live image == requested digest
-    └─ on failure: undo to the pre-release revision
+    └─ helm upgrade --install --wait --rollback-on-failure
+         failure ──► every chart object back to the last good release
 ```
 
 The local tar is scan input only. Publication is a second BuildKit solve against the same source revision and build context, reusing warm BuildKit state.
@@ -73,7 +70,7 @@ IMAGE_REF  = docker.io/atakangul/sample-java-app@sha256:<64 hex>
 COMMIT_SHA = <40 hex Git SHA>
 ```
 
-CD checks out that commit detached, applies the runtime resources through Ansible, waits for the rollout, then reads the live Deployment and verifies the exact digest.
+CD checks out that commit detached and releases the application chart (`app/chart`) with `delivery/ci/deploy.sh`. Helm waits until every object is ready and, if it is not, rolls all of them back to the last successful release. The chart rejects any image that is not `docker.io/atakangul/sample-java-app@sha256:<64 hex>`.
 
 ## Jenkins integration
 
@@ -87,8 +84,7 @@ The CI/CD tool image lives under `jenkins/` and is referenced from JCasC by immu
 |---|---|
 | `Jenkinsfile.build` | CI orchestration |
 | `Jenkinsfile.deploy` | CD orchestration |
-| `ci/` | tests, build, scan, publish, commit status helpers |
-| `ansible/` | Kubernetes release reconciliation |
+| `ci/` | tests, build, scan, publish, deploy, commit status helpers |
 | `jenkins/` | reproducible Jenkins agent image |
 
 ## Operating rule
