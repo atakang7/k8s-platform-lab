@@ -1,12 +1,14 @@
-// CI/CD for a service: validate, build once (tests run in the Dockerfile),
-// scan, publish, deploy to this repository's environment.
+// CI/CD for a service, run as a GitHub multibranch job: every branch and
+// pull request is validated, built, tested and scanned; main also publishes
+// and deploys. GitHub commit statuses come from the GitHub Branch Source plugin.
 //   chart:   the service's Helm chart (inherits charts/service)
 //   context: BuildKit context holding the Dockerfile
-//   paths:   commits touching these run the pipeline
+//   path:    the service's directory; only changes under it run the pipeline
 def call(Map args) {
-    if (!args?.chart || !args?.context || !args?.paths) {
-        error('servicePipeline: chart, context and paths are required')
+    if (!args?.chart || !args?.context || !args?.path) {
+        error('servicePipeline: chart, context and path are required')
     }
+    String changes = "${args.path.replaceAll('/+$', '')}/**"
 
     pipeline {
         agent none
@@ -20,7 +22,7 @@ def call(Map args) {
                 agent { label 'lab-ci-runner' }
                 options { timeout(time: 30, unit: 'MINUTES') }
                 stages {
-                    stage('Resolve') {
+                    stage('Checkout') {
                         steps {
                             script {
                                 def scmVars = checkout scm
@@ -35,65 +37,65 @@ def call(Map args) {
                                 env.CHART_REF = target.chartRegistry
                                 env.COMMIT_SHA = scmVars.GIT_COMMIT
                                 env.SOURCE_URL = scmVars.GIT_URL
-                                env.GITHUB_REPOSITORY = delivery.githubRepository(scmVars.GIT_URL) ?: error("not a GitHub remote: ${scmVars.GIT_URL}")
-                                env.CHANGED = delivery.changedSince(scmVars.GIT_PREVIOUS_SUCCESSFUL_COMMIT, args.paths).toString()
                                 delivery.installScripts()
-                                delivery.githubStatus('pending', "ci/${env.RELEASE}", env.CHANGED == 'true' ? 'CI running' : 'No changes')
                             }
                         }
                     }
-                    stage('Validate') {
-                        when { environment name: 'CHANGED', value: 'true' }
-                        steps {
-                            container('ci-tools') {
-                                sh 'hadolint "$BUILD_CONTEXT/Dockerfile"'
-                                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
-                                    sh '.delivery/validate-release.sh'
+                    // The first build of a branch has no changelog to compare, so it always runs.
+                    stage('Service') {
+                        when {
+                            anyOf {
+                                changeset pattern: changes
+                                expression { currentBuild.previousBuild == null }
+                            }
+                        }
+                        stages {
+                            stage('Validate') {
+                                steps {
+                                    container('ci-tools') {
+                                        sh 'hadolint "$BUILD_CONTEXT/Dockerfile"'
+                                        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
+                                            sh '.delivery/validate-release.sh'
+                                        }
+                                    }
                                 }
                             }
-                        }
-                    }
-                    stage('Build') {
-                        when { environment name: 'CHANGED', value: 'true' }
-                        steps {
-                            container('buildkit') { sh '.delivery/build-image.sh' }
-                        }
-                    }
-                    stage('Scan') {
-                        when { environment name: 'CHANGED', value: 'true' }
-                        steps {
-                            container('ci-tools') { sh '.delivery/scan-image.sh' }
-                        }
-                        post {
-                            always { archiveArtifacts artifacts: 'sbom.json', allowEmptyArchive: true }
-                        }
-                    }
-                    stage('Publish') {
-                        when { environment name: 'CHANGED', value: 'true' }
-                        steps {
-                            container('ci-tools') {
-                                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
-                                    sh '.delivery/publish-image.sh'
+                            stage('Build') {
+                                steps {
+                                    container('buildkit') { sh '.delivery/build-image.sh' }
                                 }
                             }
-                            script { env.IMAGE_REF = readFile('image_ref.env').trim().split('=', 2)[1] }
-                        }
-                    }
-                }
-                post {
-                    success {
-                        script { delivery.githubStatus('success', "ci/${env.RELEASE}", env.CHANGED == 'true' ? "Published ${env.IMAGE_REF}" : 'No changes') }
-                    }
-                    unsuccessful {
-                        script {
-                            if (env.RELEASE) { delivery.githubStatus(delivery.failureState(), "ci/${env.RELEASE}", "CI ${currentBuild.currentResult.toLowerCase()}") }
+                            stage('Scan') {
+                                steps {
+                                    container('ci-tools') { sh '.delivery/scan-image.sh' }
+                                }
+                                post {
+                                    always { archiveArtifacts artifacts: 'sbom.json', allowEmptyArchive: true }
+                                }
+                            }
+                            stage('Publish') {
+                                when { branch 'main' }
+                                steps {
+                                    container('ci-tools') {
+                                        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
+                                            sh '.delivery/publish-image.sh'
+                                        }
+                                    }
+                                    script { env.IMAGE_REF = readFile('image_ref.env').trim().split('=', 2)[1] }
+                                }
+                            }
                         }
                     }
                 }
             }
             // No agent: an approval wait holds no executor or Pod.
             stage('Deploy') {
-                when { environment name: 'CHANGED', value: 'true' }
+                when {
+                    allOf {
+                        branch 'main'
+                        expression { env.IMAGE_REF }
+                    }
+                }
                 steps {
                     script {
                         if (env.APPROVAL == 'true') {

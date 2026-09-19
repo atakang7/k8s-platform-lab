@@ -12,6 +12,8 @@ controller:
     - job-dsl:3732.v9a_c49a_61a_313
     # readYaml for service descriptors and delivery configuration
     - pipeline-utility-steps:3.810.va_7672d206740
+    # GitHub multibranch jobs and native commit statuses
+    - github-branch-source:1983.vfa_27ed961853
   installLatestPlugins: false
   containerEnv:
     - name: GITHUB_USERNAME

@@ -22,8 +22,7 @@ def call() {
                         if (!(params.IMAGE_REF ==~ /^[a-z0-9.:\/_-]+@sha256:[0-9a-f]{64}$/)) { error('IMAGE_REF must be repository@sha256:<64 hex>') }
                         if (!(params.CHART ==~ /^[A-Za-z0-9_\/.-]+$/) || params.CHART.contains('..')) { error('CHART must be a repository-relative path') }
 
-                        def scmVars = checkout scm
-                        env.GITHUB_REPOSITORY = delivery.githubRepository(scmVars.GIT_URL) ?: error("not a GitHub remote: ${scmVars.GIT_URL}")
+                        checkout scm
                         sh 'git checkout --detach "$COMMIT_SHA"'
 
                         Map service = delivery.service(params.CHART)
@@ -35,10 +34,8 @@ def call() {
                         env.NAMESPACE = target.namespace
                         env.CHART_REF = target.chartRegistry
                         env.IMAGE_DIGEST = image[1]
-                        env.STATUS_CONTEXT = "deploy/${service.name}/${target.name}"
                         currentBuild.description = "${service.name} → ${target.name} · ${image[1].take(19)}"
                         delivery.installScripts()
-                        delivery.githubStatus('pending', env.STATUS_CONTEXT, 'Deploying')
                     }
                 }
             }
@@ -49,16 +46,6 @@ def call() {
                             sh '.delivery/deploy.sh'
                         }
                     }
-                }
-            }
-        }
-        post {
-            success {
-                script { delivery.githubStatus('success', env.STATUS_CONTEXT, "Deployed ${env.IMAGE_DIGEST.take(19)}") }
-            }
-            unsuccessful {
-                script {
-                    if (env.STATUS_CONTEXT) { delivery.githubStatus(delivery.failureState(), env.STATUS_CONTEXT, "Deploy ${currentBuild.currentResult.toLowerCase()}") }
                 }
             }
         }

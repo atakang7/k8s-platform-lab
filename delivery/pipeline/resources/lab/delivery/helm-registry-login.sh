@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Sourced by delivery scripts: logs Helm into the chart registry (CHART_REF)
 # with a config file in the caller's temporary directory ($work).
 : "${work:?}" "${CHART_REF:?}" "${REGISTRY_USERNAME:?}" "${REGISTRY_PASSWORD:?}"

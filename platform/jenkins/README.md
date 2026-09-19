@@ -40,7 +40,7 @@ Endpoint: `https://jenkins.lab.test`.
 - exclusive `lab-ci-runner` and `lab-cd-runner` templates;
 - GitHub and Docker Hub credentials (no cluster credential: CD mints short-lived tokens);
 - the `lab-delivery` shared library (`delivery/pipeline`);
-- one job per service, plus the `deploy` and `platform` jobs.
+- a GitHub multibranch job per service and for `platform` (native commit statuses), plus the `deploy` job.
 
 Do not make durable job, agent, or credential changes in the UI. Put them in JCasC/Vault and reconcile.
 

@@ -1,0 +1,3 @@
+# Library chart: defaults live in templates/_defaults.tpl and are overridden
+# by the inheriting app chart's values.yaml.
+{}

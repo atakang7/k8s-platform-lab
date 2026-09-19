@@ -9,7 +9,7 @@
 | `pipeline/vars/deployPipeline.groovy` | the `deploy` job: one chart × one digest |
 | `pipeline/resources/lab/delivery/` | the step scripts the pipelines run |
 | `Jenkinsfile.deploy` | `deploy` job entry point |
-| `Jenkinsfile.platform` | `platform` job: publishes base charts, checks platform/infra |
+| `Jenkinsfile.platform` | `platform` job: shellcheck everywhere; `ct lint` on chart pull requests; publishes charts from main; lints policies |
 | `jenkins/` | CI agent image |
 
 Base charts live in [`charts/`](../charts/), and namespaces and deploy identities in [`platform/environment`](../platform/environment/). Neither is delivery.
@@ -21,22 +21,23 @@ Base charts live in [`charts/`](../charts/), and namespaces and deploy identitie
 
    ```groovy
    @Library('lab-delivery') _
-   servicePipeline(chart: 'app/chart', context: 'app', paths: ['app/'])
+   servicePipeline(chart: 'app/chart', context: 'app', path: 'app/')
    ```
 
-3. One entry in the `services` list in [`platform/jenkins/jcasc/jenkins.yaml`](../platform/jenkins/jcasc/jenkins.yaml).
+3. One entry in the `services` list in [`platform/jenkins/jcasc/jenkins.yaml`](../platform/jenkins/jcasc/jenkins.yaml). It creates a GitHub multibranch job.
 
 The chart name is the release name, and the chart's `image.repository` is the only repository its releases accept.
 
 ## Pipeline
 
 ```text
-commit ─► service job ─► paths changed since last green build? ── no ──► done
+branch or pull request ─► multibranch job ─► changeset under `path`? ── no ──► done
                                  │ yes
                                  ▼
           Validate   hadolint · helm dry-run through the API server and admission
           Build      BuildKit, once; unit tests run inside the Dockerfile
           Scan       Trivy + CycloneDX SBOM of that image
+          ── main only ──
           Publish    push the scanned image unchanged; digest must match
           Deploy     approval if environment.yaml says so ─► deploy job
                                  │
@@ -45,8 +46,11 @@ commit ─► service job ─► paths changed since last green build? ── no
                       helm upgrade --wait --rollback-on-failure
 ```
 
+Everything here is native Jenkins:
+- **Jobs:** GitHub Branch Source builds every branch and pull request and posts the GitHub commit status.
+- **Only relevant changes run:** declarative `when { changeset }`. The first build of a branch has no changelog, so it always runs.
+- **Only `main` publishes and deploys:** `when { branch 'main' }`.
 - **Release identity:** the full commit SHA plus the image digest. Nothing mutable is deployed.
-- **Commit statuses:** `ci/<service>` and `deploy/<service>/<environment>`. A timeout or rejected approval shows as `error`.
 
 ## Identities
 

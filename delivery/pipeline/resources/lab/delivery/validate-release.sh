@@ -8,6 +8,7 @@ set -euo pipefail
 
 work="$(mktemp -d)"
 trap 'rm -rf -- "${work}"' EXIT
+# shellcheck source=helm-registry-login.sh
 source "$(dirname -- "$0")/helm-registry-login.sh"
 
 helm dependency build "${CHART}" >/dev/null

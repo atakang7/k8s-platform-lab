@@ -1,36 +1,54 @@
-// This repository's platform layers: publish base charts, statically check
-// platform and infra. Platform and infra are applied by the operator (`make`),
-// never by Jenkins.
+// This repository's platform layers, as a GitHub multibranch job. Pull
+// requests lint; main also publishes base charts. Platform and infra are
+// applied by the operator (`make`), never by Jenkins.
 @Library('lab-delivery') _
 
 pipeline {
     agent { label 'lab-ci-runner' }
     options {
-        skipDefaultCheckout(true)
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '20'))
         timeout(time: 20, unit: 'MINUTES')
     }
     stages {
-        stage('Resolve') {
+        stage('Shell') {
             steps {
-                script {
-                    def scmVars = checkout scm
-                    String base = scmVars.GIT_PREVIOUS_SUCCESSFUL_COMMIT
-                    env.COMMIT_SHA = scmVars.GIT_COMMIT
-                    env.GITHUB_REPOSITORY = delivery.githubRepository(scmVars.GIT_URL) ?: error("not a GitHub remote: ${scmVars.GIT_URL}")
-                    env.CHART_REF = delivery.environment().chartRegistry
-                    env.CHARTS_CHANGED = delivery.changedSince(base, ['charts/']).toString()
-                    env.PLATFORM_CHANGED = delivery.changedSince(base, ['platform/', 'policies/']).toString()
-                    env.INFRA_CHANGED = delivery.changedSince(base, ['infra/', 'validation/', 'Vagrantfile', 'Makefile']).toString()
-                    delivery.installScripts()
-                    delivery.githubStatus('pending', 'ci/platform', 'Platform checks running')
+                container('ci-tools') {
+                    sh '''
+                      find delivery infra platform policies validation -type f \\( -name '*.sh' -o -path '*/bin/*' \\) \\
+                        -exec shellcheck --external-sources --source-path=SCRIPTDIR {} +
+                    '''
                 }
             }
         }
-        stage('Charts') {
-            when { environment name: 'CHARTS_CHANGED', value: 'true' }
+        stage('Chart lint') {
+            when {
+                allOf {
+                    changeRequest()
+                    changeset 'charts/**'
+                }
+            }
             steps {
+                container('chart-testing') {
+                    sh '''
+                      git config --global --add safe.directory "$PWD"
+                      ct lint --target-branch "$CHANGE_TARGET" --chart-dirs charts --check-version-increment
+                    '''
+                }
+            }
+        }
+        stage('Chart publish') {
+            when {
+                allOf {
+                    branch 'main'
+                    changeset 'charts/**'
+                }
+            }
+            steps {
+                script {
+                    env.CHART_REF = delivery.environment().chartRegistry
+                    delivery.installScripts()
+                }
                 container('ci-tools') {
                     withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'REGISTRY_USERNAME', passwordVariable: 'REGISTRY_PASSWORD')]) {
                         sh 'for chart in charts/*/; do CHART_DIR="$chart" .delivery/publish-chart.sh; done'
@@ -39,34 +57,18 @@ pipeline {
             }
         }
         stage('Platform') {
-            when { environment name: 'PLATFORM_CHANGED', value: 'true' }
+            when {
+                anyOf {
+                    changeset 'platform/**'
+                    changeset 'policies/**'
+                }
+            }
             steps {
                 container('ci-tools') {
                     sh '''
                       helm lint policies/resource-requests-webhook/helm/resource-requests-webhook
                       hadolint policies/resource-requests-webhook/Dockerfile
-                      .delivery/check-shell-syntax.sh platform policies
                     '''
-                }
-            }
-        }
-        stage('Infra') {
-            when { environment name: 'INFRA_CHANGED', value: 'true' }
-            steps {
-                container('ci-tools') {
-                    sh '.delivery/check-shell-syntax.sh infra validation'
-                }
-            }
-        }
-    }
-    post {
-        success {
-            script { delivery.githubStatus('success', 'ci/platform', 'Platform checks passed') }
-        }
-        unsuccessful {
-            script {
-                if (env.COMMIT_SHA) {
-                    delivery.githubStatus(delivery.failureState(), 'ci/platform', "Platform checks ${currentBuild.currentResult.toLowerCase()}")
                 }
             }
         }

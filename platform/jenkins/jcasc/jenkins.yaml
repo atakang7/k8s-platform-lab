@@ -69,7 +69,7 @@ jenkins:
                         memory: 32Mi
                 containers:
                   - name: ci-tools
-                    image: docker.io/atakangul/lab-ci-agent@sha256:465683ec21b901ed8cf8e2a2d4e1f3d991f106568f0a1c03e3fe70c73de62a24
+                    image: docker.io/atakangul/lab-ci-agent@sha256:e5639dcf91bb3055fa067e0d4a0f70e0e705704b056872ee6553534b04ca8e5e
                     imagePullPolicy: IfNotPresent
                     command: ["sh", "-c", "sleep infinity"]
                     tty: true
@@ -83,6 +83,18 @@ jenkins:
                       limits:
                         cpu: "1"
                         memory: 1Gi
+                  # chart-testing for base chart pull requests (delivery/Jenkinsfile.platform).
+                  - name: chart-testing
+                    image: quay.io/helmpack/chart-testing:v3.14.0@sha256:425ff3058dfc192fffb94e471e732b9bc995c375df963eba417ff01aea594e83
+                    imagePullPolicy: IfNotPresent
+                    command: ["sh", "-c", "sleep infinity"]
+                    resources:
+                      requests:
+                        cpu: 10m
+                        memory: 32Mi
+                      limits:
+                        cpu: 500m
+                        memory: 256Mi
                   - name: buildkit
                     # Rootless: no privileged mode. buildctl finds the socket via the image's BUILDKIT_HOST.
                     image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
@@ -130,7 +142,7 @@ jenkins:
                   - name: dockerhub-registry
                 containers:
                   - name: ci-tools
-                    image: docker.io/atakangul/lab-ci-agent@sha256:465683ec21b901ed8cf8e2a2d4e1f3d991f106568f0a1c03e3fe70c73de62a24
+                    image: docker.io/atakangul/lab-ci-agent@sha256:e5639dcf91bb3055fa067e0d4a0f70e0e705704b056872ee6553534b04ca8e5e
                     imagePullPolicy: IfNotPresent
                     command: ["sh", "-c", "sleep infinity"]
                     tty: true
@@ -161,38 +173,44 @@ credentials:
 
 jobs:
   - script: |
-      // Onboarding a service: one entry here plus its chart and a two-line
-      // Jenkinsfile (delivery/README.md).
+      // GitHub multibranch jobs: every branch and pull request is built, and
+      // GitHub Branch Source posts the commit statuses. Onboarding a service is
+      // one entry here plus its chart and a two-line Jenkinsfile.
       def services = [
         [name: 'sample-java-app', jenkinsfile: 'app/Jenkinsfile'],
       ]
-      def repository = 'https://github.com/atakang7/k8s-platform-lab.git'
+      def githubOwner = 'atakang7'
+      def githubRepository = 'lab'
 
-      services.each { service ->
-        pipelineJob(service.name) {
-          description("Service pipeline: build, scan, publish and promote ${service.name}")
-          triggers { scm('* * * * *') }
-          definition {
-            cpsScm {
-              scm { git { remote { url(repository); credentials('github-creds') }; branch('*/main') } }
-              scriptPath(service.jenkinsfile)
-              lightweight(true)
+      def githubMultibranch = { String name, String jenkinsfile ->
+        multibranchPipelineJob(name) {
+          branchSources {
+            branchSource {
+              source {
+                github {
+                  id(name)
+                  repoOwner(githubOwner)
+                  repository(githubRepository)
+                  repositoryUrl("https://github.com/${githubOwner}/${githubRepository}")
+                  configuredByUrl(true)
+                  credentialsId('github-creds')
+                  traits {
+                    gitHubBranchDiscovery { strategyId(1) }          // branches that are not pull requests
+                    gitHubPullRequestDiscovery { strategyId(1) }     // pull requests merged with their target
+                  }
+                }
+              }
             }
           }
+          factory { workflowBranchProjectFactory { scriptPath(jenkinsfile) } }
+          // Jenkins is not reachable from GitHub, so branches are re-indexed instead of webhooks.
+          triggers { periodicFolderTrigger { interval('1m') } }
+          orphanedItemStrategy { discardOldItems { numToKeep(10) } }
         }
       }
 
-      pipelineJob('platform') {
-        description('Base chart release and platform/infra checks')
-        triggers { scm('* * * * *') }
-        definition {
-          cpsScm {
-            scm { git { remote { url(repository); credentials('github-creds') }; branch('*/main') } }
-            scriptPath('delivery/Jenkinsfile.platform')
-            lightweight(true)
-          }
-        }
-      }
+      services.each { service -> githubMultibranch(service.name, service.jenkinsfile) }
+      githubMultibranch('platform', 'delivery/Jenkinsfile.platform')
 
       pipelineJob('deploy') {
         description('Deploy one published image of one service chart to this environment')
@@ -203,7 +221,7 @@ jobs:
         }
         definition {
           cpsScm {
-            scm { git { remote { url(repository); credentials('github-creds') }; branch('*/main') } }
+            scm { git { remote { url("https://github.com/${githubOwner}/${githubRepository}.git"); credentials('github-creds') }; branch('*/main') } }
             scriptPath('delivery/Jenkinsfile.deploy')
             lightweight(true)
           }

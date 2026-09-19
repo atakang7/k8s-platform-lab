@@ -17,4 +17,4 @@ dependencies:
 
 The app's `values.yaml` overrides the defaults in [`templates/_defaults.tpl`](templates/_defaults.tpl). `image.repository` is required; `image.digest` is set by delivery on every release and must be `sha256:<64 hex>`.
 
-Released versions are immutable. Changing anything here needs a `version` bump in `Chart.yaml`; the `platform` job publishes it and fails if a released version's content changed.
+Released versions are immutable. Pull requests that change the chart must bump `version` in `Chart.yaml` (`ct lint --check-version-increment`); `main` publishes versions the registry does not have yet.

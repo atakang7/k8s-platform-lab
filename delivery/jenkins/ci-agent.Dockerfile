@@ -15,12 +15,14 @@ ARG TRIVY_VERSION=0.74.0
 ARG TRIVY_SHA256=2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
 ARG HELM_VERSION=v4.3.0
 ARG HELM_SHA256=86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
+ARG SHELLCHECK_VERSION=v0.11.0
+ARG SHELLCHECK_SHA256=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
 
 USER root
 
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl jq skopeo \
+      ca-certificates curl jq skopeo xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSLo /usr/local/bin/kubectl \
@@ -39,13 +41,19 @@ RUN curl -fsSLo /usr/local/bin/kubectl \
  && curl -fsSLo /tmp/helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
  && echo "${HELM_SHA256}  /tmp/helm.tar.gz" | sha256sum -c - \
  && tar -xzf /tmp/helm.tar.gz -C /usr/local/bin --strip-components=1 linux-amd64/helm \
- && rm /tmp/helm.tar.gz
+ && rm /tmp/helm.tar.gz \
+ && curl -fsSLo /tmp/shellcheck.tar.xz \
+      "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+ && echo "${SHELLCHECK_SHA256}  /tmp/shellcheck.tar.xz" | sha256sum -c - \
+ && tar -xJf /tmp/shellcheck.tar.xz -C /usr/local/bin --strip-components=1 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" \
+ && rm /tmp/shellcheck.tar.xz
 
 RUN kubectl version --client=true \
  && hadolint --version \
  && trivy --version \
  && skopeo --version \
- && helm version
+ && helm version \
+ && shellcheck --version
 
 WORKDIR /home/jenkins/agent
 CMD ["sh", "-c", "sleep infinity"]
