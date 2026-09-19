@@ -46,10 +46,10 @@ validate_environment_identity() {
   local namespace="$2"
   local -r dns_label_pattern='^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
 
-  [[ "${environment_name}" =~ ${dns_label_pattern} ]] ||
-    fail "environment name is not a DNS label: ${environment_name}"
-  [[ "${namespace}" =~ ${dns_label_pattern} ]] ||
-    fail "namespace is not a DNS label: ${namespace}"
+  [[ "${environment_name}" =~ ${dns_label_pattern} && "${#environment_name}" -le 63 ]] ||
+    fail "environment name must be a DNS label of at most 63 characters: ${environment_name}"
+  [[ "${namespace}" =~ ${dns_label_pattern} && "${#namespace}" -le 63 ]] ||
+    fail "namespace must be a DNS label of at most 63 characters: ${namespace}"
 }
 
 reconcile_registry_vault_access() {
@@ -201,9 +201,11 @@ operator_reconcile() {
 main() {
   case "${1:-}" in
     --cluster)
+      [[ "$#" -eq 1 ]] || fail 'environment cluster mode does not accept extra arguments'
       cluster_reconcile
       ;;
     '')
+      [[ "$#" -eq 0 ]] || fail 'environment reconciliation does not accept arguments'
       operator_reconcile
       ;;
     *)

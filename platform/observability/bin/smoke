@@ -3,9 +3,10 @@ set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly ROOT
+source "${ROOT}/infra/edge/config.env"
+
 readonly NAMESPACE=observability
-readonly HOST=observability.lab.test
-readonly INGRESS_VIP=192.168.56.200
+readonly HOST="observability.${DNS_ZONE}"
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
@@ -137,9 +138,11 @@ operator_smoke() {
 main() {
   case "${1:-}" in
     --cluster)
+      [[ "$#" -eq 1 ]] || fail 'observability cluster smoke does not accept extra arguments'
       cluster_smoke
       ;;
     '')
+      [[ "$#" -eq 0 ]] || fail 'observability smoke does not accept arguments'
       operator_smoke
       ;;
     *)

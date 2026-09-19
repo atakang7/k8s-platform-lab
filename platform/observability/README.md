@@ -41,11 +41,10 @@ Endpoints:
 |---|---|
 | `https://observability.lab.test/grafana/` | Grafana |
 | `https://observability.lab.test/prometheus/` | Prometheus |
-| `https://observability.lab.test/elasticsearch/` | Elasticsearch |
 
 ## State
 
-Prometheus and Elasticsearch use local-path PVCs. Their data survives Pod recreation on the owning node; local-path does not provide cross-node storage HA.
+Prometheus and Elasticsearch use local-path PVCs. Their data survives Pod recreation on the owning node; local-path does not provide cross-node storage HA. Elasticsearch is intentionally cluster-internal; operators and validation reach it through the Kubernetes API rather than a public ingress.
 
 Dashboards and alerts are Git-managed. Change JSON/PrometheusRule/value files here, run reconciliation, then run the smoke check. Do not preserve dashboard edits made only in the Grafana UI as source of truth.
 

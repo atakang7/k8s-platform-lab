@@ -205,9 +205,17 @@ operator_reconcile() {
 main() {
   case "${1:-}" in
     --cluster)
+      [[ "$#" -eq 1 ]] || {
+        printf 'FAIL | observability cluster mode does not accept extra arguments\n' >&2
+        return 1
+      }
       cluster_reconcile
       ;;
     '')
+      [[ "$#" -eq 0 ]] || {
+        printf 'FAIL | observability reconciliation does not accept arguments\n' >&2
+        return 1
+      }
       operator_reconcile
       ;;
     *)
