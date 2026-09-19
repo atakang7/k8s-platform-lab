@@ -2,8 +2,6 @@
 
 `policies/` owns admission controls that protect Kubernetes desired state before it is persisted.
 
-Canonical design: [Admission policy](../docs/06-governance-resilience/admission-policy.md).
-
 ## Resource request policy
 
 The current policy is the custom validating webhook under `resource-requests-webhook/`.
@@ -45,24 +43,33 @@ go test ./...
 
 The runtime is a static Go binary on a distroless non-root image.
 
-## Install
+## Deploy one policy
 
-After the webhook image exists and the `policy-system` namespace can pull it:
+Deployments are non-interactive and use immutable image digests. Supply the
+digest on the first install; subsequent runs reuse the installed digest unless
+an explicit replacement is supplied.
 
 ```bash
-helm upgrade --install resource-requests-webhook \
-  policies/resource-requests-webhook/helm/resource-requests-webhook \
-  --namespace policy-system \
-  --create-namespace \
-  --set image.repository=docker.io/atakangul/resource-requests-webhook \
-  --set image.digest=sha256:<published-digest>
+RESOURCE_REQUESTS_WEBHOOK_IMAGE_DIGEST=sha256:<published-digest> \
+  make policy-up POLICY=resource-requests-webhook
+
+# Idempotent reconciliation after the first successful install.
+make policy-up POLICY=resource-requests-webhook
 ```
 
-The chart creates the Deployment, Service, serving TLS, and `ValidatingWebhookConfiguration`.
+`make policies-up` deploys every registered policy. Failed Helm upgrades roll
+back automatically instead of leaving a partially reconciled admission path.
 
 ## Verify
 
-Use server-side dry-run so the real admission chain executes without persisting test workloads.
+Each policy owns a smoke contract. It checks rollout and registration, then
+uses server-side dry-run so the real admission chain executes without
+persisting test workloads.
+
+```bash
+make policy-smoke POLICY=resource-requests-webhook
+make policies-smoke
+```
 
 ```text
 valid Deployment       ──► accepted

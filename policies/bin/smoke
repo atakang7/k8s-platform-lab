@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly root
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+pass() {
+  printf 'PASS | %s\n' "$1"
+}
+
+admission_check() {
+  local expectation="$1" requests="$2" output status=0
+  output="$(kubectl apply --dry-run=server -f - 2>&1 <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resource-requests-policy-smoke
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: resource-requests-policy-smoke}
+  template:
+    metadata:
+      labels: {app: resource-requests-policy-smoke}
+    spec:
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10.1
+          resources:
+            requests: ${requests}
+EOF
+)" || status=$?
+  if [[ "${expectation}" == allow && "${status}" -eq 0 ]]; then return; fi
+  if [[ "${expectation}" == deny && "${status}" -ne 0 && "${output}" == *denied* ]]; then return; fi
+  fail "resource-requests-webhook expected ${expectation}, got: ${output}"
+}
+
+smoke_resource_requests_webhook() {
+  phase 'Checking resource-requests-webhook rollout and registration'
+  kubectl -n policy-system rollout status deployment/resource-requests-webhook --timeout=90s
+  kubectl get validatingwebhookconfiguration resource-requests-webhook >/dev/null
+  phase 'Exercising resource request admission decisions'
+  admission_check allow '{cpu: 10m, memory: 16Mi}'
+  admission_check deny '{memory: 16Mi}'
+  admission_check deny '{cpu: 10m}'
+  pass 'Policy resource-requests-webhook is ready and enforcing CPU and memory requests'
+}
+
+smoke_policy() {
+  case "$1" in
+    resource-requests-webhook) smoke_resource_requests_webhook ;;
+    *) fail "unknown policy '$1'; supported policies: resource-requests-webhook" ;;
+  esac
+}
+
+main() {
+  local requested="${1:-}"
+  [[ -n "${requested}" ]] || fail 'policy name is required; run make policy-smoke POLICY=resource-requests-webhook'
+  if [[ "${requested}" != --cluster ]]; then
+    "${root}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster "${requested}"
+    return
+  fi
+  requested="${2:-}"
+  [[ "${requested}" == all ]] && requested=resource-requests-webhook
+  smoke_policy "${requested}"
+}
+
+main "$@"

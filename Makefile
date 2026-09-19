@@ -1,4 +1,4 @@
-.PHONY: cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up environment-up observability-up observability-smoke vault-init vault-unseal e2e-validate destroy
+.PHONY: cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up environment-up observability-up observability-smoke policies-up policy-up policies-smoke policy-smoke vault-init vault-unseal e2e-validate destroy
 
 cluster-up:
 	vagrant up
@@ -34,6 +34,18 @@ observability-up:
 
 observability-smoke:
 	./platform/observability/bin/smoke
+
+policies-up:
+	./policies/bin/up all
+
+policy-up:
+	./policies/bin/up "$(POLICY)"
+
+policies-smoke:
+	./policies/bin/smoke all
+
+policy-smoke:
+	./policies/bin/smoke "$(POLICY)"
 
 vault-init:
 	./infra/edge/bin/vault-init

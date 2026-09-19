@@ -14,7 +14,7 @@ if [[ "${1:-}" != --cluster ]]; then
   exit
 fi
 
-[[ "$(kubectl -n policy-system get validatingwebhookconfiguration resource-requests-webhook -o name)" != '' ]] || fail 'admission webhook is absent'
+"${root}/policies/bin/smoke" --cluster resource-requests-webhook
 for secret in jenkins-admin github-creds dockerhub-creds; do
   kubectl -n jenkins get secret "${secret}" >/dev/null || fail "Jenkins prerequisite ${secret} is missing"
 done
@@ -65,40 +65,11 @@ jq -e '.status == "success" and (.data.result | length > 0)' <<<"${metrics}" >/d
 kubectl -n observability get configmap lab-cluster-dashboard lab-logs-dashboard >/dev/null || fail 'Grafana dashboards are not provisioned'
 helm -n observability get values observability -o json | jq -e '.grafana.additionalDataSources | any(.uid == "application-logs" and .database == "app-logs")' >/dev/null || fail 'Grafana application log datasource is absent'
 for _ in {1..30}; do
-  found="$(curl --silent --show-error --fail -H 'Content-Type: application/json' -d "{\"query\":{\"match_phrase\":{\"log\":\"${unique}\"}}}" https://observability.lab.test/elasticsearch/app-logs/_search | jq -r '.hits.total.value')" || true
+  found="$(kubectl get --raw "/api/v1/namespaces/observability/services/http:logs-es-http:9200/proxy/app-logs/_search?q=log:${unique}" 2>/dev/null | jq -r '.hits.total.value')" || true
   [[ "${found:-0}" -gt 0 ]] && break
   sleep 2
 done
 [[ "${found:-0}" -gt 0 ]] || fail 'application request log did not reach Elasticsearch'
 pass 'application metrics, Grafana configuration, and log delivery'
 
-policy_check() {
-  local expectation="$1" requests="$2" output
-  output="$(kubectl apply --dry-run=server -f - 2>&1 <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: e2e-policy-check
-  namespace: default
-spec:
-  replicas: 1
-  selector:
-    matchLabels: {app: e2e-policy-check}
-  template:
-    metadata:
-      labels: {app: e2e-policy-check}
-    spec:
-      containers:
-        - name: pause
-          image: registry.k8s.io/pause:3.10.1
-          resources:
-            requests: ${requests}
-EOF
-)" && [[ "${expectation}" == allow ]] && return
-  [[ "${expectation}" == deny && "${output}" == *denied* ]] || fail "admission ${expectation} check failed: ${output}"
-}
-policy_check allow '{cpu: 10m, memory: 16Mi}'
-policy_check deny '{memory: 16Mi}'
-policy_check deny '{cpu: 10m}'
-pass 'admission accepts complete requests and rejects missing CPU or memory'
 pass 'complete platform validation'

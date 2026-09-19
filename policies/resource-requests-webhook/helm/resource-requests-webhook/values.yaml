@@ -5,8 +5,8 @@ image:
   pullPolicy: IfNotPresent
   digest: ""
 
-imagePullSecrets:
-  - name: dockerhub-registry
+# The policy image is public. Private registries may supply pull secrets here.
+imagePullSecrets: []
 
 nameOverride: ""
 fullnameOverride: ""

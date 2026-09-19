@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly root
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+pass() {
+  printf 'PASS | %s\n' "$1"
+}
+
+resource_requests_digest() {
+  local configured="${RESOURCE_REQUESTS_WEBHOOK_IMAGE_DIGEST:-}" installed_image
+  if [[ -n "${configured}" ]]; then
+    printf '%s\n' "${configured}"
+    return
+  fi
+  installed_image="$(kubectl -n policy-system get deployment resource-requests-webhook \
+    -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+  [[ "${installed_image}" == *@sha256:* ]] && printf '%s\n' "${installed_image##*@}" && return
+  fail 'resource-requests-webhook needs RESOURCE_REQUESTS_WEBHOOK_IMAGE_DIGEST=sha256:<64 lowercase hex>; publish the image, export its digest, and rerun make policy-up POLICY=resource-requests-webhook'
+}
+
+deploy_resource_requests_webhook() {
+  local digest
+  digest="$(resource_requests_digest)"
+  [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+    fail 'RESOURCE_REQUESTS_WEBHOOK_IMAGE_DIGEST must be sha256:<64 lowercase hex characters>'
+
+  phase 'Reconciling policy resource-requests-webhook (timeout: 5m)'
+  helm upgrade --install resource-requests-webhook \
+    "${root}/policies/resource-requests-webhook/helm/resource-requests-webhook" \
+    --namespace policy-system --create-namespace \
+    --set-string "image.digest=${digest}" \
+    --wait --rollback-on-failure --timeout 5m --history-max 5 --hide-notes
+  pass 'Policy resource-requests-webhook reconciled'
+}
+
+deploy_policy() {
+  case "$1" in
+    resource-requests-webhook) deploy_resource_requests_webhook ;;
+    *) fail "unknown policy '$1'; supported policies: resource-requests-webhook" ;;
+  esac
+}
+
+main() {
+  local requested="${1:-}"
+  [[ -n "${requested}" ]] || fail 'policy name is required; run make policy-up POLICY=resource-requests-webhook'
+  if [[ "${requested}" != --cluster ]]; then
+    "${root}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster "${requested}"
+    return
+  fi
+  requested="${2:-}"
+  [[ "${requested}" == all ]] && requested=resource-requests-webhook
+  deploy_policy "${requested}"
+}
+
+main "$@"
