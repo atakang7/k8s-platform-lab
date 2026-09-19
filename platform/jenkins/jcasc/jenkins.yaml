@@ -42,10 +42,6 @@ jenkins:
                 imagePullSecrets:
                   - name: dockerhub-registry
                 volumes:
-                  - name: maven-cache
-                    hostPath:
-                      path: /var/lib/lab-ci/m2
-                      type: DirectoryOrCreate
                   - name: trivy-cache
                     hostPath:
                       path: /var/lib/lab-ci/trivy
@@ -78,8 +74,6 @@ jenkins:
                     command: ["sh", "-c", "sleep infinity"]
                     tty: true
                     volumeMounts:
-                      - name: maven-cache
-                        mountPath: /root/.m2
                       - name: trivy-cache
                         mountPath: /root/.cache/trivy
                     resources:

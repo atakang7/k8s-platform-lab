@@ -5,7 +5,6 @@
 ```text
 checkout
    │
-   ├──► test.sh
    ├──► Dockerfile lint
    └──► Helm lint + chart server dry-run
             │
@@ -37,8 +36,7 @@ The local tar is scan input only. `publish-image.sh` performs a second BuildKit 
 
 | File | Contract |
 |---|---|
-| `test.sh` | application tests must pass |
-| `build-image.sh` | BuildKit exports the local scan candidate |
+| `build-image.sh` | BuildKit runs the unit tests and exports the local scan candidate |
 | `scan-image.sh` | scans before publish and writes `sbom.json` |
 | `publish-image.sh` | rebuilds from warm cache, pushes, records immutable digest |
 | `github-status.sh` | updates commit status contexts |

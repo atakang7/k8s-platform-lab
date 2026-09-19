@@ -94,14 +94,6 @@ pipeline {
                 script {
                     def checks = [:]
 
-                    checks['Unit Tests'] = {
-                        timed('Test.UnitTests') {
-                            container('ci-tools') {
-                                sh 'delivery/ci/test.sh'
-                            }
-                        }
-                    }
-
                     checks['Dockerfile Lint'] = {
                         timed('Test.DockerfileLint') {
                             container('ci-tools') {
