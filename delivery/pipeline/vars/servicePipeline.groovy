@@ -32,6 +32,7 @@ def call(Map args) {
                         Map cluster = delivery.clusterTarget(config)
 
                         env.CHART = args.chart
+                        env.SERVICE_PATH = args.path
                         env.BUILD_CONTEXT = args.context
                         env.RELEASE = service.name
                         env.IMAGE_REPOSITORY = service.repository

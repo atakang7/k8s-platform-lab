@@ -69,16 +69,20 @@ def call() {
                                         env.CHART_REF = config.chartRegistry
                                         env.METRICS_URL = config.metrics ?: ''
 
-                                        for (Map recorded in delivery.recordedReleases(config)) {
-                                            if (recorded.target.name == environment && config.releases.contains(recorded.name)) {
-                                                stage("Deploy ${recorded.name} to ${environment}") {
-                                                    release(recorded, '.delivery/deploy.sh')
-                                                }
+                                        List<Map> releases = delivery.recordedReleases(config).findAll {
+                                            it.target.name == environment && config.releases.contains(it.name)
+                                        }
+                                        for (Map recorded in releases) {
+                                            stage("Deploy ${recorded.name} to ${environment}") {
+                                                release(recorded, '.delivery/deploy.sh')
                                             }
                                         }
-                                        // Reached only when every release above passed its tests.
-                                        delivery.tagRelease(environment)
-                                        delivery.openPromotions(config, environment)
+                                        // Reached only when every release above passed its tests. An
+                                        // environment that runs nothing yet has nothing to tag or promote.
+                                        if (releases) {
+                                            delivery.tagRelease(environment)
+                                            delivery.openPromotions(config, environment)
+                                        }
                                     }
                                 }
                             }

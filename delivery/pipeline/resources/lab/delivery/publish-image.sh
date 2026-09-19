@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Pushes the exact OCI layout that was scanned as <IMAGE_REPOSITORY>:<APP_VERSION>
 # and writes its registry digest to pushed.digest. A version is published once:
-# when the tag exists from this commit (a rebuild), its digest is reused; from
-# another commit, publication fails and the version must be raised. Publication
+# when the tag exists and the service's source (SERVICE_PATH) is unchanged since
+# the commit it was published from, its digest is reused (a rebuild, or a later
+# main commit that did not touch the service); otherwise publication fails and
+# the version must be raised. Publication
 # also fails if the registry digest differs from the scanned manifest digest.
 # The published digest is then signed with the delivery signing key
 # (COSIGN_PRIVATE_KEY, COSIGN_PASSWORD); the deploy job verifies it.
@@ -32,8 +34,9 @@ read_scanned_digest() {
   jq -er '.manifests[0].digest' "${IMAGE_INDEX}"
 }
 
-# Prints the digest APP_VERSION was published as from this commit, nothing if
-# the version is unpublished, and fails if another commit published it.
+# Prints the digest APP_VERSION was published as from this service source,
+# nothing if the version is unpublished, and fails if it was published from
+# different source.
 read_published_digest() {
   local published_revision
 
@@ -45,9 +48,9 @@ read_published_digest() {
     --authfile "${REGISTRY_AUTH_FILE}" \
     "docker://${IMAGE_REPOSITORY}:${APP_VERSION}" |
     jq -r '.config.Labels["org.opencontainers.image.revision"] // ""')"
-  [[ "${published_revision}" == "${COMMIT_SHA}" ]] || {
-    printf 'FAIL | %s %s was published from %s; raise the version\n' \
-      "${IMAGE_REPOSITORY}" "${APP_VERSION}" "${published_revision:-<unknown>}" >&2
+  git diff --quiet "${published_revision}" "${COMMIT_SHA}" -- "${SERVICE_PATH}" 2>/dev/null || {
+    printf 'FAIL | %s %s was published from %s, and %s changed since; raise the version\n' \
+      "${IMAGE_REPOSITORY}" "${APP_VERSION}" "${published_revision:-<unknown>}" "${SERVICE_PATH}" >&2
     return 1
   }
 
@@ -81,7 +84,7 @@ main() {
   published_digest="$(read_published_digest)"
   if [[ -n "${published_digest}" ]]; then
     printf '%s\n' "${published_digest}" > "${DIGEST_FILE}"
-    printf 'PASS | %s is already published from this commit as %s\n' \
+    printf 'PASS | %s is already published from this source as %s\n' \
       "${image_tag}" "${published_digest}"
     sign_image "${published_digest}"
     return
