@@ -156,7 +156,6 @@ validate_application() {
   local response
   local logged=false
   local pod
-  local attempt
   local -r host="app.${DNS_ZONE}"
 
   kubectl -n "${namespace}" rollout status deployment/sample-java-app \
@@ -233,7 +232,7 @@ validate_application() {
   [[ "${response}" == "QueryStringValue: ${request_id}" ]] ||
     fail 'application HTTPS response is wrong'
 
-  for attempt in {1..15}; do
+  for _ in {1..15}; do
     while IFS= read -r pod; do
       if kubectl -n "${namespace}" exec "${pod}" -c app -- \
         grep -Fq "${request_id}" /var/log/app/app.log; then
@@ -261,7 +260,6 @@ validate_observability() {
   local request_id="$2"
   local metrics
   local found=0
-  local attempt
   local -r host="observability.${DNS_ZONE}"
 
   kubectl -n "${namespace}" get servicemonitor sample-java-app >/dev/null ||
@@ -313,7 +311,7 @@ validate_observability() {
     ' >/dev/null ||
     fail 'Grafana application log datasource is absent'
 
-  for attempt in {1..30}; do
+  for _ in {1..30}; do
     found="$(
       kubectl get --raw \
         "/api/v1/namespaces/observability/services/http:logs-es-http:9200/proxy/app-logs/_search?q=log:${request_id}" \

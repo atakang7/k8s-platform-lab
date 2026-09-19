@@ -7,6 +7,7 @@ readonly OBSERVABILITY_DIRECTORY="${ROOT}/platform/observability"
 readonly NAMESPACE=observability
 readonly MINIMUM_WORKER_MEMORY_KI=1450000
 
+# shellcheck source=../versions.env
 source "${OBSERVABILITY_DIRECTORY}/versions.env"
 
 CURRENT_PHASE='startup'

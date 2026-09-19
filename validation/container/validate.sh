@@ -158,10 +158,9 @@ start_application() {
 
 wait_for_application() {
   local host_port="$1"
-  local attempt
   local application_url="http://127.0.0.1:${host_port}/api/foos"
 
-  for attempt in {1..60}; do
+  for _ in {1..60}; do
     if curl \
       --silent \
       --show-error \
@@ -209,9 +208,8 @@ validate_health_endpoints() {
 }
 
 validate_application_log() {
-  local attempt
 
-  for attempt in {1..10}; do
+  for _ in {1..10}; do
     if docker exec "${CONTAINER_NAME}" \
       grep --fixed-strings --quiet "${EXPECTED_RESPONSE}" /var/log/app/app.log; then
       pass 'application file log contains the request'

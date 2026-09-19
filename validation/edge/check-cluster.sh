@@ -186,9 +186,8 @@ EOF_EDGE_SERVICE
 
 wait_for_service_dns() {
   local service_hostname="$1"
-  local attempt
 
-  for attempt in {1..90}; do
+  for _ in {1..90}; do
     if [[ "$(kubectl -n "${VALIDATION_NAMESPACE}" get service explicit-edge \
       -o jsonpath='{.status.loadBalancer.ingress[0].ip}')" == "${VALIDATION_VIP}" ]] &&
       [[ "$(dig +short "@${EDGE_HOST_IP}" "${service_hostname}" A | tail -1)" \
@@ -203,9 +202,8 @@ wait_for_service_dns() {
 
 wait_for_dns_removal() {
   local service_hostname="$1"
-  local attempt
 
-  for attempt in {1..90}; do
+  for _ in {1..90}; do
     if [[ -z "$(dig +short "@${EDGE_HOST_IP}" "${service_hostname}" A)" ]]; then
       return
     fi
@@ -239,11 +237,10 @@ check_service_dns_lifecycle() {
 }
 
 check_ingress_dns_and_tls() {
-  local attempt
   local response
   local -r host="stage3.${DNS_ZONE}"
 
-  for attempt in {1..90}; do
+  for _ in {1..90}; do
     if [[ "$(dig +short "@${EDGE_HOST_IP}" "${host}" A | tail -1)" \
       == "${INGRESS_VIP}" ]]; then
       response="$(

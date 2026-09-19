@@ -6,6 +6,7 @@ readonly ROOT
 readonly JENKINS_DIRECTORY="${ROOT}/platform/jenkins"
 readonly JENKINS_NAMESPACE=jenkins
 
+# shellcheck source=../versions.env
 source "${JENKINS_DIRECTORY}/versions.env"
 source "${ROOT}/infra/edge/lib/operator-state.sh"
 source "${ROOT}/infra/edge/lib/vault-approle.sh"

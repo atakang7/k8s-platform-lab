@@ -100,12 +100,11 @@ check_endpoints() {
 }
 
 check_log_delivery() {
-  local attempt
   local indices=''
 
   phase 'checking Fluent Bit log delivery'
 
-  for attempt in {1..6}; do
+  for _ in {1..6}; do
     indices="$(cluster_api \
       '/api/v1/namespaces/observability/services/http:logs-es-http:9200/proxy/_cat/indices/kubernetes-*?h=index' \
       2>/dev/null || true)"
