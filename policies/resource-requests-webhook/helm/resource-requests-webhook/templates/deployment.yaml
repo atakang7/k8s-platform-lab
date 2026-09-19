@@ -10,6 +10,13 @@ metadata:
     {{- include "resource-requests-webhook.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  # One replica per schedulable node (topologySpreadConstraints below): a surge
+  # Pod has no node to land on, so replace in place instead.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       {{- include "resource-requests-webhook.selectorLabels" . | nindent 6 }}
