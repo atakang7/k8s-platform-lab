@@ -20,19 +20,20 @@ pass() {
   printf 'PASS | %s\n' "$1"
 }
 
-# The image digest desired in ENVIRONMENT's state/<name>.yaml, recorded there
-# by delivery. Admission policy is cluster-wide, so the operator chooses which
-# environment's digest this cluster runs.
+# The image digest this cluster's environment (clusterEnvironment in
+# environments.yaml) wants, from its state/<name>.yaml, recorded there by
+# delivery.
 resolve_state_digest() {
   local name="$1"
 
-  : "${ENVIRONMENT:?ENVIRONMENT is required, e.g. make policies-up ENVIRONMENT=prod}"
-
-  python3 - "${ROOT}/state/${ENVIRONMENT}.yaml" "${name}" <<'PY'
+  python3 - "${ROOT}/environments.yaml" "${ROOT}/state" "${name}" <<'PY'
 import sys
 import yaml
 
-path, name = sys.argv[1:]
+config_path, state_directory, name = sys.argv[1:]
+with open(config_path, encoding="utf-8") as source:
+    environment = yaml.safe_load(source)["clusterEnvironment"]
+path = f"{state_directory}/{environment}.yaml"
 with open(path, encoding="utf-8") as source:
     state = yaml.safe_load(source)
 
@@ -49,7 +50,7 @@ reconcile_resource_requests_webhook() {
 
   digest="$(resolve_state_digest "${RESOURCE_REQUESTS_WEBHOOK}")"
   [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] ||
-    fail "state/${ENVIRONMENT}.yaml has no ${RESOURCE_REQUESTS_WEBHOOK} digest yet; its CI on main records one in state/dev.yaml, then promote it"
+    fail "this cluster's environment has no ${RESOURCE_REQUESTS_WEBHOOK} release yet; its CI on main records one in the first environment, then promote it"
 
   phase 'reconciling policy resource-requests-webhook (timeout: 5m)'
 

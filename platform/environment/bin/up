@@ -19,8 +19,8 @@ phase() {
   printf 'WAIT | %s\n' "$1"
 }
 
-# Every delivery environment in promotion order, one "name namespace" line each.
-read_environments() {
+# The environment this cluster runs (clusterEnvironment), as "name namespace".
+read_cluster_environment() {
   python3 - "${ENVIRONMENT_CONFIG}" <<'PY'
 import sys
 import yaml
@@ -33,12 +33,10 @@ environments = config.get("environments") if isinstance(config, dict) else None
 if not isinstance(environments, list) or not environments:
     raise SystemExit(f"{config_path}: environments must be a non-empty list")
 
-for environment in environments:
-    name = environment.get("name") if isinstance(environment, dict) else None
-    namespace = environment.get("namespace") if isinstance(environment, dict) else None
-    if not isinstance(name, str) or not isinstance(namespace, str):
-        raise SystemExit(f"{config_path}: every environment needs a name and a namespace")
-    print(name, namespace)
+selected = [e for e in environments if isinstance(e, dict) and e.get("name") == config.get("clusterEnvironment")]
+if len(selected) != 1 or not isinstance(selected[0].get("namespace"), str):
+    raise SystemExit(f"{config_path}: clusterEnvironment must name one environment with a namespace")
+print(selected[0]["name"], selected[0]["namespace"])
 PY
 }
 
@@ -192,27 +190,38 @@ verify_registry_secret() {
     fail 'registry-pull Secret is missing'
 }
 
+# One cluster runs one environment. Switching clusterEnvironment on a cluster
+# that already runs another is refused rather than cleaned up, so a mistaken
+# switch can never remove a running environment.
+require_single_environment() {
+  local environment_name="$1"
+  local others
+
+  others="$(kubectl get namespaces \
+    --selector "delivery.lab.test/environment,delivery.lab.test/environment!=${environment_name}" \
+    --output name)"
+  [[ -z "${others}" ]] ||
+    fail "this cluster already runs another environment (${others//$'\n'/, }); remove it before preparing ${environment_name}"
+}
+
 cluster_reconcile() {
-  local environments
   local environment_name
   local namespace
   local role_id
 
-  environments="$(read_environments)"
+  read -r environment_name namespace <<<"$(read_cluster_environment)"
+  validate_environment_identity "${environment_name}" "${namespace}"
+  require_single_environment "${environment_name}"
   role_id="$(vault read -field=role_id auth/approle/role/registry-pull-vso/role-id)"
 
-  while read -r environment_name namespace; do
-    validate_environment_identity "${environment_name}" "${namespace}"
+  phase "reconciling environment ${environment_name} in namespace ${namespace}"
+  apply_environment_manifest "${environment_name}" "${namespace}" "${role_id}"
+  reconcile_registry_identity "${namespace}"
+  remove_token_minting_access "${namespace}"
+  verify_access_model "${environment_name}" "${namespace}"
+  verify_registry_secret "${namespace}"
 
-    phase "reconciling environment ${environment_name} in namespace ${namespace}"
-    apply_environment_manifest "${environment_name}" "${namespace}" "${role_id}"
-    reconcile_registry_identity "${namespace}"
-    remove_token_minting_access "${namespace}"
-    verify_access_model "${environment_name}" "${namespace}"
-    verify_registry_secret "${namespace}"
-
-    printf 'PASS | environment %s (%s)\n' "${environment_name}" "${namespace}"
-  done <<<"${environments}"
+  printf 'PASS | environment %s (%s)\n' "${environment_name}" "${namespace}"
 }
 
 operator_reconcile() {

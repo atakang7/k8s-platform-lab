@@ -29,7 +29,7 @@ def call(Map args) {
                         Map checkoutState = checkout scm
                         Map service = delivery.service(args.chart)
                         Map config = delivery.environments()
-                        Map first = config.environments[0]
+                        Map cluster = delivery.clusterTarget(config)
 
                         env.CHART = args.chart
                         env.BUILD_CONTEXT = args.context
@@ -37,8 +37,11 @@ def call(Map args) {
                         env.IMAGE_REPOSITORY = service.repository
                         // Services the deploy job does not release are only linted.
                         env.RELEASED = config.releases.contains(service.name).toString()
-                        env.ENVIRONMENT = first.name
-                        env.NAMESPACE = first.namespace
+                        // Dry-runs go to this cluster's environment; new releases enter
+                        // the first environment in promotion order.
+                        env.ENVIRONMENT = cluster.name
+                        env.NAMESPACE = cluster.namespace
+                        env.RECORD_ENVIRONMENT = config.environments[0].name
                         env.CHART_REF = config.chartRegistry
                         env.COMMIT_SHA = checkoutState.GIT_COMMIT
                         // The app version: image tag, chart version and state entry.
@@ -133,8 +136,8 @@ def call(Map args) {
                             }
                             script {
                                 String digest = readFile('pushed.digest').trim()
-                                delivery.recordRelease(env.ENVIRONMENT, env.RELEASE, env.APP_VERSION, digest)
-                                currentBuild.description = "${env.RELEASE} ${env.APP_VERSION} → ${env.ENVIRONMENT}"
+                                delivery.recordRelease(env.RECORD_ENVIRONMENT, env.RELEASE, env.APP_VERSION, digest)
+                                currentBuild.description = "${env.RELEASE} ${env.APP_VERSION} → ${env.RECORD_ENVIRONMENT}"
                             }
                         }
                     }

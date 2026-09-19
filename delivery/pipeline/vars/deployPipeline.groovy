@@ -1,7 +1,7 @@
 // The deploy job, a GitHub multibranch job over the environment state. Every
 // branch and pull request that changes state/ or environments.yaml is
-// verified; main then releases every environment, in promotion order, to what
-// its state/<name>.yaml says.
+// verified; main then releases this cluster's environment (clusterEnvironment
+// in environments.yaml) to what its state/<name>.yaml says.
 def call() {
     pipeline {
         agent none
@@ -22,9 +22,9 @@ def call() {
                 }
                 stages {
                     // An image may enter an environment only after it was in the
-                    // previous one. Released services must also carry the delivery
-                    // signature and pass a server-side dry-run of their chart with
-                    // the target environment's values.
+                    // previous one; that is checked for every environment. This
+                    // cluster's releases must also carry the delivery signature and
+                    // pass a server-side dry-run with its environment's values.
                     stage('Verify') {
                         agent { label 'lab-ci-runner' }
                         options { timeout(time: 15, unit: 'MINUTES') }
@@ -35,12 +35,12 @@ def call() {
                                 delivery.installSigningKey()
                                 Map config = delivery.environments()
                                 env.CHART_REF = config.chartRegistry
-                                env.DELIVERY_ENVIRONMENTS = config.environments*.name.join(' ')
+                                env.CLUSTER_ENVIRONMENT = config.clusterEnvironment
 
                                 for (Map recorded in delivery.recordedReleases(config)) {
                                     stage("Verify ${recorded.name} in ${recorded.target.name}") {
                                         delivery.requirePromoted(recorded)
-                                        if (config.releases.contains(recorded.name)) {
+                                        if (recorded.target.name == config.clusterEnvironment && config.releases.contains(recorded.name)) {
                                             release(recorded, '.delivery/validate-release.sh')
                                         }
                                     }
@@ -49,34 +49,33 @@ def call() {
                         }
                     }
 
-                    // One agent Pod per environment, in promotion order, running
-                    // as that environment's jenkins-deploy-<name> identity
-                    // (platform/environment): it can release there and nowhere else.
+                    // This cluster's environment, from an agent Pod running as its
+                    // jenkins-deploy-<name> identity (platform/environment), which
+                    // can release there and nowhere else.
                     stage('Deploy') {
                         when { branch 'main' }
                         options { timeout(time: 30, unit: 'MINUTES') }
                         steps {
                             script {
-                                for (String environment in env.DELIVERY_ENVIRONMENTS.tokenize(' ')) {
-                                    podTemplate(inheritFrom: 'cd-runner', serviceAccount: "jenkins-deploy-${environment}") {
-                                        node(POD_LABEL) {
-                                            checkout scm
-                                            delivery.installScripts()
-                                            Map config = delivery.environments()
-                                            env.CHART_REF = config.chartRegistry
-                                            env.METRICS_URL = config.metrics ?: ''
+                                podTemplate(inheritFrom: 'cd-runner', serviceAccount: "jenkins-deploy-${env.CLUSTER_ENVIRONMENT}") {
+                                    node(POD_LABEL) {
+                                        checkout scm
+                                        delivery.installScripts()
+                                        Map config = delivery.environments()
+                                        String environment = config.clusterEnvironment
+                                        env.CHART_REF = config.chartRegistry
+                                        env.METRICS_URL = config.metrics ?: ''
 
-                                            for (Map recorded in delivery.recordedReleases(config)) {
-                                                if (recorded.target.name == environment && config.releases.contains(recorded.name)) {
-                                                    stage("Deploy ${recorded.name} to ${environment}") {
-                                                        release(recorded, '.delivery/deploy.sh')
-                                                    }
+                                        for (Map recorded in delivery.recordedReleases(config)) {
+                                            if (recorded.target.name == environment && config.releases.contains(recorded.name)) {
+                                                stage("Deploy ${recorded.name} to ${environment}") {
+                                                    release(recorded, '.delivery/deploy.sh')
                                                 }
                                             }
-                                            // Reached only when every release above passed its tests.
-                                            delivery.tagRelease(environment)
-                                            delivery.openPromotions(config, environment)
                                         }
+                                        // Reached only when every release above passed its tests.
+                                        delivery.tagRelease(environment)
+                                        delivery.openPromotions(config, environment)
                                     }
                                 }
                             }

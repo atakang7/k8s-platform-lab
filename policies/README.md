@@ -39,11 +39,10 @@ The builder and distroless runtime bases are pinned by digest. The resulting web
 
 ## Deploy
 
-Delivery builds, scans and publishes the image (`resource-requests-webhook/Jenkinsfile`) and records its digest in `state/dev.yaml`. It reaches `stage` and `prod` by pull request, like any service ([delivery](../delivery/README.md)). Admission policy is cluster-wide, so the operator installs the digest of one environment, `prod` by default:
+Delivery builds, scans and publishes the image (`resource-requests-webhook/Jenkinsfile`) and records its digest in `state/dev.yaml`. It reaches `stage` and `prod` by pull request, like any service ([delivery](../delivery/README.md)). The operator installs the digest recorded for this cluster's environment (`clusterEnvironment` in [`environments.yaml`](../environments.yaml)):
 
 ```bash
-make policy-up POLICY=resource-requests-webhook                   # state/prod.yaml
-make policy-up POLICY=resource-requests-webhook ENVIRONMENT=dev   # state/dev.yaml
+make policy-up POLICY=resource-requests-webhook
 ```
 
 `make policies-up` reconciles every registered policy. Helm waits for readiness and rolls a failed upgrade back.

@@ -18,6 +18,9 @@ Map environments() {
     if (targets*.name.unique(false).size() != targets.size()) {
         error('environments.yaml: environment names must be unique')
     }
+    if (!(config.clusterEnvironment in targets*.name)) {
+        error('environments.yaml: clusterEnvironment must name one of the environments')
+    }
     if (!(config?.chartRegistry as String)?.startsWith('oci://')) {
         error('environments.yaml: chartRegistry must be an oci:// reference')
     }
@@ -34,6 +37,11 @@ Map environments() {
     }
 
     config
+}
+
+// The environment this cluster runs (clusterEnvironment in environments.yaml).
+Map clusterTarget(Map config) {
+    config.environments.find { it.name == config.clusterEnvironment }
 }
 
 // The releases desired in one environment, by service (state/<name>.yaml).

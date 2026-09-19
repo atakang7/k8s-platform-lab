@@ -112,7 +112,7 @@ No cluster credential is stored in Jenkins.
 
 ## Environments
 
-[`environments.yaml`](../environments.yaml) lists the environments in promotion order (`dev` → `stage` → `prod`) with their namespaces, plus the chart registry and the releases Jenkins owns. What runs in an environment is its [`state/<name>.yaml`](../state/): one `{version, image}` release per service (app version and image digest), `null` until first released. The Git history of those files is the deploy history.
+One cluster runs one environment: `clusterEnvironment` in [`environments.yaml`](../environments.yaml) (the lab cluster is `prod`). `make environment-up` prepares only it, the deploy job releases only it, and `make policies-up` installs its policy digests. The file also lists every environment in promotion order (`dev` → `stage` → `prod`) with its namespace, plus the chart registry and the releases Jenkins owns; each environment runs on its own cluster. What runs in an environment is its [`state/<name>.yaml`](../state/): one `{version, image}` release per service (app version and image digest), `null` until first released. The Git history of those files is the deploy history.
 
 | To | Do |
 |---|---|
