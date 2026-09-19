@@ -123,6 +123,31 @@ void recordRelease(String environment, String name, String version, String image
     }
 }
 
+// Tags the commit a healthy environment was released from as
+// <environment>-<yyyy.MM.dd>.<n>, unless its state is unchanged since the
+// environment's last tag. A tag names everything that ran together, and is
+// what a rollback restores (delivery/README.md, Release flow).
+void tagRelease(String environment) {
+    withEnv(["ENVIRONMENT=${environment}"]) {
+        withCredentials([gitUsernamePassword(credentialsId: 'github-creds')]) {
+            sh '''
+              git fetch --no-tags origin "+refs/tags/$ENVIRONMENT-*:refs/tags/$ENVIRONMENT-*"
+              last="$(git tag --list "$ENVIRONMENT-*" --sort=-v:refname | head -n 1)"
+              if [ -n "$last" ] && git diff --quiet "$last" HEAD -- "state/$ENVIRONMENT.yaml"; then
+                echo "PASS | $ENVIRONMENT still runs $last"
+                exit 0
+              fi
+              day="$(date -u +%Y.%m.%d)"
+              tag="$ENVIRONMENT-$day.$(( $(git tag --list "$ENVIRONMENT-$day.*" | wc -l) + 1 ))"
+              git -c user.name=lab-delivery -c user.email=delivery@lab.test \
+                tag --annotate --message "Release $tag" "$tag" HEAD
+              git push origin "refs/tags/$tag"
+              echo "PASS | tagged $tag"
+            '''
+        }
+    }
+}
+
 // A pull request that changes a service must raise its app version (the
 // chart's version) above the target branch's. A service new to the target
 // branch has nothing to compare against.
