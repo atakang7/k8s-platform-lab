@@ -67,6 +67,8 @@ The full environment is supported from an **Ubuntu x86_64 operator host**. VM cr
 
 The edge reconciliation installs the host Vault CLI and DNS utilities used by later validation. Host tool versions are not duplicated here; component versions owned by the repository are pinned in the corresponding `versions.env`, Ansible variables, manifests, or chart configuration.
 
+The guest baseline is pinned to `ubuntu/focal64` version `20240821.0.1`. For an intentional alternate base image, override `IMAGE_NAME` and `IMAGE_VERSION` together; ordinary rebuilds should keep the repository defaults so the same commit starts from the same guest OS image.
+
 The default VM plan allocates **6 vCPUs and 8 GiB RAM** in total:
 
 | Node | Role | CPU | RAM |

@@ -10,6 +10,7 @@ rescue ArgumentError
 end
 
 IMAGE_NAME = ENV.fetch("IMAGE_NAME", "ubuntu/focal64")
+IMAGE_VERSION = ENV.fetch("IMAGE_VERSION", "20240821.0.1")
 CLUSTER_NETWORK_PREFIX = ENV.fetch("BASE_IP", "10.50.0")
 
 EDGE_NETWORK_CIDR = "192.168.56.0/24"
@@ -83,6 +84,7 @@ worker_cpus = integer_env("WORKER_CPUS", 2)
 
 puts <<~PLAN
   VM resource plan
+    base:   #{IMAGE_NAME} #{IMAGE_VERSION}
     node-1: #{control_plane_cpus} CPU / #{control_plane_memory} MB RAM (control plane)
     node-2: #{worker_cpus} CPU / #{node_2_memory} MB RAM (worker, locally constrained)
     node-3: #{worker_cpus} CPU / #{node_3_memory} MB RAM (worker)
@@ -92,9 +94,10 @@ PLAN
 Vagrant.configure("2") do |config|
   config.ssh.insert_key = false
   config.vm.synced_folder ".", "/vagrant", disabled: true
+  config.vm.box = IMAGE_NAME
+  config.vm.box_version = IMAGE_VERSION
 
   config.vm.define "node-1" do |machine|
-    machine.vm.box = IMAGE_NAME
     machine.vm.hostname = "node-1"
     machine.vm.network(
       "private_network",
@@ -109,7 +112,6 @@ Vagrant.configure("2") do |config|
 
   (2..3).each do |index|
     config.vm.define "node-#{index}" do |machine|
-      machine.vm.box = IMAGE_NAME
       machine.vm.hostname = "node-#{index}"
       machine.vm.network(
         "private_network",
