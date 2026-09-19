@@ -42,6 +42,10 @@ def call(Map args) {
                         env.ENVIRONMENT = cluster.name
                         env.NAMESPACE = cluster.namespace
                         env.RECORD_ENVIRONMENT = config.environments[0].name
+                        // main publishes whenever this version is not recorded in the first
+                        // environment yet. Decided from state, not from what changed, so a
+                        // failed publish is picked up again by any later main build.
+                        env.UNRECORDED = (delivery.releases(env.RECORD_ENVIRONMENT)[service.name]?.version != service.version).toString()
                         env.CHART_REF = config.chartRegistry
                         env.COMMIT_SHA = checkoutState.GIT_COMMIT
                         // The app version: image tag, chart version and state entry.
@@ -53,14 +57,18 @@ def call(Map args) {
                 }
             }
 
-            // Runs for changes under `path`, and again after any build that did not
-            // succeed: a change is judged against the previous build only, so without the
-            // retry a failed main build would never publish. The first build always runs.
+            // Runs for changes under `path`, after any build that did not succeed, and
+            // on main whenever the app version is not recorded yet. The first build
+            // always runs.
             stage('Service') {
                 when {
                     anyOf {
                         changeset pattern: serviceChanges
                         expression { currentBuild.previousBuild?.result != 'SUCCESS' }
+                        allOf {
+                            branch 'main'
+                            expression { env.UNRECORDED == 'true' }
+                        }
                     }
                 }
                 stages {
