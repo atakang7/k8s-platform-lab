@@ -194,7 +194,7 @@ wait_for_observability_dns() {
   begin_phase 'waiting for the observability ingress DNS record (timeout: 3m)'
 
   for _ in {1..90}; do
-    resolved_address="$(getent ahostsv4 "${host}" | awk 'NR == 1 {print $1}')"
+    resolved_address="$(getent ahostsv4 "${host}" 2>/dev/null | awk 'NR == 1 {print $1}' || true)"
     if [[ "${resolved_address}" == "${INGRESS_VIP}" ]]; then
       complete_phase
       return
