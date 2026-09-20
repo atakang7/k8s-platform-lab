@@ -11,6 +11,10 @@ public class HelloController {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(HelloController.class);
 
+    /**
+     * Echoes the {@code val} query parameter back to the caller, prefixed with
+     * {@code QueryStringValue: }. A missing parameter is a 400.
+     */
     @GetMapping("/api/foos")
     public String getFoos(@RequestParam String val) {
         String result = "QueryStringValue: " + val;
