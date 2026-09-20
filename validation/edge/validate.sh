@@ -4,6 +4,7 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly ROOT
 source "${ROOT}/infra/edge/lib/operator-state.sh"
+source "${ROOT}/infra/edge/lib/sudo.sh"
 
 pass() {
   printf 'PASS | %s\n' "$1"
@@ -23,8 +24,8 @@ require_commands() {
       fail "missing command: ${command_name}"
   done
 
-  sudo -n true ||
-    fail 'passwordless sudo is required for edge validation'
+  require_sudo 'edge validation' ||
+    fail 'sudo authentication is required for edge validation'
 }
 
 validate_host_network() (
