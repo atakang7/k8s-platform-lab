@@ -18,7 +18,7 @@ public class HelloController {
     @GetMapping("/api/foos")
     public String getFoos(@RequestParam String val) {
         String result = "QueryStringValue: " + val;
-        LOGGER.info("{}", result);
+        LOGGER.info("responding to /api/foos: {}", result);
         return result;
     }
 }
