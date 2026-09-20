@@ -84,7 +84,7 @@ def call(Map args) {
                                 sh 'hadolint "$BUILD_CONTEXT/Dockerfile"'
                                 script {
                                     if (env.CHANGE_TARGET) {
-                                        delivery.requireVersionBump(args.chart, env.CHANGE_TARGET)
+                                        delivery.requireVersionBump(args.chart, env.CHANGE_TARGET, args.path)
                                     }
                                     if (env.RELEASED == 'true') {
                                         withCredentials([

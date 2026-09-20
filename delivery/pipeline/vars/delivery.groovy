@@ -256,13 +256,18 @@ private void openPromotion(String environment, String name, Map release) {
 
 // A pull request that changes a service must raise its app version (the
 // chart's version) above the target branch's. A service new to the target
-// branch has nothing to compare against.
-void requireVersionBump(String chart, String target) {
-    withEnv(["CHART_YAML=${chart}/Chart.yaml", "TARGET=${target}"]) {
+// branch has nothing to compare against, and a pull request that leaves the
+// service untouched (a promotion, which only edits state/) owes no bump.
+void requireVersionBump(String chart, String target, String path) {
+    withEnv(["CHART_YAML=${chart}/Chart.yaml", "TARGET=${target}", "SERVICE_PATH=${path}"]) {
         withCredentials([gitUsernamePassword(credentialsId: 'github-creds')]) {
             container('ci-tools') {
                 sh '''
                   git fetch --no-tags origin "$TARGET"
+                  if git diff --quiet FETCH_HEAD -- "$SERVICE_PATH"; then
+                    echo "PASS | $SERVICE_PATH is unchanged since $TARGET"
+                    exit 0
+                  fi
                   current="$(sed -n 's/^version: *//p' "$CHART_YAML")"
                   base="$(git show "FETCH_HEAD:$CHART_YAML" 2>/dev/null | sed -n 's/^version: *//p')"
                   if [ -z "$base" ]; then
