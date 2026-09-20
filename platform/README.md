@@ -99,6 +99,17 @@ make observability-smoke
 
 Details: [observability/README.md](observability/README.md).
 
+## Operator access
+
+Human-facing platform access is intentionally easy to inspect without exposing machine credentials:
+
+```bash
+make endpoints
+make credentials
+```
+
+`make credentials` prints only the Jenkins and Grafana login credentials already materialized in Kubernetes. GitHub, DockerHub, Cosign, runtime registry, Vault AppRole, DNS, and TLS secrets are never printed.
+
 ## Change model
 
 ```text
