@@ -8,6 +8,9 @@ readonly QUERY_VALUE=container-validation
 readonly EXPECTED_RESPONSE="QueryStringValue: ${QUERY_VALUE}"
 
 CONTAINER_NAME=''
+# start_application sets this: capturing its stdout would run it in a subshell,
+# losing CONTAINER_NAME and leaving every later docker call without a container.
+HOST_PORT=''
 RESPONSE_FILE=''
 
 pass() {
@@ -135,7 +138,6 @@ validate_oci_labels() {
 start_application() {
   local image_reference="$1"
   local git_sha="$2"
-  local host_port
 
   CONTAINER_NAME="container-validation-${git_sha:0:12}-$$"
 
@@ -145,15 +147,13 @@ start_application() {
     --publish 127.0.0.1::9001 \
     "${image_reference}" >/dev/null
 
-  host_port="$(
+  HOST_PORT="$(
     docker port "${CONTAINER_NAME}" 9001/tcp |
       awk -F: 'NR == 1 { print $NF }'
   )"
 
-  [[ "${host_port}" =~ ^[0-9]+$ ]] ||
+  [[ "${HOST_PORT}" =~ ^[0-9]+$ ]] ||
     fail 'container did not publish application port 9001'
-
-  printf '%s\n' "${host_port}"
 }
 
 wait_for_application() {
@@ -287,7 +287,6 @@ main() {
   local source_repository
   local image_repository
   local image_reference
-  local host_port
 
   [[ "$#" -eq 0 ]] || fail 'container validation does not accept arguments'
 
@@ -312,11 +311,11 @@ main() {
   build_images "${git_sha}" "${source_repository}" "${image_reference}"
   validate_oci_labels "${image_reference}" "${git_sha}" "${source_repository}"
 
-  host_port="$(start_application "${image_reference}" "${git_sha}")"
-  wait_for_application "${host_port}"
-  validate_health_endpoints "${host_port}"
+  start_application "${image_reference}" "${git_sha}"
+  wait_for_application "${HOST_PORT}"
+  validate_health_endpoints "${HOST_PORT}"
   validate_application_log
-  validate_metrics "${host_port}"
+  validate_metrics "${HOST_PORT}"
   validate_runtime_image
   push_if_requested "${image_reference}" "${image_repository}"
 
