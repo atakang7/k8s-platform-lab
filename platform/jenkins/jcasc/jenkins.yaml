@@ -23,7 +23,7 @@ jenkins:
           - name: ci-runner
             label: lab-ci-runner
             namespace: jenkins
-            idleMinutes: 0
+            idleMinutes: 10
             instanceCap: 1
             nodeUsageMode: EXCLUSIVE
             showRawYaml: false
@@ -148,7 +148,7 @@ jenkins:
           - name: ci-light
             label: lab-ci-light
             namespace: jenkins
-            idleMinutes: 0
+            idleMinutes: 5
             instanceCap: 1
             nodeUsageMode: EXCLUSIVE
             showRawYaml: false
@@ -220,7 +220,7 @@ jenkins:
           - name: cd-runner
             label: lab-cd-runner
             namespace: jenkins
-            idleMinutes: 0
+            idleMinutes: 10
             instanceCap: 1
             nodeUsageMode: EXCLUSIVE
             showRawYaml: false
