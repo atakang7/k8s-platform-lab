@@ -8,6 +8,7 @@ readonly EDGE_PLAYBOOK="${ROOT}/infra/ansible/playbooks/edge-host.yml"
 source "${ROOT}/infra/edge/config.env"
 source "${ROOT}/infra/edge/versions.env"
 source "${ROOT}/infra/edge/lib/operator-state.sh"
+source "${ROOT}/infra/edge/lib/sudo.sh"
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
@@ -20,9 +21,6 @@ phase() {
 
 reconcile_host_foundation() {
   phase 'reconciling host Vault, CA, and edge prerequisites'
-
-  sudo -n true ||
-    fail 'passwordless sudo is required for non-interactive edge bootstrap'
 
   sudo -n \
     PYTHONNOUSERSITE=1 \
@@ -116,6 +114,8 @@ reconcile_cluster_edge() {
 
 main() {
   cd "${ROOT}"
+
+  require_sudo 'edge bootstrap' || fail 'sudo authentication is required for edge bootstrap'
 
   reconcile_host_foundation
   ensure_vault_available
