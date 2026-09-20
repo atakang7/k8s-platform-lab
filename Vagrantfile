@@ -123,8 +123,7 @@ Vagrant.configure("2") do |config|
       # the private cluster network.
       machine.vm.network(
         "private_network",
-        ip: "192.168.56.#{index + 9}",
-        name: "vboxnet0"
+        ip: "192.168.56.#{index + 9}"
       )
 
       machine.vm.provider "virtualbox" do |virtualbox|
