@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+cat <<'EOF'
+Jenkins
+  https://jenkins.lab.test
+
+Grafana
+  https://observability.lab.test/grafana/
+
+Prometheus
+  https://observability.lab.test/prometheus/
+EOF
