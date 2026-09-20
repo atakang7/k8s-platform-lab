@@ -21,4 +21,9 @@ public class HelloController {
         LOGGER.info("responding to /api/foos: {}", result);
         return result;
     }
+
+    @GetMapping("/api/release")
+    public String getRelease() {
+        return "Lab CI/CD acceptance";
+    }
 }
