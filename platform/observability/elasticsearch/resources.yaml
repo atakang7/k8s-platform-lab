@@ -59,8 +59,10 @@ spec:
           ports:
             - name: http
               containerPort: 9200
+          # Keep first-install scheduling deterministic on the 2 GiB node-2
+          # while retaining enough runtime headroom above the 256 MiB JVM heap.
           resources:
-            requests: {cpu: 100m, memory: 512Mi}
+            requests: {cpu: 100m, memory: 384Mi}
             limits: {cpu: 750m, memory: 768Mi}
           startupProbe:
             httpGet:
