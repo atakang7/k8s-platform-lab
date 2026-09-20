@@ -28,4 +28,11 @@ class HelloControllerTest {
         mockMvc.perform(get("/api/foos"))
                 .andExpect(status().isBadRequest());
     }
+
+    @Test
+    void getReleaseReturnsAcceptanceMarker() throws Exception {
+        mockMvc.perform(get("/api/release"))
+                .andExpect(status().isOk())
+                .andExpect(content().string("Lab CI/CD acceptance"));
+    }
 }
