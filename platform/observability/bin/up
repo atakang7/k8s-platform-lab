@@ -9,6 +9,8 @@ readonly MINIMUM_WORKER_MEMORY_KI=1450000
 
 # shellcheck source=../versions.env
 source "${OBSERVABILITY_DIRECTORY}/versions.env"
+# shellcheck source=../../../infra/edge/config.env
+source "${ROOT}/infra/edge/config.env"
 
 CURRENT_PHASE='startup'
 
@@ -182,6 +184,28 @@ apply_observability_ingress() {
   complete_phase
 }
 
+# ExternalDNS publishes the ingress record only once ingress-nginx has set the
+# Ingress address, so reconciliation is not complete until the name resolves.
+# Without this, observability-smoke runs before its own endpoint exists.
+wait_for_observability_dns() {
+  local -r host="observability.${DNS_ZONE}"
+  local resolved_address
+
+  begin_phase 'waiting for the observability ingress DNS record (timeout: 3m)'
+
+  for _ in {1..90}; do
+    resolved_address="$(getent ahostsv4 "${host}" | awk 'NR == 1 {print $1}')"
+    if [[ "${resolved_address}" == "${INGRESS_VIP}" ]]; then
+      complete_phase
+      return
+    fi
+    sleep 2
+  done
+
+  printf 'FAIL | %s did not resolve to %s\n' "${host}" "${INGRESS_VIP}" >&2
+  return 1
+}
+
 cluster_reconcile() {
   validate_worker_capacity
   prepare_foundation
@@ -192,6 +216,7 @@ cluster_reconcile() {
   wait_for_elasticsearch
   install_fluent_bit
   apply_observability_ingress
+  wait_for_observability_dns
 
   printf 'PASS | observability components reconciled; run make observability-smoke\n'
 }
