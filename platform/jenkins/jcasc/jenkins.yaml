@@ -16,11 +16,14 @@ jenkins:
         serverUrl: https://kubernetes.default.svc.cluster.local
         jenkinsUrl: http://jenkins.jenkins.svc.cluster.local:8080
         webSocket: true
+        # This edge cluster is memory-constrained: never allow Jenkins agent pods
+        # to accumulate faster than the workers can safely host them.
+        containerCap: 2
         templates:
           - name: ci-runner
             label: lab-ci-runner
             namespace: jenkins
-            idleMinutes: 60
+            idleMinutes: 0
             instanceCap: 1
             nodeUsageMode: EXCLUSIVE
             showRawYaml: false
@@ -145,8 +148,8 @@ jenkins:
           - name: ci-light
             label: lab-ci-light
             namespace: jenkins
-            idleMinutes: 10
-            instanceCap: 2
+            idleMinutes: 0
+            instanceCap: 1
             nodeUsageMode: EXCLUSIVE
             showRawYaml: false
             slaveConnectTimeout: 120
@@ -217,7 +220,7 @@ jenkins:
           - name: cd-runner
             label: lab-cd-runner
             namespace: jenkins
-            idleMinutes: 60
+            idleMinutes: 0
             instanceCap: 1
             nodeUsageMode: EXCLUSIVE
             showRawYaml: false
