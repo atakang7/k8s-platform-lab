@@ -211,6 +211,7 @@ The Elasticsearch forwarding path does not read stdout.
               │                     │
               ▼                     ▼
         CONSOLE appender       ASYNC_FILE
+        WARN + ERROR only     every level
               │                     │
               ▼                     ▼
         Kubernetes stdout   RollingFileAppender
@@ -232,8 +233,9 @@ The Elasticsearch forwarding path does not read stdout.
                          app-logs
 ~~~
 
-stdout remains available for ordinary Kubernetes troubleshooting. The
-explicit Elasticsearch path uses the asynchronous file appender.
+Every line goes to the asynchronous file; stdout gets WARN and ERROR only.
+Request logging stays off the slow stdout path, and `kubectl logs` still
+shows failures. Container validation fails if a request line reaches stdout.
 
 **Source:** [logback-spring.xml](src/main/resources/logback-spring.xml)
 

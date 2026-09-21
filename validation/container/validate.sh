@@ -213,6 +213,12 @@ validate_application_log() {
     if docker exec "${CONTAINER_NAME}" \
       grep --fixed-strings --quiet "${EXPECTED_RESPONSE}" /var/log/app/app.log; then
       pass 'application file log contains the request'
+      # stdout keeps WARN and above only; an INFO request line there means the
+      # app pays the stdout cost again.
+      if grep --fixed-strings --quiet "${EXPECTED_RESPONSE}" <<<"$(docker logs "${CONTAINER_NAME}" 2>&1)"; then
+        fail 'request log line was also written to stdout'
+      fi
+      pass 'request log line stays off stdout'
       return
     fi
     sleep 1

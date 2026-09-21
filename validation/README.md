@@ -110,6 +110,9 @@ health endpoints
 file log
         │
         ▼
+request line not on stdout
+        │
+        ▼
 Prometheus metrics
         │
         ▼

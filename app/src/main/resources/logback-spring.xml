@@ -5,8 +5,13 @@
         value="%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
     />
 
-    <!-- Standard Kubernetes log stream. -->
+    <!-- stdout carries WARN and above only: writing every line to stdout is the
+         cost the async file appender exists to avoid. kubectl logs still shows
+         failures; the full log reaches Elasticsearch from the file. -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>WARN</level>
+        </filter>
         <encoder>
             <pattern>${LOG_PATTERN}</pattern>
         </encoder>
