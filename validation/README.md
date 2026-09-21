@@ -1,64 +1,389 @@
 # Validation
 
-`validation/` checks observable outcomes. It does not own platform configuration.
+`validation/` proves observable outcomes. It does not own platform
+configuration and it does not repair broken state.
 
-The rule is simple: configuration belongs under `infra/`, `platform/`, `app/`, `delivery/`, or `policies/`; validation only proves that the resulting system behaves as expected.
+## 1. Validation model
 
-## Current checks
+~~~text
+desired state
+infra / platform / app
+delivery / policies
+        │
+        │ reconcile
+        ▼
+running system
+        │
+        ▼
+validation
+        │
+   ┌────┴─────┐
+   │          │
+ PASS        FAIL
+              │
+              ▼
+      fix owning subsystem
+              │
+              ▼
+          rerun check
+~~~
 
-| Path | Command | Verifies |
-|---|---|---|
-| `cluster/` | `make cluster-validate` | node health, networking, cross-node Pod traffic, dynamic storage |
-| `container/` | `make container-validate` | application tests, runtime image, HTTP behavior, non-root execution, OCI metadata |
-| `edge/` | `make edge-smoke` | normal edge health, DNS, HTTPS, Kubernetes workloads |
-| `edge/` | `make edge-validate` | deeper DNS/TLS/security integration and create/delete behavior |
-| `e2e/` | `make e2e-validate` | installed platform, application metrics/logs, and admission policy |
+Validation is evidence, not configuration management.
 
-Validation consumes the deployed system. Installation logic stays in the owning subsystem.
+## 2. Validation layers
 
-## Validation layers
+~~~text
+cluster
+  │
+  ▼
+container
+  │
+  ▼
+edge
+  │
+  ▼
+observability
+  │
+  ▼
+policies
+  │
+  ▼
+end-to-end
+~~~
 
-```text
-configuration
-    │
-    │ reconcile
-    │
- running system
-    │
-    ├─ cluster validation
-    ├─ container validation
-    ├─ edge validation
-    └─ final end-to-end validation
-```
+Each layer proves a different contract.
 
-A smoke test answers "is the normal path healthy now?". A deeper validation may deliberately create and remove temporary resources to exercise integration boundaries. Those resources are cleaned before and after the check so an interrupted previous run cannot satisfy a later validation.
+## 3. Cluster validation
 
-## Expected operating order
-
-```bash
+~~~text
 make cluster-validate
+        │
+        ▼
+3 Ready nodes
+        │
+        ▼
+roles + private IPs
+        │
+        ▼
+version / package pins
+        │
+        ▼
+Pod + Service CIDRs
+        │
+        ▼
+Calico networking
+        │
+        ▼
+cross-node Pod traffic
+        │
+        ▼
+dynamic local-path PVC
+~~~
+
+This validates the kubeadm/Ansible result, not merely the playbook exit
+code.
+
+## 4. Container validation
+
+~~~text
+make container-validate
+        │
+        ▼
+build test stage
+        │
+        ▼
+build runtime image
+        │
+        ▼
+OCI source + revision
+        │
+        ▼
+run container
+        │
+        ▼
+HTTP query response
+        │
+        ▼
+health endpoints
+        │
+        ▼
+file log
+        │
+        ▼
+Prometheus metrics
+        │
+        ▼
+non-root runtime
+        │
+        ▼
+no build tools/source
+~~~
+
+Optional registry push validation can also verify that the registry
+returns an immutable SHA256 digest.
+
+## 5. Edge smoke vs deep validation
+
+~~~text
 make edge-smoke
+      │
+      ▼
+normal-path health
+
+
+make edge-validate
+      │
+      ▼
+host network boundary
+      │
+      ▼
+Vault TLS / Raft / audit
+      │
+      ▼
+BIND authoritative only
+      │
+      ▼
+unsigned update rejected
+      │
+      ▼
+ExternalDNS integration
+      │
+      ▼
+HTTPS ingress
+~~~
+
+Deep edge validation deliberately exercises trust and network boundaries.
+
+It also checks that the control plane has no edge NIC and that private
+control-plane ports are not exposed through worker edge addresses.
+
+## 6. Observability smoke
+
+~~~text
 make observability-smoke
+        │
+        ▼
+workloads ready
+        │
+        ▼
+PVCs bound
+        │
+        ▼
+alert rule loaded
+        │
+        ▼
+DNS + TLS endpoints
+        │
+        ▼
+Elasticsearch healthy
+        │
+        ▼
+Fluent Bit wrote index
+~~~
+
+This proves the log path reached Elasticsearch.
+
+## 7. Policy smoke
+
+~~~text
+make policies-smoke
+        │
+        ▼
+webhook rollout
+        │
+        ▼
+immutable digest
+        │
+        ▼
+replica spread
+        │
+        ▼
+TLS / caBundle
+        │
+        ▼
+fail-closed config
+        │
+        ▼
+server dry-run decisions
+~~~
+
+The dry-runs execute the real API server, Service/TLS path, and webhook
+code without persisting test Deployments.
+
+## 8. End-to-end path
+
+~~~text
 make e2e-validate
-```
+      │
+      ▼
+cluster validation
+      │
+      ▼
+edge validation
+      │
+      ▼
+observability smoke
+      │
+      ▼
+policy admission
+      │
+      ▼
+Jenkins
+      │
+      ▼
+application
+      │
+      ▼
+metrics + log delivery
+      │
+      ▼
+complete platform PASS
+~~~
 
-Application and admission-policy checks should be run after Jenkins has delivered the application and the policy webhook is installed.
+The final check crosses subsystem boundaries instead of repeating only
+local health checks.
 
-For release verification, confirm at minimum:
+## 9. Jenkins checks
 
-- three Kubernetes nodes are Ready;
-- ingress DNS resolves to `192.168.56.200`;
-- HTTPS is trusted for the managed hostnames;
-- Jenkins controller is healthy on node-3;
-- monitoring and logging endpoints respond;
-- `sample-java-app` has four Ready replicas spread across node-2 and node-3;
-- the live application responds through `https://app.lab.test`;
-- the running application image is an immutable digest from CI/CD;
-- the application Pod runtime keeps service-account tokens and service links disabled, uses the RuntimeDefault seccomp profile, and enforces the two-replica disruption budget;
-- the admission webhook accepts complete requests and rejects missing CPU or memory requests.
+~~~text
+Jenkins
+   │
+   ├── required Secrets exist
+   ├── controller Ready
+   ├── controller on node-3
+   ├── PVC Bound
+   ├── ingress present
+   ├── DNS → ingress VIP
+   ├── HTTPS login works
+   └── numExecutors == 0
+~~~
 
-## Failure handling
+This proves the controller is persistent, reachable, correctly placed,
+and not being used as a build executor.
 
-Validation scripts should fail on the first broken invariant with enough context to identify the subsystem. They may clean up only resources that the validation itself owns; they must not repair platform state. Repair belongs in the owning subsystem's reconciliation path, then the validator is rerun.
+## 10. Application checks
 
-Keep validation data flow explicit. Values that connect checks—such as an end-to-end request ID—are created by the orchestrator and passed as arguments instead of being smuggled through stdout or mutable ambient state.
+The validator reads the deployed replica count from the cluster instead
+of hard-coding four replicas.
+
+~~~text
+current environment release
+          │
+          ▼
+all replicas Ready
+          │
+          ▼
+immutable image digest
+          │
+          ▼
+runtime security
+          │
+          ▼
+PDB rule
+          │
+          ▼
+worker placement
+          │
+          ▼
+DNS + HTTPS
+          │
+          ▼
+request ID in app.log
+~~~
+
+Replica behavior follows the active environment profile:
+
+~~~text
+dev / stage
+1 replica
+no PDB
+
+
+base / prod
+4 replicas
+spread across node-2 + node-3
+PDB must leave a Pod evictable
+~~~
+
+For any multi-replica environment, the validator requires running Pods
+across both workers.
+
+## 11. End-to-end request evidence
+
+~~~text
+generate request ID
+        │
+        ▼
+HTTPS /api/foos
+        │
+        ▼
+correct response
+        │
+        ▼
+same ID in app.log
+        │
+        ▼
+same ID in Elasticsearch
+~~~
+
+One request ID ties the HTTP path and the log-delivery path together.
+
+The orchestrator passes that value explicitly instead of hiding it in
+ambient state.
+
+## 12. Metrics evidence
+
+~~~text
+application ServiceMonitor
+        │
+        ▼
+Prometheus target UP
+        │
+        ▼
+JVM heap metric present
+        │
+        ▼
+Grafana dashboards exist
+        │
+        ▼
+app-logs datasource exists
+~~~
+
+This verifies both collection and dashboard provisioning.
+
+## 13. Command map
+
+| Path | Command | Purpose |
+|---|---|---|
+| `cluster/` | `make cluster-validate` | Kubernetes foundation |
+| `container/` | `make container-validate` | image/runtime contract |
+| `edge/` | `make edge-smoke` | normal edge health |
+| `edge/` | `make edge-validate` | deep edge integration |
+| observability | `make observability-smoke` | metrics/log platform |
+| policies | `make policies-smoke` | admission behavior |
+| `e2e/` | `make e2e-validate` | complete platform |
+
+## 14. Failure rule
+
+~~~text
+validator finds failure
+        │
+        ▼
+stop
+        │
+        ▼
+identify owning subsystem
+        │
+        ▼
+repair desired state there
+        │
+        ▼
+reconcile
+        │
+        ▼
+rerun validator
+~~~
+
+A validator may clean up only temporary resources that it created.
+
+It must not mutate platform state to make its own check pass.
