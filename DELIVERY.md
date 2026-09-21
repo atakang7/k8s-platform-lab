@@ -15,43 +15,92 @@ The delivery contract is simple:
 > **Build once. Scan once. Publish once. Deploy and promote by immutable digest.**
 
 ```text
-                                 ┌────────────── PR ──────────────┐
-                                 │                                │
-Java change ─► Jenkins discovery ├─► Validate ─► Maven test/package ─► Image build ─► Scan ──┤
-                                 │                                │
-                                 └───────────── main ─────────────┘
-                                                     │
-                                                     ▼
-                                              Publish image
-                                                     │
-                                              digest == scanned
-                                                     │
-                                                     ▼
-                                                   Sign
-                                                     │
-                                                     ▼
-                                              Publish chart
-                                                     │
-                                                     ▼
-                                            state/dev.yaml
-                                                     │
-                                  ┌──────────────────┴──────────────────┐
-                                  ▼                                     ▼
-                           Verify release                         Git desired state
-                       signature · promotion                           │
-                       server-side dry-run                             ▼
-                                  │                               Deploy exact
-                                  └──────────────► CD ───────────► digest
-                                                                       │
-                                                                       ▼
-                                                                 Helm test
-                                                                       │
-                                                                       ▼
-                                                                 release tag
-                                                                       │
-                                                                       ▼
-                                                            promotion PR
-                                                               dev → stage → prod
+┌──────────────────────────────────────────┐
+│               JAVA CHANGE                │▒
+│source · chart · Dockerfile               │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│                 VALIDATE                 │▒
+│Dockerfile · version · Helm dry-run       │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│          JUNIT TESTS + PACKAGE           │▒
+│@WebMvcTest · @SpringBootTest             │▒
+│mvnw package → application.jar            │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│               IMAGE BUILD                │▒
+│rootless BuildKit · Java 21 runtime       │▒
+│tested JAR → OCI layout                   │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│               SCAN + SBOM                │▒
+│Trivy CRITICAL gate · CycloneDX           │▒
+│PR: PASS ends here · main: continue       │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│        MAIN ONLY · PUBLISH + SIGN        │▒
+│Skopeo · digest equality · Cosign         │▒
+│image + chart → OCI registry              │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│          GIT ENVIRONMENT STATE           │▒
+│state/dev.yaml · version + sha256         │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│                CD VERIFY                 │▒
+│signature · promotion ancestry · dry-run  │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│           DEPLOY EXACT DIGEST            │▒
+│Helm upgrade --wait                       │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│                HELM TEST                 │▒
+│real HTTP smoke test                      │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│               RELEASE TAG                │▒
+│dev-YYYY.MM.DD.N                          │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│               PROMOTION PR               │▒
+│same digest → stage → prod                │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 CI produces the artifact. Git state selects it. CD never rebuilds it.
@@ -78,11 +127,13 @@ A service-changing PR must increase its chart version. Promotion PRs change only
 Heavy service stages run only when:
 
 ```text
-service path changed
-        OR
-previous build failed
-        OR
-main contains an unrecorded version
+┌──────────────────────────────────────────┐
+│           RUN HEAVY SERVICE CI           │▒
+│service path changed                      │▒
+│OR previous build failed                  │▒
+│OR main version is not recorded           │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 Unrelated repository changes do not rebuild the service.
@@ -90,16 +141,26 @@ Unrelated repository changes do not rebuild the service.
 ### CI → state → CD
 
 ```text
-CI
- │
- └─► state/dev.yaml
-       version: 1.2.14
-       image: sha256:2758e8...
-               │
-               ▼
-              CD
-               │
-               └─► image.repository@sha256:2758e8...
+┌──────────────────────────────────────────┐
+│            CI RELEASE OUTPUT             │▒
+│version 1.2.14                            │▒
+│sha256:2758e8...                          │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│            GIT DESIRED STATE             │▒
+│state/dev.yaml                            │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│                 CD INPUT                 │▒
+│deploy repository@sha256:2758e8...        │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 The state commit is the CI/CD boundary.
@@ -121,50 +182,69 @@ Jenkins discovers GitHub changes by one-minute multibranch polling because this 
 ## 2. Java CI
 
 ```text
-Checkout
-   │
-   ▼
-Validate
-   ├─ Dockerfile lint
-   ├─ PR version gate
-   └─ Helm render + server-side dry-run
-   │
-   ▼
-BuildKit build
-   │
-   ├─ Maven dependency restore
-   │
-   ├─ Unit / slice tests
-   │    ├─ JUnit 5
-   │    ├─ @WebMvcTest(HelloController)
-   │    ├─ GET /api/foos → 200
-   │    ├─ missing val → 400
-   │    └─ GET /api/release → expected release marker
-   │
-   ├─ Spring context test
-   │
-   ├─ mvnw package
-   │
-   └─ package application.jar
-          │
-          ▼
-   Java 21 runtime image
-          │
-          ▼
-      OCI layout
-          │
-          ▼
-Scan
-   ├─ Trivy CRITICAL gate
-   └─ CycloneDX SBOM
-          │
-          ▼
-Publish                    main only
-   ├─ Skopeo pushes scanned OCI layout
-   ├─ registry digest == scanned digest
-   ├─ Cosign signs repository@digest
-   ├─ Helm chart → OCI registry
-   └─ {version,digest} → state/dev.yaml
+┌──────────────────────────────────────────┐
+│                 CHECKOUT                 │▒
+│chart · state · source revision           │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│                 VALIDATE                 │▒
+│Dockerfile lint · PR version gate         │▒
+│Helm render · server-side dry-run         │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│             JUNIT TEST SUITE             │▒
+│@WebMvcTest(HelloController)              │▒
+│GET /api/foos → 200                       │▒
+│missing val → 400                         │▒
+│GET /api/release → release marker         │▒
+│@SpringBootTest · contextLoads()          │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│              MAVEN PACKAGE               │▒
+│mvnw package → application.jar            │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│              JAVA 21 IMAGE               │▒
+│tested JAR copied into runtime image      │▒
+│rootless BuildKit → OCI layout            │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│               SCAN + SBOM                │▒
+│Trivy CRITICAL gate                       │▒
+│CycloneDX SBOM archived                   │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│           MAIN ONLY · PUBLISH            │▒
+│push scanned OCI layout                   │▒
+│registry digest == scanned digest         │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│              SIGN + RECORD               │▒
+│Cosign repository@digest                  │▒
+│chart → OCI · state/dev.yaml              │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 | Stage | What matters |
@@ -181,12 +261,19 @@ Publish                    main only
 ### Failure behavior
 
 ```text
-invalid Dockerfile/version/chart ──► stop
-unit / slice / context test fail ──► image build fails
-CRITICAL vulnerability            ──► stop before publish
-version reused by other source   ──► reject
-registry digest changed          ──► reject
-state push race                  ──► refetch main + retry
+┌──────────────────────────┐    ┌──────────────────────────┐    ┌──────────────────────────┐
+│     VALIDATION FAIL      │▒    │   TEST / PACKAGE FAIL    │▒    │       CRITICAL CVE       │▒
+│stop before build         │▒    │Build stage fails         │▒    │stop before publish       │▒
+│no publish                │▒    │no image release          │▒    │SBOM retained             │▒
+└──────────────────────────┘▒    └──────────────────────────┘▒    └──────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒     ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒     ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+
+┌──────────────────────────┐    ┌──────────────────────────┐    ┌──────────────────────────┐
+│     VERSION CONFLICT     │▒    │     DIGEST MISMATCH      │▒    │     STATE PUSH RACE      │▒
+│reject source reuse       │▒    │reject publication        │▒    │refetch main              │▒
+│raise version             │▒    │fail closed               │▒    │retry                     │▒
+└──────────────────────────┘▒    └──────────────────────────┘▒    └──────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒     ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒     ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 A later `main` run retries an unrecorded release; a transient publish/state failure does not require another source change.
@@ -198,17 +285,13 @@ A later `main` run retries an unrecorded release; a transient publish/state fail
 ### Runner topology
 
 ```text
-                         Jenkins controller
-                           0 executors
-                                │
-                ┌───────────────┼────────────────┐
-                ▼               ▼                ▼
-        lab-ci-runner   lab-ci-light   lab-cd-runner-dev
-        heavy CI          verification     deployment
-        node-3            lightweight      jenkins-deploy-dev
-            │                                  │
-            ├─ BuildKit cache                  └─ environment-scoped RBAC
-            └─ Trivy cache
+┌──────────────────────────┐    ┌──────────────────────────┐    ┌──────────────────────────┐
+│         HEAVY CI         │▒    │         LIGHT CI         │▒    │            CD            │▒
+│lab-ci-runner           │▒    │lab-ci-light            │▒    │lab-cd-runner-dev       │▒
+│node-3                    │▒    │verification              │▒    │jenkins-deploy-dev        │▒
+│BuildKit + Trivy caches   │▒    │no image build            │▒    │apps-dev only             │▒
+└──────────────────────────┘▒    └──────────────────────────┘▒    └──────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒     ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒     ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 One pod of each class is kept warm. Global Kubernetes-agent capacity is capped at three.
@@ -230,25 +313,15 @@ Heavy CI is pinned to the node that owns its caches. BuildKit remains rootless.
 ### Measured result
 
 ```text
-1.2.14
-
-CI #27
-├─ Checkout       3.6s
-├─ Validate       3.8s
-├─ Build           38s   ← Maven tests/package + image build
-├─ Scan           3.7s
-└─ Publish          30s
-                  ─────
-                  1m26s
-
-CD #24
-├─ Verify           10s
-└─ Deploy         1m05s
-   └─ deploy.sh      53s
-                  ─────
-                  1m16s
-
-CI + CD execution  2m42s
+┌────────────────────────┐    ┌────────────────────────┐    ┌────────────────────────┐
+│     CI #27 · 1m26s     │▒    │     CD #24 · 1m16s     │▒    │     TOTAL · 2m42s      │▒
+│Checkout  3.6s          │▒    │Verify     10s          │▒    │CI + CD execution       │▒
+│Validate  3.8s          │▒    │Deploy   1m05s          │▒    │                        │▒
+│Build     38s           │▒    │deploy.sh  53s          │▒    │warm CI wait ≈ 5s       │▒
+│Scan      3.7s          │▒    │                        │▒    │                        │▒
+│Publish    30s          │▒    │                        │▒    │                        │▒
+└────────────────────────┘▒    └────────────────────────┘▒    └────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒     ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒     ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 The warm heavy runner reduced executor acquisition from roughly **51s** in an earlier run to about **5s** in CI #27.
@@ -262,28 +335,53 @@ The warm heavy runner reduced executor acquisition from roughly **51s** in an ea
 The chart version is the human release version. The digest is the runtime identity.
 
 ```text
-Git source
-253d14cd907482...
-      │
-      ▼
-Chart.yaml
-1.2.14
-      │
-      ├─────────────► image tag :1.2.14
-      ├─────────────► chart version 1.2.14
-      └─────────────► state version 1.2.14
-                              │
-                              ▼
-                  sha256:2758e8fba94b...
-                              │
-                              ▼
-                  state commit 75769b4
-                              │
-                              ▼
-                       dev workload
-                              │
-                              ▼
-                    dev-2026.09.21.5
+┌──────────────────────────────────────────┐
+│              SOURCE COMMIT               │▒
+│253d14cd907482...                         │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│           APPLICATION VERSION            │▒
+│1.2.14                                    │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│             PUBLISHED IMAGE              │▒
+│sample-java-app:1.2.14                    │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│             IMMUTABLE DIGEST             │▒
+│sha256:2758e8fba94b...                    │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│               STATE COMMIT               │▒
+│75769b4 · state/dev.yaml                  │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│           RUNNING DEV WORKLOAD           │▒
+│repository@sha256:2758e8...               │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│               RELEASE TAG                │▒
+│dev-2026.09.21.5                          │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 The 1.2.14 state is:
@@ -307,9 +405,13 @@ A published version may be reused only when its OCI revision label matches the s
 A successful environment deployment is tagged:
 
 ```text
-dev-2026.09.21.5
-stage-YYYY.MM.DD.N
-prod-YYYY.MM.DD.N
+┌──────────────────────────────────────────┐
+│         ENVIRONMENT RELEASE TAG          │▒
+│dev-2026.09.21.5                          │▒
+│stage-YYYY.MM.DD.N                        │▒
+│prod-YYYY.MM.DD.N                         │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 The tag identifies a successfully applied **environment state**, not another image build.
@@ -317,29 +419,60 @@ The tag identifies a successfully applied **environment state**, not another ima
 ### Promotion
 
 ```text
-state/dev.yaml
-     │
-     │ exact digest
-     ▼
-successful dev
-     │
-     └─► promotion PR
-              │
-              ▼
-       state/stage.yaml
-              │
-         exact digest
-              ▼
-            stage
-              │
-              └─► promotion PR
-                       │
-                       ▼
-                state/prod.yaml
-                       │
-                  exact digest
-                       ▼
-                     prod
+┌──────────────────────────────────────────┐
+│                DEV STATE                 │▒
+│state/dev.yaml · digest X                 │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│          DEV DEPLOYED + TESTED           │▒
+│release tag created                       │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│               PROMOTION PR               │▒
+│copy digest X only                        │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│               STAGE STATE                │▒
+│state/stage.yaml · digest X               │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│         STAGE DEPLOYED + TESTED          │▒
+│same artifact · no rebuild                │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│               PROMOTION PR               │▒
+│copy digest X only                        │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│                PROD STATE                │▒
+│state/prod.yaml · digest X                │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│                   PROD                   │▒
+│deploy exact digest X                     │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 CD rejects a stage/prod release unless Git history proves that the exact digest previously existed in the preceding environment.
@@ -351,25 +484,41 @@ CD rejects a stage/prod release unless Git history proves that the exact digest 
 Configured prod policy:
 
 ```text
-candidate digest
-      │
-      ▼
-1 canary replica
-10% ingress traffic
-      │
-      ▼
-Helm test
-      │
-      ▼
-5 min ingress 5xx observation
-      │
- ┌────┴─────┐
- ▼          ▼
-≤1%        >1%
- │           │
- ▼           └─► remove canary
-promote          stable untouched
-stable
+┌──────────────────────────────────────────┐
+│             CANDIDATE DIGEST             │▒
+│prod desired state                        │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│              CANARY RELEASE              │▒
+│1 replica · 10% ingress traffic           │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│                HELM TEST                 │▒
+│candidate must pass smoke test            │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│            OBSERVE 5 MINUTES             │▒
+│Prometheus · ingress 5xx rate             │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│                 DECISION                 │▒
+│≤ 1% → promote stable                     │▒
+│> 1% → remove canary                      │▒
+│stable release remains untouched          │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 The current lab cluster runs `dev`; the canary path is implemented but is not part of the 1.2.14 timing measurement.
@@ -377,19 +526,20 @@ The current lab cluster runs `dev`; the canary path is implemented but is not pa
 ### Rollback
 
 ```text
-helm upgrade --wait
-       │
-       ├─ readiness failure ─► automatic Helm rollback
-       │
-       ▼
-    helm test
-       │
-   ┌───┴────┐
-   ▼        ▼
- PASS      FAIL
-   │        │
- accept     ├─ previous revision → helm rollback
-            └─ first install     → uninstall
+┌──────────────────────────────────────────┐
+│           HELM UPGRADE --WAIT            │▒
+│readiness failure → automatic rollback    │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│                HELM TEST                 │▒
+│PASS → accept release                     │▒
+│FAIL → rollback previous revision         │▒
+│first install failure → uninstall         │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 If chart version and digest already match the desired state, deployment is a no-op.
@@ -399,39 +549,78 @@ If chart version and digest already match the desired state, deployment is a no-
 ## 6. Deployment Safety and Trust Boundaries
 
 ```text
-                      Kubernetes
-                          │
-          ┌───────────────┴────────────────┐
-          │                                │
-          ▼                                ▼
-     jenkins-ci                   jenkins-deploy-dev
-     CI identity                   CD identity
-          │                                │
- server-side dry-run                  apps-dev only
-          │                                │
- real write                           Secrets read
-   DENIED                               DENIED
-          │                                │
-          └──── state/dev.yaml ───────────►│
-                                           ▼
-                                     Helm deployment
+┌──────────────────────────────────────────┐
+│         CI IDENTITY · jenkins-ci         │▒
+│server-side dry-run allowed               │▒
+│real CREATE/UPDATE/DELETE denied          │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│            GIT STATE HANDOFF             │▒
+│state/dev.yaml · version + digest         │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│     CD IDENTITY · jenkins-deploy-dev     │▒
+│apps-dev only · no Secret reads           │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│             HELM DEPLOYMENT              │▒
+│environment-scoped ServiceAccount         │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 ### Before any deployment
 
 ```text
-state schema
-    │
-promotion ancestry
-    │
-Cosign signature
-    │
-Helm render
-    │
-server-side dry-run
-    │
-    ▼
-deployment allowed
+┌──────────────────────────────────────────┐
+│               STATE SCHEMA               │▒
+│version + sha256 contract                 │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│            PROMOTION ANCESTRY            │▒
+│digest existed in previous environment    │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│             COSIGN SIGNATURE             │▒
+│verify repository@digest                  │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│               HELM RENDER                │▒
+│recorded version + digest                 │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│           SERVER-SIDE DRY-RUN            │▒
+│API + admission chain                     │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+                      │
+                      ▼
+┌──────────────────────────────────────────┐
+│            DEPLOYMENT ALLOWED            │▒
+│only after every gate passes              │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 CI has RBAC needed for server-side dry-run, but the `jenkins-ci-dry-run-only` admission policy rejects its real CREATE/UPDATE/DELETE requests.
@@ -441,13 +630,14 @@ CD uses `jenkins-deploy-<environment>`. Its RoleBinding exists only in that envi
 Application rollout safety is enforced by the chart:
 
 ```text
-startup/readiness/liveness probes
-maxUnavailable: 0
-surge capacity
-topology spreading
-PDB where replica count permits it
-Helm --wait
-Helm HTTP smoke test
+┌──────────────────────────────────────────┐
+│              ROLLOUT SAFETY              │▒
+│startup · readiness · liveness probes     │▒
+│maxUnavailable: 0 · surge capacity        │▒
+│topology spreading · PDB where valid      │▒
+│Helm --wait · HTTP smoke test             │▒
+└──────────────────────────────────────────┘▒
+ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
 ```
 
 ---
