@@ -402,7 +402,7 @@ install_jenkins() {
 remove_agent_pods() {
   kubectl -n "${JENKINS_NAMESPACE}" delete pods \
     --selector component=jenkins-agent \
-    --ignore-not-found --wait=false >/dev/null
+    --ignore-not-found --wait=true >/dev/null
 }
 
 cluster_reconcile() {
@@ -412,8 +412,8 @@ cluster_reconcile() {
   remove_obsolete_delivery_access
   verify_vault_secrets
   verify_agent_cluster_scope
-  install_jenkins
   remove_agent_pods
+  install_jenkins
 }
 
 main() {
