@@ -1,386 +1,362 @@
 # Lab Kubernetes Platform
 
-A production-style Kubernetes lab built as one connected system: infrastructure, edge networking, secrets, CI/CD, observability, admission control, and immutable application delivery.
+A production-style Kubernetes lab where the host, VMs, edge, delivery,
+observability, and policy layers are all managed from this repository.
 
-## System map
+## 1. Physical architecture
 
 ~~~text
-                                      DELIVERY PLANE
-┌───────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                                                                               │
-│   ┌──────────────┐      source / PR       ┌──────────────────────┐                            │
-│   │    GitHub    │ ─────────────────────► │       Jenkins        │                            │
-│   └──────┬───────┘                        │ validate · build      │                            │
-│          │                                │ test · scan · sign   │                            │
-│          │                                └──────────┬───────────┘                            │
-│          │                                           │                                        │
-│          │                         publish exact OCI │                                        │
-│          │                                           ▼                                        │
-│          │                                ┌──────────────────────┐                            │
-│          │                                │ Docker Hub / OCI     │                            │
-│          │                                │ immutable digest     │                            │
-│          │                                └──────────┬───────────┘                            │
-│          │                                           │                                        │
-│          │                                           │ digest                                 │
-│          │                                           ▼                                        │
-│          │                                ┌──────────────────────┐                            │
-│          └───────────────────────────────►│  state/<env>.yaml   │                            │
-│                    Git desired state      │ version + image SHA  │                            │
-│                                           └──────────┬───────────┘                            │
-│                                                      │ deploy exact release                   │
-└──────────────────────────────────────────────────────┼────────────────────────────────────────┘
-                                                       ▼
-                                      KUBERNETES RUNTIME PLANE
-┌───────────────────────────────────────────────────────────────────────────────────────────────┐
-│   ┌────────────────────┐       admission       ┌──────────────────────────────────────────┐   │
-│   │ Jenkins deploy job │ ────────────────────► │ Kubernetes API                           │   │
-│   └────────────────────┘                       │ + resource-request validating webhook    │   │
-│                                                └──────────────────┬───────────────────────┘   │
-│                                                                   ▼                           │
-│                                                ┌──────────────────────────────────────────┐   │
-│                                                │ application release                      │   │
-│                                                │ exact image digest + Helm chart          │   │
-│                                                └──────────────────┬───────────────────────┘   │
-│                                      ┌────────────────────────────┼───────────────────────┐   │
-│                                      ▼                            ▼                       ▼   │
-│                           ┌──────────────────┐          ┌──────────────────┐     ┌────────────┐│
-│                           │ Service / Pods   │          │ ServiceMonitor   │     │ app log    ││
-│                           │ health probes    │          │ Prometheus       │     │ file       ││
-│                           └─────────┬────────┘          └─────────┬────────┘     └─────┬──────┘│
-│                                     │                             ▼                    ▼       │
-│                                     │                    ┌──────────────────┐   ┌────────────┐│
-│                                     │                    │ Grafana          │   │ Fluent Bit ││
-│                                     │                    │ dashboards       │   │ sidecar    ││
-│                                     │                    └──────────────────┘   └─────┬──────┘│
-│                                     │                                                ▼       │
-│                                     │                                         ┌────────────┐│
-│                                     │                                         │Elasticsearch││
-│                                     │                                         └────────────┘│
-└─────────────────────────────────────┼─────────────────────────────────────────────────────────┘
-                                      │ application traffic
-                                      ▼
-                                           EDGE PLANE
-┌───────────────────────────────────────────────────────────────────────────────────────────────┐
-│   client                                                                                      │
-│     │ lookup *.lab.test                                                                │
-│     ▼                                                                                         │
-│   ┌──────────────┐       A record       ┌──────────────────┐                 ┌──────────────┐ │
-│   │    BIND9     │ ◄─────────────────── │   ExternalDNS    │                 │   MetalLB    │ │
-│   │ authoritative│                      │ RFC2136 + TSIG    │                 │  .200-.220   │ │
-│   └──────┬───────┘                      └─────────┬────────┘                 └──────┬───────┘ │
-│          │                                        │ watches                         │         │
-│          │ DNS answer                             │ Service/Ingress                 ▼         │
-│          ▼                                        │                       ┌─────────────────┐ │
-│   client ────────────────────────────────────────────────────────────────► │ ingress-nginx   │ │
-│                                                                           │ HTTPS routing   │ │
-│                                                                           └────────┬────────┘ │
-└────────────────────────────────────────────────────────────────────────────────────┼──────────┘
-                                                                                     ▼
-                                                                                application
+                    ┌──────────────────────────────┐
+                    │        OPERATOR HOST         │
+                    │ Ubuntu x86_64                │
+                    │ BIND9 · Vault · local CA     │
+                    │ Vagrant · Ansible            │
+                    └──────────────┬───────────────┘
+                                   │ create + reconcile
+                                   ▼
+                 ┌─────────────────────────────────┐
+                 │      VirtualBox VM cluster      │
+                 │         10.50.0.0/24            │
+                 └───────────────┬─────────────────┘
+                                 │
+                                 ▼
+                       ┌───────────────────┐
+                       │ node-1            │
+                       │ CONTROL PLANE     │
+                       │ 10.50.0.10        │
+                       │ 2 CPU · 2 GiB     │
+                       │ API · etcd        │
+                       │ scheduler         │
+                       └─────────┬─────────┘
+                                 │
+                    ┌────────────┴────────────┐
+                    │                         │
+                    ▼                         ▼
+          ┌────────────────────┐    ┌────────────────────┐
+          │ node-2             │    │ node-3             │
+          │ WORKER             │    │ WORKER             │
+          │ 10.50.0.11         │    │ 10.50.0.12         │
+          │ edge .11           │    │ edge .12           │
+          │ 2 CPU · 2 GiB      │    │ 2 CPU · 4 GiB      │
+          │ app · Prom · ES    │    │ app · Jenkins      │
+          └─────────┬──────────┘    └─────────┬──────────┘
+                    │                         │
+                    └────────────┬────────────┘
+                                 ▼
+                      192.168.56.0/24 edge
+                                 │
+                                 ▼
+                     MetalLB 192.168.56.200
 ~~~
 
-The system is deliberately split into three visible paths: **delivery**, **runtime**, and **edge traffic**. Secrets and trust form a fourth path underneath them.
-
-## Secrets and trust
+The control plane stays on the private cluster network. Only the workers
+join the host-accessible edge network.
 
 ~~~text
-┌─────────────────────────────────────────────────────────────────────────────────────────────┐
-│                               OPERATOR HOST                                                  │
-│                                                                                             │
-│   ┌──────────────┐       policies / values       ┌──────────────────────┐                   │
-│   │    Vault     │ ─────────────────────────────► │ Vault Secrets       │                   │
-│   │ Raft + TLS   │                                │ Operator             │                   │
-│   └──────┬───────┘                                └──────────┬───────────┘                   │
-│          │                                                   │                               │
-│          │ TSIG                                              │ Kubernetes Secrets            │
-│          ▼                                                   ▼                               │
-│   ┌──────────────┐                                 ┌──────────────────────┐                   │
-│   │ Vault Agent  │                                 │ Jenkins / ExternalDNS│                   │
-│   └──────┬───────┘                                 │ registry pull creds  │                   │
-│          │                                         │ signing material     │                   │
-│          ▼                                         └──────────────────────┘                   │
-│   ┌──────────────┐                                                                           │
-│   │ BIND9 TSIG   │                                                                           │
-│   └──────────────┘                                                                           │
-└─────────────────────────────────────────────────────────────────────────────────────────────┘
-
-Secrets do not live in Git.
-Jenkins does not carry a deployment kubeconfig.
-Environment deployment identities are namespace-scoped.
+cluster network   10.50.0.0/24
+Pod CIDR          10.60.0.0/16
+Service CIDR      10.70.0.0/16
+edge network      192.168.56.0/24
+MetalLB pool      192.168.56.200 - 192.168.56.220
 ~~~
 
-## Physical layout
+**Source:** [Vagrantfile](Vagrantfile) ·
+[cluster automation](infra/ansible/README.md)
+
+## 2. External request path
 
 ~~~text
-                               10.50.0.0/24
-                         Kubernetes private network
+                      DNS CONTROL PATH
 
-        ┌─────────────────────────┐
-        │ node-1                  │
-        │ control plane           │
-        │ 10.50.0.10              │
-        │                         │
-        │ kube-apiserver          │
-        │ etcd                    │
-        │ controller-manager      │
-        │ scheduler               │
-        └────────────┬────────────┘
-                     │
-          ┌──────────┴────────────────────────────┐
-          │                                       │
-          ▼                                       ▼
-┌─────────────────────────┐             ┌─────────────────────────┐
-│ node-2                  │             │ node-3                  │
-│ worker                  │             │ worker                  │
-│ 10.50.0.11              │             │ 10.50.0.12              │
-│ edge: 192.168.56.11     │             │ edge: 192.168.56.12     │
-│                         │             │                         │
-│ application workloads   │             │ Jenkins controller      │
-│ Prometheus              │             │ CI/CD execution         │
-│ Elasticsearch           │             │ application workloads   │
-└────────────┬────────────┘             └────────────┬────────────┘
-             │                                       │
-             └──────────────────┬────────────────────┘
-                                ▼
-                     192.168.56.0/24 edge network
-                                │
-                                ▼
-                     MetalLB LoadBalancer VIP
-                         192.168.56.200
+                 ┌──────────────────┐
+                 │ Service/Ingress  │
+                 └────────┬─────────┘
+                          │ watched by
+                          ▼
+                 ┌──────────────────┐
+                 │ ExternalDNS      │
+                 │ RFC2136 + TSIG   │
+                 └────────┬─────────┘
+                          │ signed update
+                          ▼
+                 ┌──────────────────┐
+                 │ BIND9 on host    │
+                 │ lab.test  │
+                 └──────────────────┘
 
-Pod CIDR:      10.60.0.0/16
-Service CIDR:  10.70.0.0/16
+
+                     USER TRAFFIC PATH
+
+client
+  │ DNS lookup
+  ▼
+┌──────────────────┐
+│ BIND9            │
+│ authoritative    │
+└────────┬─────────┘
+         │ returns 192.168.56.200
+         ▼
+┌──────────────────┐
+│ MetalLB VIP      │
+│ 192.168.56.200   │
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│ ingress-nginx    │
+│ TLS + host route │
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│ Service          │
+│ ClusterIP        │
+└────────┬─────────┘
+         ▼
+┌──────────────────┐
+│ Java Pod         │
+│ /api/foos        │
+└──────────────────┘
 ~~~
 
-The control plane does not participate in edge traffic. Public application traffic enters through worker edge interfaces and the MetalLB ingress VIP.
+The DNS control path and the user traffic path are separate on purpose:
+ExternalDNS changes records; client traffic never passes through ExternalDNS.
 
-## Request path
+**Source:** [edge orchestration](infra/edge/README.md) ·
+[platform edge](platform/edge/README.md)
+
+## 3. Application request + log path
 
 ~~~text
-GET https://app.lab.test/api/foos?val=hello
-                         │
-                         ▼
-                ┌─────────────────┐
-                │ BIND9           │
-                │ authoritative   │
-                └────────┬────────┘
-                         │ app.lab.test
-                         │        ↓
-                         │  192.168.56.200
-                         ▼
-                ┌─────────────────┐
-                │ MetalLB         │
-                │ ingress VIP     │
-                └────────┬────────┘
-                         ▼
-                ┌─────────────────┐
-                │ ingress-nginx   │
-                │ TLS + host path │
-                └────────┬────────┘
-                         ▼
-                ┌─────────────────┐
-                │ Service         │
-                │ ClusterIP       │
-                └────────┬────────┘
-                         ▼
-                ┌─────────────────┐
-                │ Java Pod        │
-                │ /api/foos       │
-                └───────┬─────────┘
-                        │
-          ┌─────────────┴─────────────────────────────┐
-          │                                           │
-          ▼                                           ▼
-┌─────────────────────┐                    ┌─────────────────────┐
-│ HTTP response       │                    │ /var/log/app/...    │
-│ QueryStringValue... │                    │ async rolling log   │
-└─────────────────────┘                    └──────────┬──────────┘
-                                                    ▼
-                                           ┌─────────────────────┐
-                                           │ Fluent Bit sidecar  │
-                                           └──────────┬──────────┘
-                                                      ▼
-                                           ┌─────────────────────┐
-                                           │ Elasticsearch       │
-                                           │ app-logs            │
-                                           └─────────────────────┘
+GET /api/foos?val=hello
+          │
+          ▼
+┌──────────────────────┐
+│ Spring Boot app      │
+│ returns query value  │
+└──────────┬───────────┘
+           │
+           ├──────────────► HTTP response
+           │
+           ▼
+┌──────────────────────┐
+│ async rolling file   │
+│ /var/log/app/app.log │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ Fluent Bit sidecar   │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ Elasticsearch        │
+│ app-logs             │
+└──────────────────────┘
 ~~~
 
-## Release path
+The explicit application file log is separate from normal container logs,
+which are collected cluster-wide.
+
+**Source:** [application](app/README.md) ·
+[observability](platform/observability/README.md)
+
+## 4. Immutable release path
 
 ~~~text
-                           PULL REQUEST
-                                │
-                                ▼
-                  ┌───────────────────────────┐
-                  │ Validate                  │
-                  │ Dockerfile / chart        │
-                  │ server dry-run            │
-                  └────────────┬──────────────┘
-                               ▼
-                  ┌───────────────────────────┐
-                  │ BuildKit                  │
-                  │ build image once          │
-                  │ unit tests in build       │
-                  └────────────┬──────────────┘
-                               ▼
-                  ┌───────────────────────────┐
-                  │ Trivy                     │
-                  │ CRITICAL gate + SBOM      │
-                  └────────────┬──────────────┘
-                               │
-                     merge to main
-                               │
-                               ▼
-                  ┌───────────────────────────┐
-                  │ publish SAME OCI bytes    │
-                  │ verify registry digest    │
-                  └────────────┬──────────────┘
-                               ▼
-                  ┌───────────────────────────┐
-                  │ Cosign                    │
-                  │ sign exact digest         │
-                  └────────────┬──────────────┘
-                               ▼
-                  ┌───────────────────────────┐
-                  │ state/dev.yaml            │
-                  │ version + image digest    │
-                  └────────────┬──────────────┘
-                               ▼
-                  ┌───────────────────────────┐
-                  │ deploy job                │
-                  │ signature + promotion     │
-                  │ render + server dry-run   │
-                  └────────────┬──────────────┘
-                               ▼
-                  ┌───────────────────────────┐
-                  │ helm upgrade --wait       │
-                  │ exact image digest        │
-                  └────────────┬──────────────┘
-                               ▼
-                  ┌───────────────────────────┐
-                  │ helm test / smoke         │
-                  └────────────┬──────────────┘
-                               │ healthy
-                               ▼
-                  ┌───────────────────────────┐
-                  │ environment tag           │
-                  │ dev-YYYY.MM.DD.N          │
-                  └────────────┬──────────────┘
-                               ▼
-                  ┌───────────────────────────┐
-                  │ promotion PR              │
-                  │ dev → stage → prod        │
-                  │ SAME version + digest     │
-                  └───────────────────────────┘
+GitHub PR
+   │
+   ▼
+┌────────────────────────┐
+│ Jenkins validation     │
+│ lint · chart · dry-run │
+└───────────┬────────────┘
+            ▼
+┌────────────────────────┐
+│ BuildKit               │
+│ build once + unit test │
+└───────────┬────────────┘
+            ▼
+┌────────────────────────┐
+│ Trivy                  │
+│ CRITICAL gate + SBOM   │
+└───────────┬────────────┘
+            │ merge to main
+            ▼
+┌────────────────────────┐
+│ publish SAME OCI bytes │
+│ verify registry digest │
+└───────────┬────────────┘
+            ▼
+┌────────────────────────┐
+│ Cosign exact digest    │
+└───────────┬────────────┘
+            ▼
+┌────────────────────────┐
+│ state/dev.yaml         │
+│ version + image digest │
+└───────────┬────────────┘
+            ▼
+┌────────────────────────┐
+│ deploy verification    │
+│ signature · promotion  │
+│ render · server dryrun │
+└───────────┬────────────┘
+            ▼
+┌────────────────────────┐
+│ Helm upgrade --wait    │
+│ exact image digest     │
+└───────────┬────────────┘
+            ▼
+┌────────────────────────┐
+│ Helm test / smoke      │
+└───────────┬────────────┘
+            │ healthy
+            ▼
+┌────────────────────────┐
+│ environment tag        │
+│ dev-YYYY.MM.DD.N       │
+└───────────┬────────────┘
+            ▼
+┌────────────────────────┐
+│ promotion PR           │
+│ dev → stage → prod     │
+│ same version + digest  │
+└────────────────────────┘
 ~~~
 
-The repository currently configures this lab cluster as **dev**. Stage and prod state describe the same promotion model for equivalent environment clusters.
+This lab cluster runs the environment selected by
+[environments.yaml](environments.yaml), currently **dev**. Stage and prod
+state model promotion to equivalent environment clusters.
 
-## Observability path
+**Source:** [DELIVERY.md](DELIVERY.md) · [delivery/](delivery/README.md)
 
-~~~text
-                              METRICS
-┌─────────────────┐
-│ application     │── /actuator/prometheus ──┐
-└─────────────────┘                           │
-                                              ▼
-┌─────────────────┐                   ┌─────────────────┐
-│ ingress-nginx   │── metrics ───────►│ Prometheus      │
-└─────────────────┘                   └────────┬────────┘
-                                              │
-                           ┌───────────────────┼──────────────────┐
-                           ▼                   ▼                  ▼
-                  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-                  │ Grafana         │ │ Alert rules     │ │ canary health   │
-                  │ dashboards      │ │ pod restart     │ │ 5xx signal      │
-                  └─────────────────┘ └────────┬────────┘ └─────────────────┘
-                                              ▼
-                                     ┌─────────────────┐
-                                     │ Alertmanager    │
-                                     └─────────────────┘
-
-
-                                LOGS
-┌─────────────────┐
-│ all containers  │── /var/log/containers ──► Fluent Bit DaemonSet ──► kubernetes-* index
-└─────────────────┘
-
-┌─────────────────┐
-│ application     │── /var/log/app/app.log ──► Fluent Bit sidecar ──► app-logs index
-│ async file log  │
-└─────────────────┘
-~~~
-
-## Start here
+## 5. Secrets and trust path
 
 ~~~text
-                         ┌──────────────────┐
-                         │    README.md     │
-                         │ system landing   │
-                         └────────┬─────────┘
+                         ┌─────────────────┐
+                         │ Vault on host   │
+                         │ Raft + TLS      │
+                         └────────┬────────┘
                                   │
-                ┌─────────────────┼──────────────────┐
-                │                 │                  │
-                ▼                 ▼                  ▼
-       ┌────────────────┐ ┌────────────────┐ ┌────────────────┐
-       │ RUNBOOK.md     │ │ DELIVERY.md    │ │ component docs │
-       │ operate        │ │ release flow   │ │ implementation │
-       └────────────────┘ └────────────────┘ └────────────────┘
+                     ┌────────────┴────────────┐
+                     │                         │
+                     ▼                         ▼
+           ┌──────────────────┐      ┌──────────────────┐
+           │ Vault Agent      │      │ Vault Secrets    │
+           │ host-side render │      │ Operator         │
+           └────────┬─────────┘      └────────┬─────────┘
+                    │                         │
+                    ▼                         ▼
+           ┌──────────────────┐      ┌──────────────────┐
+           │ BIND9 TSIG key   │      │ K8s Secrets     │
+           └──────────────────┘      └────────┬─────────┘
+                                             │
+                               ┌─────────────┼─────────────┐
+                               ▼             ▼             ▼
+                         ExternalDNS      Jenkins      registry
 ~~~
 
-For a fresh environment:
+Secrets are delivered at runtime rather than committed to Git. Jenkins
+deployments use Kubernetes service accounts instead of a stored kubeconfig.
+
+**Source:** [edge trust](infra/edge/README.md) ·
+[Jenkins](platform/jenkins/README.md)
+
+## 6. Observability path
 
 ~~~text
-cluster-up
-    │
-    ▼
-cluster-validate
-    │
-    ▼
-edge-up ─────► edge-smoke
-    │
-    ▼
-jenkins-up
-    │
-    ▼
-environment-up
-    │
-    ▼
-observability-up ─────► observability-smoke
-    │
-    ▼
-policies-up
-    │
-    ▼
-e2e-validate
+                         METRICS
+
+app / nodes / ingress
+         │
+         ▼
+┌──────────────────┐
+│ Prometheus       │
+└────────┬─────────┘
+         │
+    ┌────┴──────────────┐
+    │                   │
+    ▼                   ▼
+┌──────────────┐   ┌──────────────┐
+│ Grafana      │   │ Alert rules  │
+│ dashboards   │   │ pod restart  │
+└──────────────┘   └──────┬───────┘
+                           ▼
+                    ┌──────────────┐
+                    │ Alertmanager │
+                    └──────────────┘
+
+
+                           LOGS
+
+/var/log/containers/*.log
+          │
+          ▼
+┌─────────────────────┐
+│ Fluent Bit DaemonSet│
+└──────────┬──────────┘
+           │
+           ├───────────────────────┐
+           │                       │
+app.log    │                       ▼
+   │       │               ┌──────────────────┐
+   ▼       │               │ Elasticsearch    │
+┌──────────────┐           │ kubernetes-*     │
+│ sidecar FB   │──────────►│ app-logs         │
+└──────────────┘           └────────┬─────────┘
+                                   ▼
+                            ┌──────────────┐
+                            │ Grafana      │
+                            │ log panels   │
+                            └──────────────┘
 ~~~
 
-Use **[RUNBOOK.md](RUNBOOK.md)** for exact commands, credentials, validation, recovery, and teardown.
+Prometheus and Elasticsearch use local-path persistence. Elasticsearch
+stays cluster-internal; Grafana and Prometheus are exposed through ingress.
+
+**Source:** [observability](platform/observability/README.md)
+
+## 7. Operator path
+
+~~~text
+make cluster-up
+      │
+      ▼
+make cluster-validate
+      │
+      ▼
+make edge-up ─────────────► make edge-smoke
+      │
+      ▼
+make jenkins-up
+      │
+      ▼
+make environment-up
+      │
+      ▼
+make observability-up ────► make observability-smoke
+      │
+      ▼
+make policies-up
+      │
+      ▼
+make e2e-validate
+~~~
+
+Use **[RUNBOOK.md](RUNBOOK.md)** for credentials, exact commands,
+validation, recovery, rollback, stop, and teardown.
 
 ## Repository map
 
-| Area | Owns |
-|---|---|
-| [infra/](infra/README.md) | VMs, kubeadm cluster, Ansible, host DNS, Vault and trust |
-| [platform/](platform/README.md) | Kubernetes edge, Jenkins, environment setup and observability |
-| [delivery/](delivery/README.md) | Jenkins pipelines, shared delivery library and release scripts |
-| [state/](state/) | desired version + image digest for each environment |
-| [app/](app/README.md) | Java application, container image and service values |
-| [charts/service/](charts/service/README.md) | reusable application runtime chart |
-| [policies/](policies/README.md) | validating admission controls |
-| [validation/](validation/README.md) | cluster, edge, platform and end-to-end proof |
-
-## Deep dives
-
-- **[RUNBOOK.md](RUNBOOK.md)** — build, operate, validate, recover.
-- **[DELIVERY.md](DELIVERY.md)** — CI, immutable release state, deployment and promotion.
-- **[Jenkins](platform/jenkins/README.md)** — controller, agents, credentials and jobs.
-- **[Edge](infra/edge/README.md)** — BIND9, Vault, local CA and edge bootstrap.
-- **[Observability](platform/observability/README.md)** — metrics, dashboards, alerting and logs.
-- **[Resource request policy](policies/resource-requests-webhook/README.md)** — admission webhook behavior.
-- **[CI agent image](delivery/jenkins/README.md)** — Jenkins execution image lifecycle.
+- [infra/](infra/README.md) — VMs, kubeadm, Ansible, host DNS, Vault.
+- [platform/](platform/README.md) — edge, Jenkins, environment, observability.
+- [delivery/](delivery/README.md) — Jenkins pipelines and release scripts.
+- [state/](state/) — desired version + image digest per environment.
+- [app/](app/README.md) — Java app, image, runtime values.
+- [charts/service/](charts/service/README.md) — reusable service chart.
+- [policies/](policies/README.md) — admission controls.
+- [validation/](validation/README.md) — platform and end-to-end proof.
 
 ## Host requirements
 
-The complete environment is intended to run from an **Ubuntu x86_64** operator host with VirtualBox, Vagrant, Ansible, Kubernetes/Helm tooling, GNU Make, and the standard CLI utilities used by the repository.
+The complete environment is intended to run from an **Ubuntu x86_64**
+operator host with VirtualBox, Vagrant, Ansible, Kubernetes/Helm tooling,
+GNU Make, and the standard CLI utilities used by the repository.
