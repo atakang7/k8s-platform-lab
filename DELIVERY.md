@@ -1,5 +1,15 @@
 # Delivery
 
+## Contents
+
+- [1. Delivery Model](#1-delivery-model)
+- [2. Java CI](#2-java-ci)
+- [3. Execution Model and Optimization](#3-execution-model-and-optimization)
+- [4. Artifact Identity and Traceability](#4-artifact-identity-and-traceability)
+- [5. Release, Promotion and Rollback](#5-release-promotion-and-rollback)
+- [6. Deployment Safety and Trust Boundaries](#6-deployment-safety-and-trust-boundaries)
+- [7. Evidence](#7-evidence)
+
 The delivery contract is simple:
 
 > **Build once. Scan once. Publish once. Deploy and promote by immutable digest.**
