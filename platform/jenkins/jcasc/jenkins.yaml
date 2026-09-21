@@ -383,6 +383,12 @@ jobs:
         }
       """)
 
+      // Prime the warm pool immediately on every Jenkins reconciliation.
+      // The cron triggers above keep it self-healing afterward.
+      queue('warm-ci-runner')
+      queue('warm-ci-light')
+      queue('warm-cd-runner-dev')
+
 unclassified:
   # The platform delivery library (delivery/pipeline). Services cannot choose
   # another version: the platform decides what runs in every pipeline.
