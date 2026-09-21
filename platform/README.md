@@ -1,67 +1,224 @@
 # Platform
 
-`platform/` owns the Kubernetes-resident shared services around the application.
+`platform/` owns the Kubernetes-resident shared services around the
+application.
 
-```text
-                         Kubernetes
+## 1. Platform map
 
-        ┌───────────────────┬───────────────────┐
-        │                   │                   │
-        ▼                   ▼                   ▼
-      Edge               Jenkins          Observability
- ingress / DNS         CI/CD control       metrics / logs
-        │                   │                   ▲
-        │                   ▼                   │
-        │              Environment              │
-        │          namespace + deploy ID        │
-        │                   │                   │
-        └──────────────► application ───────────┘
-```
+~~~text
+                    KUBERNETES
 
-Host-side Vault, BIND9 and CA configuration live under [`infra/`](../infra/README.md).
+             ┌──────────────────┐
+             │ application      │
+             └────────┬─────────┘
+                      │
+        ┌─────────────┼──────────────┐
+        │             │              │
+        ▼             ▼              ▼
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ edge         │ │ Jenkins      │ │ observability│
+│ ingress/DNS  │ │ CI/CD control│ │ metrics/logs │
+└──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+       │                │                 ▲
+       │                ▼                 │
+       │        ┌──────────────┐          │
+       │        │ environment  │          │
+       │        │ namespace    │          │
+       │        │ deploy ID    │          │
+       │        └──────┬───────┘          │
+       │               │                  │
+       └───────────────┴──────────────────┘
+~~~
 
-## Platform pieces
+Host-side Vault, BIND9, and the local CA live under
+**[infra/](../infra/README.md)**. This directory begins where those host
+services hand control into Kubernetes.
 
-| Area | Role | Main configuration |
-|---|---|---|
-| [`edge/`](edge/README.md) | exposes platform and application services through DNS + HTTPS | `platform/edge/` |
-| [`jenkins/`](jenkins/README.md) | runs CI/CD and provisions Kubernetes build/deploy agents | `platform/jenkins/values.yaml`, `platform/jenkins/jcasc/` |
-| `environment/` | prepares the application namespace, deploy identity and registry pull secret for this cluster | `platform/environment/namespace.yaml`, `environments.yaml` |
-| [`observability/`](observability/README.md) | collects metrics and logs and exposes Grafana/Prometheus | `platform/observability/` |
+## 2. Ownership boundaries
 
-The application itself is configured under [`app/`](../app/README.md). Delivery behavior is documented in [`DELIVERY.md`](../DELIVERY.md).
+~~~text
+HOST
+ │
+ ├── Vault
+ ├── BIND9
+ └── local CA
+ │
+ ▼
+platform/edge
+ │
+ ├── VSO
+ ├── ExternalDNS
+ ├── MetalLB
+ └── ingress-nginx
+ │
+ ▼
+application namespace
+ │
+ ├── runtime Secret
+ └── deploy identity
+ │
+ ▼
+application
+ │
+ └── metrics + logs
+     │
+     ▼
+platform/observability
+~~~
 
-## Environment boundary
+Each subsystem has a narrow responsibility. The platform layer does not
+own application source or release logic.
 
-Each cluster runs one environment selected by:
+## 3. Environment boundary
 
-```yaml
+Each cluster runs one environment selected in
+[environments.yaml](../environments.yaml).
+
+~~~text
+environments.yaml
+      │
+      ▼
 clusterEnvironment: dev
-```
+      │
+      ▼
+┌──────────────────────┐
+│ make environment-up  │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ apps-dev namespace   │
+├──────────────────────┤
+│ jenkins-deploy-dev   │
+├──────────────────────┤
+│ registry pull Secret │
+└──────────┬───────────┘
+           ▼
+state/dev.yaml
+      │
+      ▼
+application release
+~~~
 
-in `environments.yaml`.
+Stage and prod are represented in Git as later promotion targets. This
+lab cluster currently prepares and deploys only `dev`.
 
-`make environment-up` prepares only that environment:
+## 4. Edge path
 
-```text
-clusterEnvironment
-       │
-       ▼
-apps-<environment>
-       │
-       ├── jenkins-deploy-<environment>
-       └── runtime registry secret
-```
+~~~text
+Service / Ingress
+        │
+        ▼
+ExternalDNS
+        │
+        ▼
+host BIND9
+        │ DNS answer
+        ▼
+client
+        │
+        ▼
+MetalLB VIP
+        │
+        ▼
+ingress-nginx
+        │
+        ▼
+application Service
+~~~
 
-Jenkins then deploys application state from `state/<environment>.yaml`.
+**Deep dive:** [platform/edge/](edge/README.md)
 
-## Reconcile
+## 5. Jenkins path
 
-```bash
+~~~text
+GitHub
+  │
+  ▼
+Jenkins controller
+  │ schedules
+  ▼
+Kubernetes agents
+  │
+  ├── CI build / scan
+  ├── light validation
+  └── environment deploy
+~~~
+
+The controller owns orchestration only. Pipeline execution runs in
+dynamic Kubernetes agent Pods.
+
+**Deep dive:** [platform/jenkins/](jenkins/README.md)
+
+## 6. Observability path
+
+~~~text
+application / nodes / ingress
+            │
+            ▼
+       Prometheus
+         │    │
+         │    └────► Alertmanager
+         ▼
+       Grafana
+
+
+container logs
+     │
+     ▼
+ Fluent Bit
+     │
+     ▼
+Elasticsearch
+     │
+     ▼
+  Grafana
+~~~
+
+**Deep dive:** [platform/observability/](observability/README.md)
+
+## 7. Reconcile order
+
+~~~text
 make edge-up
+    │
+    ▼
 make jenkins-up
+    │
+    ▼
 make environment-up
+    │
+    ▼
 make observability-up
-```
+~~~
 
-Use the component README when changing that subsystem; this page is only the platform-level map.
+The order follows dependencies:
+
+~~~text
+network + trust
+      │
+      ▼
+CI/CD control plane
+      │
+      ▼
+environment identity
+      │
+      ▼
+application support services
+~~~
+
+For the full operator sequence, use
+**[RUNBOOK.md](../RUNBOOK.md)**.
+
+## 8. Main paths
+
+| Area | Responsibility |
+|---|---|
+| [`edge/`](edge/README.md) | DNS, ingress, VIP, runtime edge secrets |
+| [`jenkins/`](jenkins/README.md) | CI/CD controller and agents |
+| `environment/` | app namespace, deploy identity, registry Secret |
+| [`observability/`](observability/README.md) | metrics, alerts, logs, dashboards |
+
+Application runtime configuration lives in
+**[app/](../app/README.md)**.
+
+Release behavior lives in **[DELIVERY.md](../DELIVERY.md)**.
