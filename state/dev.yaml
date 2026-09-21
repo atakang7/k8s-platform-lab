@@ -1,8 +1,8 @@
 environment: dev
 services:
   sample-java-app:
-    version: 1.2.14
-    image: sha256:2758e8fba94b92423860dbb36245617c9163ad74fea23417308f17304dcd1824
+    version: 1.2.15
+    image: sha256:6eaefa5f75cb70c60b9a96fdffb12c6093a754412395134f8d229f1da60e9831
   resource-requests-webhook:
     version: 0.2.2
     image: sha256:cc0ca462eca3c5f1d4e345add693d7051bff4b57aa26d15cbfbf12a54f7b4258
