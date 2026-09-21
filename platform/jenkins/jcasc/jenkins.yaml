@@ -18,7 +18,7 @@ jenkins:
         webSocket: true
         # This edge cluster is memory-constrained: never allow Jenkins agent pods
         # to accumulate faster than the workers can safely host them.
-        containerCap: 2
+        containerCapStr: "2"
         templates:
           - name: ci-runner
             label: lab-ci-runner
