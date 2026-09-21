@@ -222,6 +222,8 @@ GitHub PR
 └────────────────────────┘
 ~~~
 
+![Jenkins pipelines with per-build Kubernetes agents](docs/images/jenkins-pipelines-agents.png)
+
 This lab cluster runs the environment selected by
 [environments.yaml](environments.yaml), currently **dev**. Stage and prod
 state model promotion to equivalent environment clusters.
@@ -308,6 +310,10 @@ app.log    │                       ▼
                             │ log panels   │
                             └──────────────┘
 ~~~
+
+![Grafana Lab Cluster dashboard](docs/images/grafana-cluster-dashboard.png)
+
+![Prometheus pod-restart alert rule](docs/images/prometheus-pod-restart-alert.png)
 
 Prometheus and Elasticsearch use local-path persistence. Elasticsearch
 stays cluster-internal; Grafana and Prometheus are exposed through ingress.
