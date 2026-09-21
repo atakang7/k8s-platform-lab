@@ -168,6 +168,7 @@ Each component documents itself next to its code:
 
 | Component | Purpose |
 |---|---|
+| [RUNBOOK](RUNBOOK.md) | operator procedures: reconcile, inspect, validate, recover, roll back, stop/destroy |
 | [infra](infra/README.md) | machines, kubeadm cluster, networking, storage; host edge: DNS, CA, Vault |
 | [platform](platform/README.md) | edge controllers, Jenkins, observability, application environment |
 | [delivery](delivery/README.md) | CI/CD: pipeline library, deploy job, CI agent image |
