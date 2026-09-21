@@ -15,28 +15,21 @@ Evidence for what the delivery system **builds, proves, and knowingly trades awa
 ## 1. Delivery Contract
 > **Build once · scan once · publish once · deploy by immutable digest.**
 ```text
-CI
-┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐ 
-│        VALIDATE        │▒     │     TEST + PACKAGE     │▒     │      BUILD + SCAN      │▒     │     PUBLISH + SIGN     │▒
-│lint · version · dry-run│▒ ──► │JUnit · Maven           │▒ ──► │BuildKit · Trivy        │▒ ──► │main only               │▒
-└────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒
- ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
-STATE + CD
-┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐ 
-│    IMMUTABLE DIGEST    │▒     │       GIT STATE        │▒     │    VERIFY + DEPLOY     │▒     │       TEST + TAG       │▒
-│sha256                  │▒ ──► │state/<env>.yaml        │▒ ──► │no rebuild              │▒ ──► │then promote            │▒
-└────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒
- ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+Java change → Validate → JUnit/Maven → Build image → Scan/SBOM
+                                              ↓ main
+                                     Publish → Sign → state/dev.yaml
+                                                         ↓
+state/<env>.yaml → Verify → Deploy exact digest → Helm test → Tag → Promote
 ```
 **Invariants:** scanned artifact = published artifact; published digest = state digest = deployed digest; CD never rebuilds; promotion moves the same digest; mutable tags never select runtime images.
 ## 2. Topology
 One repository produces four Jenkins multibranch jobs:
 ```text
-┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐ 
-│       SERVICE CI       │▒     │       SERVICE CI       │▒     │      PLATFORM CI       │▒     │         DEPLOY         │▒
-│sample-java-app         │▒ ──► │resource webhook        │▒ ──► │repo + base charts      │▒ ──► │state → environment     │▒
-└────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒
- ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+GitHub repo
+├→ sample-java-app CI
+├→ resource-requests-webhook CI
+├→ platform CI
+└→ deploy → state/<env>.yaml → one environment cluster
 ```
 - `sample-java-app`: released by Jenkins.
 - `resource-requests-webhook`: built/scanned/recorded by CI, installed by the operator via `make policies-up`.
@@ -46,18 +39,11 @@ One repository produces four Jenkins multibranch jobs:
 - Jenkins polls GitHub every minute; jobs do not call each other.
 ## 3. Service CI
 ```text
-┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐ 
-│        VALIDATE        │▒     │       JAVA TEST        │▒     │        PACKAGE         │▒     │         IMAGE          │▒
-│Dockerfile · version    │▒ ──► │JUnit 5 · WebMvc        │▒ ──► │mvnw package            │▒ ──► │Java 21 · BuildKit      │▒
-│Helm server dry-run     │▒     │Spring context          │▒     │application.jar         │▒                                
-└────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒
- ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
-┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐ 
-│          SCAN          │▒     │        PUBLISH         │▒     │          SIGN          │▒     │         RECORD         │▒
-│CRITICAL gate           │▒ ──► │same OCI layout         │▒ ──► │Cosign @ digest         │▒ ──► │state/dev.yaml          │▒
-│CycloneDX SBOM          │▒     │digest equality         │▒                                                                
-└────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒
- ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+Validate → JUnit 5 / Spring tests → mvnw package → application.jar
+   ↓
+rootless BuildKit → Java 21 image → Trivy CRITICAL gate → CycloneDX SBOM
+   ↓ main only
+publish same OCI layout → digest equality → Cosign → state/dev.yaml
 ```
 The Java build runs inside BuildKit. `mvnw package` executes:
 - JUnit 5 `@WebMvcTest(HelloController)`: success, missing-parameter, and release-marker behavior.
@@ -79,12 +65,11 @@ PRs stop after validation/build/scan. `main` publishes the already-scanned OCI l
 `charts/service` is the runtime safety contract: digest-addressed images, restricted pod defaults, probes, spreading, optional PDB, ingress, metrics, and a real HTTP Helm smoke test.
 ## 5. Artifact Identity
 ```text
-┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐ 
-│         SOURCE         │▒     │        VERSION         │▒     │         DIGEST         │▒     │      STATE / TAG       │▒
-│253d14cd...             │▒ ──► │1.2.14                  │▒ ──► │sha256:2758e8...        │▒ ──► │75769b4                 │▒
-                                                                                                │dev-2026.09.21.5        │▒
-└────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒
- ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+source revision → version → image/chart tag → sha256 digest
+                                               ↓
+                             state/<env>.yaml → workload → release tag
+
+1.2.14: 253d14cd... → 1.2.14 → sha256:2758e8... → 75769b4 → dev-2026.09.21.5
 ```
 `Chart.yaml.version` is the human release version and image/chart tag. The **digest** is deployment identity.
 
@@ -98,11 +83,11 @@ CI embeds the service source revision in OCI metadata. If `:1.2.14` already exis
 ## 6. State, Promotion, Rollback
 `state/<env>.yaml` is the deploy interface.
 ```text
-┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐ 
-│          DEV           │▒     │      PROMOTION PR      │▒     │         STAGE          │▒     │          PROD          │▒
-│digest X                │▒ ──► │copy X                  │▒ ──► │digest X                │▒ ──► │digest X                │▒
-└────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒
- ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+dev:   digest X → deploy/test/tag → promotion PR
+                                  ↓
+stage: digest X → deploy/test/tag → promotion PR
+                                  ↓
+prod:  digest X → deploy same artifact
 ```
 - CI writes new releases directly to `state/dev.yaml` on `main`.
 - Healthy dev/stage deployments open or refresh the next promotion PR.
@@ -114,12 +99,11 @@ CI embeds the service source revision in OCI metadata. If `:1.2.14` already exis
 Prod implements a 10% / 5-minute canary with a 1% ingress 5xx threshold before stable rollout.
 ## 7. Trust Boundaries
 ```text
-┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐      ┌────────────────────────┐ 
-│         VAULT          │▒     │          VSO           │▒     │    CI · jenkins-ci     │▒     │    CD · deploy-env     │▒
-│source credentials      │▒ ──► │sync to Jenkins         │▒ ──► │dry-run only            │▒ ──► │namespace only          │▒
-                                                                │writes dev state        │▒     │no Secrets              │▒
-└────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒     └────────────────────────┘▒
- ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+Vault → VSO → Jenkins credentials
+
+jenkins-ci                GitHub main                jenkins-deploy-<env>
+dry-run only ───────────→ state/dev.yaml ─────────→ own namespace only
+✕ Kubernetes writes                                ✕ Secrets / other envs
 ```
 - CI has RBAC needed for server-side dry-run; admission denies real CREATE/UPDATE/DELETE.
 - CI **does** hold GitHub write authority to push `state/dev.yaml` to `main`. This is deliberate and depends on branch-protection policy.
