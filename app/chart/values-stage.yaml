@@ -1,4 +1,4 @@
-# stage: one replica. prod (values.yaml) shares the lab cluster at full size.
+# stage: one replica; this file is applied only when this cluster runs stage.
 replicas: 1
 strategy:
   type: RollingUpdate
