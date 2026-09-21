@@ -1,65 +1,271 @@
-# service base chart
+# Service base chart
 
-Library chart for a stateless HTTP service: Deployment, Service, a Helm smoke test, and optional Ingress, ServiceMonitor, ConfigMaps, and PodDisruptionBudget. Apps inherit it instead of copying platform boilerplate.
+`charts/service/` is the reusable library chart for stateless HTTP
+services. Applications inherit it instead of copying platform boilerplate.
 
-A consumer calls the library once:
+## 1. Composition model
 
-```yaml
-# templates/service.yaml
+~~~text
+application chart
+      │
+      │ depends on
+      ▼
+┌──────────────────────┐
+│ charts/service       │
+│ library chart        │
+└──────────┬───────────┘
+           │
+           ▼
+service.manifests
+           │
+     ┌─────┼──────────────┐
+     │     │              │
+     ▼     ▼              ▼
+Deployment Service      Helm test
+     │
+     ├── optional Ingress
+     ├── optional ServiceMonitor
+     ├── optional ConfigMaps
+     └── optional PDB
+~~~
+
+Consumer template:
+
+~~~yaml
 {{ include "service.manifests" . }}
-```
+~~~
 
-and pins a published library version in its chart dependency:
+Consumer dependency:
 
-```yaml
+~~~yaml
 dependencies:
   - name: service
     version: 1.2.0
     repository: oci://registry-1.docker.io/atakangul
-```
+~~~
 
-The app's `values.yaml` overrides the defaults in [`templates/_defaults.tpl`](templates/_defaults.tpl). `image.repository` is required; `image.digest` is set by delivery on every release and must be `sha256:<64 hex>`.
+## 2. Value ownership
 
-## Runtime defaults
+~~~text
+library defaults
+templates/_defaults.tpl
+        │
+        ▼
+application values.yaml
+        │
+        ▼
+environment overrides
+values-<env>.yaml
+        │
+        ▼
+delivery injects
+image.digest
+        │
+        ▼
+rendered runtime
+~~~
 
-The base chart is deliberately conservative and explicit:
+`image.repository` is application-owned.
 
-```text
-image pull          IfNotPresent
-API token mount     disabled
-service links       disabled
-termination grace   30s
-topology spread     enabled
-PDB                 opt-in
-```
+`image.digest` is delivery-owned and must be an immutable
+`sha256:<64 hex>` value.
 
-Applications can override these values when they have a real requirement. In particular, a service that needs Kubernetes API credentials must opt into service-account token mounting rather than receiving ambient credentials by default.
+## 3. Secure runtime defaults
 
-Delivery namespaces enforce the restricted Pod Security standard. The defaults meet it (non-root, no privilege escalation, all capabilities dropped, RuntimeDefault seccomp); an app that overrides `securityContext` or `sidecars` must keep them compliant or its Pods are rejected.
+~~~text
+Pod
+ │
+ ├── non-root
+ ├── no privilege escalation
+ ├── drop ALL capabilities
+ ├── RuntimeDefault seccomp
+ ├── service-account token OFF
+ ├── service links OFF
+ └── termination grace 30s
+~~~
 
-PDB support is opt-in because the correct availability budget depends on replica count and cluster capacity:
+Delivery namespaces enforce the restricted Pod Security standard. Any
+application override must remain compliant.
 
-```yaml
+## 4. Scheduling defaults
+
+~~~text
+replicas
+   │
+   ▼
+topology spread
+   │
+   ▼
+worker placement
+~~~
+
+Topology spread is enabled by default.
+
+Applications can add stricter affinity when their runtime needs it.
+
+## 5. Disruption budget
+
+PDB support is opt-in because the correct budget depends on replica
+count and available cluster capacity.
+
+~~~yaml
 podDisruptionBudget:
   enabled: true
   minAvailable: 2
-```
+~~~
 
-## Smoke test
+~~~text
+single replica
+      │
+      ▼
+PDB usually disabled
 
-Every release carries a Helm test that sends one request through the Service to `smokeTest.path` and expects a 2xx answer. Delivery runs it after each deploy and rolls the release back when it fails. Point it at a real endpoint, not only a health check:
 
-```yaml
-smokeTest:
-  path: /api/foos
-```
+multiple replicas
+      │
+      ▼
+choose minAvailable
+that still permits eviction
+~~~
 
-Further Helm test hooks in the app chart run with it; they are the service's end-to-end tests.
+A PDB that makes every Pod non-evictable prevents normal node drain.
 
-## Canary
+## 6. Health contract
 
-Delivery releases a prod canary as a second release, `<service>-canary`, with `ingress.canaryWeight` set: its Ingress becomes an ingress-nginx canary for the same host and takes that percentage of the traffic. Apps do not set it.
+~~~text
+Pod starts
+   │
+   ▼
+startup probe
+   │
+   ▼
+readiness probe
+   │
+   ▼
+Service traffic
+   │
+   ▼
+liveness probe
+~~~
 
-## Release rule
+The application supplies the actual probe paths and timing through its
+values.
 
-Released versions are immutable. Pull requests that change this chart must bump `version` in `Chart.yaml`; chart-testing enforces the version increment. The main platform job publishes a version only when that exact version is absent from the OCI registry.
+## 7. Service and ingress
+
+~~~text
+Pod
+ │
+ ▼
+Service
+ │
+ ├───────────────┐
+ │               │
+ ▼               ▼
+cluster use    Ingress
+                 │
+                 ▼
+           ingress-nginx
+~~~
+
+Ingress is optional and uses the host supplied by the application chart.
+
+## 8. Metrics
+
+~~~text
+application metrics endpoint
+          │
+          ▼
+Service
+          │
+          ▼
+ServiceMonitor
+          │
+          ▼
+Prometheus
+~~~
+
+ServiceMonitor creation is optional and driven by chart values.
+
+## 9. Release smoke test
+
+Every rendered service can carry a Helm test Pod.
+
+~~~text
+deployment complete
+       │
+       ▼
+Helm test Pod
+       │
+       ▼
+Service
+       │
+       ▼
+smokeTest.path
+       │
+   ┌───┴────┐
+   │        │
+  2xx      fail
+   │        │
+   ▼        ▼
+ PASS     deploy rollback
+~~~
+
+Point `smokeTest.path` at a real service endpoint, not only a generic
+health endpoint.
+
+Application-specific Helm test hooks run alongside the base smoke test.
+
+## 10. Canary support
+
+Applications do not choose canary weight directly during normal release.
+
+~~~text
+delivery
+   │
+   ▼
+<service>-canary
+   │
+   ▼
+ingress.canaryWeight
+   │
+   ▼
+ingress-nginx canary annotation
+   │
+   ▼
+percentage of same-host traffic
+~~~
+
+The stable and canary releases share the same host. ingress-nginx splits
+traffic according to the weight supplied by delivery.
+
+## 11. Immutable chart versions
+
+~~~text
+chart change
+    │
+    ▼
+version bump required
+    │
+    ▼
+chart-testing
+    │
+    ▼
+merge to main
+    │
+    ▼
+publish only if version absent
+~~~
+
+Released chart versions are immutable. Pull requests that change this
+library must bump `Chart.yaml` version.
+
+## 12. Main sources
+
+| Concern | Source |
+|---|---|
+| library metadata | `Chart.yaml` |
+| defaults | `templates/_defaults.tpl` |
+| rendered objects | `templates/` |
+| app consumer example | `../../app/chart/` |
+| delivery behavior | `../../DELIVERY.md` |
