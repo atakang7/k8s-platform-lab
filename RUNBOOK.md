@@ -7,12 +7,13 @@ For architecture, see [README.md](README.md). For release behavior, see [DELIVER
 ## Contents
 
 1. [Fresh environment](#1-fresh-environment)
-2. [Normal reconciliation](#2-normal-reconciliation)
-3. [Inspect the platform](#3-inspect-the-platform)
-4. [Validate](#4-validate)
-5. [Common recovery](#5-common-recovery)
-6. [Release rollback](#6-release-rollback)
-7. [Stop and destroy](#7-stop-and-destroy)
+2. [Inspect the platform](#2-inspect-the-platform)
+3. [Validate](#3-validate)
+4. [Common recovery](#4-common-recovery)
+5. [Release rollback](#5-release-rollback)
+6. [Stop and destroy](#6-stop-and-destroy)
+
+Persistent changes follow one rule: change Git, run the owning reconciliation command, then run its check.
 
 ---
 
@@ -75,25 +76,7 @@ make e2e-validate
 
 ---
 
-## 2. Normal reconciliation
-
-Use the owner of the changed configuration.
-
-| Changed | Reconcile | Verify |
-|---|---|---|
-| VM / Kubernetes foundation | `make cluster-up` | `make cluster-validate` |
-| DNS / TLS / Vault / ingress edge | `make edge-up` | `make edge-smoke` |
-| Jenkins / jobs / agents | `make jenkins-up` | `make e2e-validate` |
-| environment namespace / deploy identity | `make environment-up` | `make e2e-validate` |
-| observability | `make observability-up` | `make observability-smoke` |
-| admission policies | `make policies-up` | `make policies-smoke` |
-| application release | merge through CI/CD | Jenkins deploy + `make e2e-validate` |
-
-Persistent changes belong in Git. Manual Helm, `kubectl edit`, or SSH changes are diagnostics, not desired state.
-
----
-
-## 3. Inspect the platform
+## 2. Inspect the platform
 
 Show operator-facing endpoints:
 
@@ -117,7 +100,7 @@ Prometheus  https://observability.lab.test/prometheus/
 
 ---
 
-## 4. Validate
+## 3. Validate
 
 ### Foundation
 
@@ -165,7 +148,7 @@ Validation should not repair platform state itself.
 
 ---
 
-## 5. Common recovery
+## 4. Common recovery
 
 ### Host reboot / Vault sealed
 
@@ -222,7 +205,7 @@ make policy-smoke POLICY=resource-requests-webhook
 
 ---
 
-## 6. Release rollback
+## 5. Release rollback
 
 Runtime deployment failures already roll back the Helm release, but Git remains the desired state.
 
@@ -247,7 +230,7 @@ Do not perform a permanent rollback with an ad-hoc `helm rollback`; the next dep
 
 ---
 
-## 7. Stop and destroy
+## 6. Stop and destroy
 
 Stop the edge stack while retaining host Vault/DNS state:
 
