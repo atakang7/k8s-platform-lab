@@ -1,101 +1,166 @@
 # Jenkins
 
-Jenkins is the control plane for CI/CD. The controller runs in Kubernetes and schedules Pipeline work onto Kubernetes agent Pods.
+Jenkins is the CI/CD control plane. The controller runs in Kubernetes,
+while Pipeline work runs on Kubernetes agent Pods.
 
-[Delivery flow](../../DELIVERY.md) · [CI agent image](../../delivery/jenkins/README.md)
+## 1. Execution model
 
-## Contents
-
-1. [How it is wired](#1-how-it-is-wired)
-2. [Where it is configured](#2-where-it-is-configured)
-3. [Jobs and agents](#3-jobs-and-agents)
-4. [Credentials and access](#4-credentials-and-access)
-5. [Reconcile and change](#5-reconcile-and-change)
-
----
-
-## 1. How it is wired
-
-```text
+~~~text
 GitHub
-  │  multibranch scan
+  │ multibranch scan
   ▼
-Jenkins controller
-  │
-  │ Kubernetes plugin
-  ▼
-agent Pods
-  ├── lab-ci-runner        build + scan
-  ├── lab-ci-light         lint + verify
-  └── lab-cd-runner-<env>  deploy
-```
+┌──────────────────────┐
+│ Jenkins controller   │
+│ node-3               │
+│ numExecutors: 0      │
+└──────────┬───────────┘
+           │ schedules
+           ▼
+┌──────────────────────┐
+│ Kubernetes plugin    │
+└──────────┬───────────┘
+           │
+     ┌─────┼──────────────┐
+     │     │              │
+     ▼     ▼              ▼
+ heavy   light           CD
+ CI      CI              agent
+~~~
 
-The controller owns Jenkins configuration, the job queue, multibranch jobs and the shared delivery library.
+The controller owns configuration, jobs, queueing, and agent
+orchestration. It does not execute Pipeline stages itself.
 
-Pipeline stages do not run on the controller. JCasC sets `numExecutors: 0`, and execution capacity comes from Kubernetes-plugin agent Pods.
+## 2. Agent classes
 
-The Helm chart's static agent is also disabled; the dynamic Pods above are the execution plane.
+~~~text
+                  EXECUTION PLANE
 
----
+             ┌──────────────────┐
+             │ lab-ci-runner  │
+             │ heavy CI         │
+             ├──────────────────┤
+             │ BuildKit         │
+             │ Trivy            │
+             │ chart tooling    │
+             │ persistent cache │
+             └──────────────────┘
 
-## 2. Where it is configured
+             ┌──────────────────┐
+             │ lab-ci-light   │
+             │ light checks     │
+             ├──────────────────┤
+             │ lint             │
+             │ verify           │
+             │ state checks     │
+             └──────────────────┘
 
-| Concern | Source of truth |
-|---|---|
-| Jenkins Helm release, plugins, persistence, ingress | `platform/jenkins/values.yaml` |
-| Jenkins configuration, jobs, agent templates | `platform/jenkins/jcasc/jenkins.yaml` |
-| CI ServiceAccount and dry-run-only guard | `platform/jenkins/resources/agent-rbac.yaml` |
-| Vault → Jenkins Secrets | `platform/jenkins/resources/*.yaml` |
-| Environment deploy identities | `platform/environment/namespace.yaml` |
-| Jenkins reconciliation | `platform/jenkins/bin/up` |
-| Tools inside CI/CD agents | `delivery/jenkins/ci-agent.Dockerfile` |
-| Pipeline implementation | `delivery/pipeline/` |
+             ┌──────────────────┐
+             │ cd-runner        │
+             │ deployment       │
+             ├──────────────────┤
+             │ env identity     │
+             │ Helm / kubectl   │
+             └──────────────────┘
+~~~
 
-Durable Jenkins changes belong in Git, not in the Jenkins UI.
+Heavy builds stay separate from light validation so expensive image work
+does not block small checks.
 
----
+Warm jobs keep one reusable Pod from each execution class available.
 
-## 3. Jobs and agents
+## 3. Job map
 
-JCasC creates four multibranch delivery jobs:
+~~~text
+sample-java-app
+      │
+      ▼
+service CI
+      │
+      ▼
+lab-ci-runner
 
-| Job | Pipeline | Agent |
-|---|---|---|
-| `sample-java-app` | service CI | `lab-ci-runner` |
-| `resource-requests-webhook` | service CI | `lab-ci-runner` |
-| `platform` | platform validation | `lab-ci-light` |
-| `deploy` | release verification + deployment | light CI → environment CD |
 
-The heavy CI runner contains the delivery tools plus rootless BuildKit and persistent BuildKit/Trivy caches.
+resource-requests-webhook
+      │
+      ▼
+service CI
+      │
+      ▼
+lab-ci-runner
 
-The light runner handles work that does not need those caches.
 
-CD uses the common `cd-runner` template, but the deployment pipeline supplies the environment identity:
+platform
+      │
+      ▼
+platform validation
+      │
+      ▼
+lab-ci-light
 
-```text
+
+deploy
+      │
+      ├── verify state
+      │      │
+      │      ▼
+      │  light runner
+      │
+      └── deploy
+             │
+             ▼
+        cd-runner
+~~~
+
+JCasC creates these multibranch delivery jobs from Git.
+
+## 4. CI identity
+
+~~~text
+jenkins-ci
+    │
+    ▼
+Kubernetes API
+    │
+    ├── server-side dry-run  ✓
+    │
+    └── real write           ✗
+~~~
+
+CI needs the real admission chain for validation, but it must not become
+a deployment identity. A Kubernetes policy permits dry-run validation
+while denying real writes.
+
+## 5. CD identity
+
+~~~text
+deploy job
+    │ selects environment
+    ▼
 cd-runner
-   │
-   ▼
-lab-cd-runner-dev
-   │
-   ▼
+    │ uses
+    ▼
 jenkins-deploy-dev
-   │
-   ▼
+    │ bound only to
+    ▼
 apps-dev
-```
+~~~
 
-Jenkins scans GitHub every minute because this lab does not expose Jenkins for inbound GitHub webhooks.
+Each environment gets its own deployment service account.
 
-Warm jobs keep one Pod of each execution class reusable between builds.
+~~~text
+jenkins-deploy-dev    ──► apps-dev
+jenkins-deploy-stage  ──► apps-stage
+jenkins-deploy-prod   ──► apps-prod
+~~~
 
----
+The deployment identity is namespace-scoped and cannot read application
+Secrets.
 
-## 4. Credentials and access
+No deployment kubeconfig is stored in Jenkins.
 
-External Jenkins credentials come from Vault:
+## 6. Credential path
 
-```text
+~~~text
 Vault
   │
   ▼
@@ -109,51 +174,118 @@ JCasC credentials
   │
   ▼
 Pipeline bindings
-```
+~~~
+
+Runtime credentials come from Vault rather than being committed to Git.
 
 | Vault path | Used for |
 |---|---|
-| `secret/jenkins/admin` | Jenkins admin |
-| `secret/ci/github` | repository access, statuses, state commits, promotion PRs |
+| `secret/jenkins/admin` | Jenkins administrator |
+| `secret/ci/github` | repository and promotion operations |
 | `secret/ci/dockerhub` | image and chart registry |
 | `secret/ci/cosign` | image signing |
 
-Kubernetes deployment access does **not** use a kubeconfig stored in Jenkins.
+## 7. Controller placement
 
-CI uses `jenkins-ci`. It can perform server-side dry-runs but a ValidatingAdmissionPolicy denies real writes.
+~~~text
+              node-3
+                 │
+       ┌─────────┴─────────┐
+       │                   │
+       ▼                   ▼
+┌──────────────┐    ┌──────────────┐
+│ Jenkins      │    │ CI/CD agents │
+│ controller   │    │ dynamic Pods │
+└──────────────┘    └──────────────┘
+       │
+       ▼
+persistent local-path PVC
+~~~
 
-CD uses `jenkins-deploy-<environment>`, created by `platform/environment`, and each identity is bound only to its own application namespace.
+The controller is pinned to `node-3` and keeps Jenkins state on a
+persistent volume.
 
-```text
-jenkins-ci
-  └── dry-run validation only
+## 8. Access path
 
-jenkins-deploy-dev
-  └── apps-dev only
-```
+~~~text
+client
+  │
+  ▼
+jenkins.lab.test
+  │
+  ▼
+BIND9
+  │
+  ▼
+MetalLB ingress VIP
+  │
+  ▼
+ingress-nginx
+  │
+  ▼
+Jenkins ClusterIP Service
+  │
+  ▼
+controller
+~~~
 
----
+Jenkins is exposed through the shared ingress LoadBalancer rather than
+through a dedicated LoadBalancer Service.
 
-## 5. Reconcile and change
+## 9. Repository polling
 
-Reconcile Jenkins with:
+~~~text
+GitHub
+  ▲
+  │ poll every minute
+  │
+Jenkins multibranch jobs
+~~~
 
-```bash
+This lab does not expose an inbound GitHub webhook endpoint, so Jenkins
+discovers repository changes by polling.
+
+## 10. Reconcile
+
+~~~text
 make jenkins-up
-```
+      │
+      ▼
+Vault credentials
+      │
+      ▼
+Kubernetes Secrets
+      │
+      ▼
+RBAC
+      │
+      ▼
+Helm release
+      │
+      ▼
+JCasC
+      │
+      ▼
+warm agent pool
+~~~
 
-The command aligns Vault credentials, Kubernetes Secrets, RBAC, the Helm release, JCasC and the warm agent pool.
+After agent-template changes, reconciliation removes stale agent Pods so
+new work cannot continue on an old template.
 
-Use this map when changing Jenkins:
+## 11. Sources of truth
 
-| Change | Edit |
+| Concern | File |
 |---|---|
-| plugin / controller / ingress / persistence | `values.yaml` |
-| job / agent Pod / Jenkins setting | `jcasc/jenkins.yaml` |
-| CI Kubernetes permissions | `resources/agent-rbac.yaml` |
-| environment deployment permissions | `../environment/namespace.yaml` |
-| Jenkins credential source | Vault + `resources/*.yaml` |
-| tools available in agents | `delivery/jenkins/ci-agent.Dockerfile` |
-| pipeline behavior | `delivery/pipeline/` |
+| controller, plugins, persistence, ingress | `values.yaml` |
+| jobs, JCasC, agent templates | `jcasc/jenkins.yaml` |
+| CI Kubernetes access | `resources/agent-rbac.yaml` |
+| environment deploy identities | `../environment/namespace.yaml` |
+| Vault-to-Jenkins Secrets | `resources/*.yaml` |
+| reconciliation | `bin/up` |
+| CI/CD agent image | `../../delivery/jenkins/ci-agent.Dockerfile` |
+| Pipeline implementation | `../../delivery/pipeline/` |
 
-After a JCasC or agent-template change, `make jenkins-up` removes old agent Pods so new work cannot continue on stale templates.
+Durable Jenkins changes belong in Git, not in the Jenkins UI.
+
+For release mechanics, continue with
+**[DELIVERY.md](../../DELIVERY.md)**.
