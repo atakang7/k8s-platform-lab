@@ -21,6 +21,38 @@ deploy ───────────────────────→ 
 
 `servicePipeline` lives in the pinned `lab-delivery` shared library. A service provides only its chart path, build context, and source path.
 
+### Reusable templates
+
+```text
+service Jenkinsfile
+      ↓
+servicePipeline(chart, context, path)
+      ↓
+validate → build/test → scan → publish → record state
+```
+
+`servicePipeline` is the standard **service release template**. Use it for a component that produces a container image and Helm chart. It owns CI behavior; the service only identifies where its source and chart live.
+
+```text
+state/<env>.yaml
+      ↓
+deployPipeline()
+      ↓
+verify → deploy → test → tag → promote
+```
+
+`deployPipeline` is the standard **environment deployment template**. It reads configured releases from Git state and reconciles only the cluster's `clusterEnvironment`.
+
+```text
+application chart
+      ↓
+charts/service
+      ↓
+Deployment · Service · probes · security · ingress · metrics · smoke test
+```
+
+`charts/service` is the **runtime Helm template** shared by stateless HTTP services. Application charts pin a version and provide service-specific values.
+
 | Job | Role |
 |---|---|
 | `sample-java-app` | Jenkins-managed service |
