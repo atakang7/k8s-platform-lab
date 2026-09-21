@@ -1,4 +1,4 @@
-# dev: one replica. prod (values.yaml) shares the lab cluster at full size.
+# dev: one replica; this file is applied only when this cluster runs dev.
 replicas: 1
 strategy:
   type: RollingUpdate
