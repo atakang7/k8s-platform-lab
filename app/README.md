@@ -30,6 +30,35 @@ Each Pod runs the Java application plus a Fluent Bit sidecar that ships the appl
 
 The chart inherits the shared [service base chart](../charts/service/README.md). Delivery supplies the immutable image digest when releasing it.
 
+
+## Image
+
+The Dockerfile directly addresses the requirements for build speed, image size and security:
+
+```text
+JDK build image
+   │
+   ├── copy Maven wrapper + pom.xml
+   ├── dependency:go-offline
+   │      └── cached until dependencies change
+   ├── copy source
+   └── package
+          │
+          ▼
+       application.jar
+          │
+          ▼
+minimal JRE runtime image
+   └── non-root UID 10001
+```
+
+The build and runtime base images are pinned by digest. Only the JAR is copied into the final JRE image, so Maven, the JDK and source code do not ship in the runtime container.
+
+`.dockerignore` keeps the build context limited to Maven metadata and application source. CI also reuses BuildKit state, so unchanged dependency and build layers do not need to be rebuilt.
+
+The runtime process runs as UID/GID `10001`, and CI injects the source repository and revision as OCI labels.
+
+
 Current environment differences are intentionally small:
 
 ```text
@@ -48,10 +77,47 @@ The application:
 - exposes readiness, liveness and startup probes;
 - exports Prometheus metrics;
 - declares CPU and memory requests/limits;
-- uses worker-only placement;
-- writes normal container logs and an application file log collected by the sidecar.
+- uses worker-only placement.
 
 The four-replica configuration uses topology spreading across the workers and a PodDisruptionBudget with `minAvailable: 2`. Single-replica environment overrides disable that budget.
+
+
+## Application logs
+
+The requirements call out the cost of using stdout as the log-forwarding path. The Elasticsearch path therefore uses an asynchronous file instead:
+
+```text
+application logger
+      │
+      ├──► stdout
+      │     Kubernetes-native troubleshooting
+      │
+      └──► AsyncAppender
+                │
+                ▼
+        /var/log/app/app.log
+                │
+        daily + size rotation
+        total history ≤ 1 GB
+                │
+                ▼
+        Fluent Bit sidecar
+                │
+                ▼
+        Elasticsearch · app-logs
+```
+
+`logback-spring.xml` implements the file side:
+
+- `AsyncAppender` keeps file I/O off the request thread;
+- `SizeAndTimeBasedRollingPolicy` rotates by date;
+- each file is capped at 100 MB;
+- retained log history is capped at 1 GB.
+
+The application and Fluent Bit sidecar share `/var/log/app` through an `emptyDir`. Fluent Bit tails the files and sends them directly to the `app-logs` Elasticsearch index.
+
+stdout is still kept as the normal Kubernetes console stream, but Elasticsearch forwarding does not depend on stdout.
+
 
 ## Local checks
 
