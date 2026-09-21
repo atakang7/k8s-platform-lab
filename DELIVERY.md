@@ -280,10 +280,13 @@ Scan
 Publish image
    │
    ▼
-Publish chart
+Verify pushed digest
    │
    ▼
 Sign digest
+   │
+   ▼
+Publish chart
    │
    ▼
 Record dev state
@@ -393,7 +396,7 @@ platform job
     └── main ────────────► publish missing base-chart versions
 ~~~
 
-Shellcheck covers executable shell in:
+Shellcheck scans `*.sh` files and `bin/` helpers under:
 
 ~~~text
 delivery/
@@ -689,7 +692,7 @@ server-side dry-run
 Kubernetes
 ~~~
 
-The deploy job refuses a recorded image that is not signed by the delivery key committed as `cosign.pub`.
+For Jenkins-released services on this cluster, deploy verification refuses a recorded image that is not signed by the delivery key committed as `cosign.pub`.
 
 The private signing key and password are delivered to Jenkins from Vault-backed credentials.
 
