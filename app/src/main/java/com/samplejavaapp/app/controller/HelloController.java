@@ -24,6 +24,6 @@ public class HelloController {
 
     @GetMapping("/api/release")
     public String getRelease() {
-        return "Lab CI/CD metrics 1.2.9";
+        return "Lab CI/CD metrics 1.2.10";
     }
 }
