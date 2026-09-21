@@ -3,6 +3,18 @@
 A production-style Kubernetes lab where the host, VMs, edge, delivery,
 observability, and policy layers are all managed from this repository.
 
+**Contents**
+
+1. [Physical architecture](#1-physical-architecture)
+2. [External request path](#2-external-request-path)
+3. [Application request + log path](#3-application-request--log-path)
+4. [Immutable release path](#4-immutable-release-path)
+5. [Secrets and trust path](#5-secrets-and-trust-path)
+6. [Observability path](#6-observability-path)
+7. [Operator path](#7-operator-path)
+
+[Repository map](#repository-map) · [Host requirements](#host-requirements)
+
 ## 1. Physical architecture
 
 ~~~text
