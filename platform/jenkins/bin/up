@@ -413,6 +413,7 @@ prime_warm_agents() (
   local crumb_json
   local crumb_field
   local crumb
+  local cookie_jar
   local port_forward_pid
   local job
 
@@ -423,10 +424,11 @@ prime_warm_agents() (
   admin_password="$(kubectl -n "${JENKINS_NAMESPACE}" get secret jenkins-admin \
     -o jsonpath='{.data.jenkins-admin-password}' | base64 --decode)"
 
+  cookie_jar="$(mktemp)"
   kubectl -n "${JENKINS_NAMESPACE}" port-forward service/jenkins 18080:8080 \
     >/tmp/lab-jenkins-port-forward.log 2>&1 &
   port_forward_pid=$!
-  trap 'kill "${port_forward_pid}" >/dev/null 2>&1 || true' EXIT
+  trap 'kill "${port_forward_pid}" >/dev/null 2>&1 || true; rm -f "${cookie_jar}"' EXIT
 
   for _ in {1..30}; do
     if curl -fsS -u "${admin_user}:${admin_password}" \
@@ -436,7 +438,10 @@ prime_warm_agents() (
     sleep 1
   done
 
-  crumb_json="$(curl -fsS -u "${admin_user}:${admin_password}" \
+  crumb_json="$(curl -fsS \
+    -u "${admin_user}:${admin_password}" \
+    -c "${cookie_jar}" \
+    -b "${cookie_jar}" \
     http://127.0.0.1:18080/crumbIssuer/api/json)"
   crumb_field="$(jq -r '.crumbRequestField' <<< "${crumb_json}")"
   crumb="$(jq -r '.crumb' <<< "${crumb_json}")"
@@ -444,6 +449,8 @@ prime_warm_agents() (
   for job in warm-ci-runner warm-ci-light warm-cd-runner-dev; do
     curl -fsS -X POST \
       -u "${admin_user}:${admin_password}" \
+      -c "${cookie_jar}" \
+      -b "${cookie_jar}" \
       -H "${crumb_field}: ${crumb}" \
       "http://127.0.0.1:18080/job/${job}/build" >/dev/null
   done
