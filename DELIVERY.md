@@ -17,163 +17,348 @@ CI/CD reference.
 ## 1. Overview
 
 ```text
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│ Service CI   │ → │ Git state    │ → │ Deployment   │
-│ build/release│   │ version+digest│   │ verify/deploy│
-└──────────────┘   └──────────────┘   └──────────────┘
+┌──────────────┐
+│ Service CI   │
+│ build/release│
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Git state    │
+│ version+digest
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Deployment   │
+│ verify/deploy│
+└──────────────┘
 ```
 
 **Stack:** Jenkins/JCasC · Kubernetes · Maven/JUnit · BuildKit · Trivy · Skopeo · Cosign · Helm/OCI · Git · Vault/VSO · Prometheus
 
-Applications deploy from digests in `state/<environment>.yaml`. Platform/infra reconciliation is operator-owned.
+Applications deploy from digests in `state/<environment>.yaml`. Platform and infrastructure reconciliation is operator-owned.
 
 ## 2. Jobs and templates
 
 Four multibranch jobs, three pipeline implementations:
 
-| Job | Pipeline | Deployment |
-|---|---|---|
-| `sample-java-app` | `servicePipeline` | Jenkins |
-| `resource-requests-webhook` | `servicePipeline` | operator |
-| `platform` | `Jenkinsfile.platform` | n/a |
-| `deploy` | `deployPipeline` | Jenkins |
+```text
+sample-java-app ───────────────┐
+                              ├→ servicePipeline(...)
+resource-requests-webhook ────┘
+
+platform ───────────────────────→ Jenkinsfile.platform
+deploy ─────────────────────────→ deployPipeline()
+```
 
 ### Service pipeline
 
 ```text
-┌──────────────┐ → ┌─────────────────┐ → ┌──────────────┐
-│ Jenkinsfile  │   │ servicePipeline │   │ image/chart  │
-│ chart/context│   │ shared library  │   │ + dev state  │
-└──────────────┘   └─────────────────┘   └──────────────┘
+service Jenkinsfile
+       ↓
+chart · context · path
+       ↓
+servicePipeline(...)
+       ↓
+image + chart + dev state
 ```
 
-Standard CI template for a containerized service. The service provides only **chart path, build context, source path**.
+Standard CI template for containerized services. The service declares where its source and chart live; the shared library supplies the pipeline.
+
+- `sample-java-app` → Jenkins-managed deployment.
+- `resource-requests-webhook` → CI-managed artifact, operator-managed deployment.
 
 ### Deployment pipeline
 
 ```text
-┌──────────────┐ → ┌────────────────┐ → ┌──────────────┐
-│ state/<env>  │   │ deployPipeline │   │ Helm release │
-│ version+digest│  │                │   │ + promotion  │
-└──────────────┘   └────────────────┘   └──────────────┘
+state/<environment>.yaml
+          ↓
+    deployPipeline()
+          ↓
+verify → deploy → test
+          ↓
+    tag → promote
 ```
 
-Reads Git state and deploys only the cluster's `clusterEnvironment`.
+Reads Git state and reconciles only the cluster configured as `clusterEnvironment`.
 
 ### Service chart
 
 ```text
-┌──────────────┐ → ┌──────────────┐ → ┌──────────────┐
-│ app chart    │   │charts/service│   │ K8s objects  │
-│ values       │   │ library chart│   │ + Helm test  │
-└──────────────┘   └──────────────┘   └──────────────┘
+application chart
+       ↓
+values + pinned dependency
+       ↓
+charts/service
+       ↓
+Deployment · Service
+probes · security · ingress
+metrics · PDB · Helm test
 ```
 
-Shared runtime template for stateless HTTP services.
+Shared Helm runtime template for stateless HTTP services.
 
 ## 3. Service CI
 
 ```text
-Checkout → Validate → Build/Test → Scan
-                                  ↓ main
-                           Publish → Record
+┌──────────────┐
+│ Checkout     │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Validate     │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Build / Test │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Scan         │
+└──────┬───────┘
+       ↓ main only
+┌──────────────┐
+│ Publish      │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Record state │
+└──────────────┘
 ```
 
-| Stage | Work |
-|---|---|
-| **Checkout** | read chart/state; derive `SERVICE_REVISION` from service path |
-| **Validate** | Hadolint · version check · Helm render · server-side dry-run |
-| **Build/Test** | one BuildKit build; `mvnw package` runs JUnit/Spring tests and creates `application.jar` |
-| **Scan** | Trivy CRITICAL gate + CycloneDX SBOM |
-| **Publish** | push scanned OCI layout · verify digest · Cosign sign · publish chart |
-| **Record** | commit `{version,digest}` to dev state |
+**Checkout**  
+Reads chart, environment, and state. `SERVICE_REVISION` is the last commit that changed the service path.
 
-PRs stop after scan. Publish/record run on `main`.
+**Validate**  
+Runs Hadolint, checks the service version, renders Helm, and performs Kubernetes server-side dry-run.
 
-The state commit triggers CD; Service CI never calls the deploy job directly.
+**Build / Test**  
+BuildKit builds one OCI image layout. `mvnw package` runs the JUnit/Spring tests and produces `application.jar`.
 
-Existing versions are reusable only when their OCI source revision matches the current service source revision.
+**Scan**  
+Trivy scans that local OCI layout. CRITICAL findings fail CI. The same report produces the CycloneDX SBOM.
+
+**Publish**  
+Runs on `main`. Skopeo pushes the scanned OCI layout, the registry digest must match, Cosign signs the digest, and the service chart is published.
+
+**Record state**  
+CI commits `{version,digest}` to `state/dev.yaml`.
+
+```text
+service CI
+   ↓
+state/dev.yaml commit
+   ↓
+Git discovery
+   ↓
+deploy job
+```
+
+The service job never calls CD directly. Existing versions are reusable only when their OCI source revision matches the current service source revision.
 
 ## 4. Platform CI
 
 ```text
-Shellcheck → [chart PR] ct lint → [main] publish charts
+Shellcheck
+    ↓
+chart PR?
+    ├─ yes → ct lint + version check
+    └─ no
+    ↓
+main?
+    ├─ yes → publish missing charts
+    └─ no  → done
 ```
 
-- **Shellcheck:** shared delivery/platform/infra/policy scripts.
-- **Chart PR:** `ct lint --check-version-increment`.
-- **Main:** publish chart versions missing from OCI.
-
-`charts/service` contains the shared Deployment, Service, security defaults, probes, topology spread, optional PDB, ingress/metrics, and HTTP Helm test.
+`charts/service` is published independently from application releases and carries the common Deployment, Service, security defaults, probes, topology spread, optional PDB, ingress/metrics, and HTTP Helm test.
 
 ## 5. Deployment
 
 ```text
-Verify → Deploy → Test → Tag → Promote
+state/<env>.yaml
+       ↓
+┌──────────────┐
+│ Verify       │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Deploy       │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Helm test    │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Tag          │
+└──────┬───────┘
+       ↓
+┌──────────────┐
+│ Promote      │
+└──────────────┘
 ```
 
-| Stage | Work |
-|---|---|
-| **Verify** | state schema · previous-env history · Cosign · Helm render · server dry-run |
-| **Deploy** | `jenkins-deploy-<env>` runs Helm with `repository@sha256:...` |
-| **Test** | HTTP smoke test + service tests |
-| **Tag** | `<environment>-<YYYY.MM.DD>.<n>` |
-| **Promote** | PR copies the same `{version,digest}` to the next environment |
+**Verify**  
+Checks state schema, previous-environment digest history, Cosign signature, Helm rendering, and server-side dry-run.
 
-Readiness failure rolls back. Failed Helm tests restore the previous revision; failed first installs are removed.
+**Deploy**  
+`jenkins-deploy-<env>` runs Helm with the recorded `repository@sha256:...`.
 
-Prod supports a **10% / 5-minute canary** with a **1% ingress 5xx threshold**.
+**Helm test**  
+Runs the base HTTP smoke test plus service tests.
+
+```text
+readiness failure → Helm rollback
+
+test failure
+    ├→ previous release exists → rollback
+    └→ first install           → uninstall
+```
+
+**Tag**  
+Healthy state gets `<environment>-<YYYY.MM.DD>.<n>`.
+
+**Promote**  
+Jenkins opens or refreshes a PR containing the same `{version,digest}` for the next environment.
+
+Prod adds:
+
+```text
+new digest
+   ↓
+10% canary
+   ↓ 5 minutes
+ingress 5xx
+   ├→ > 1%  → fail; stable stays
+   └→ ≤ 1%  → deploy stable
+```
 
 ## 6. Release model
 
+### Application version
+
 ```text
 Chart.yaml.version
-    ├→ image tag
-    ├→ service chart version
-    └→ state version
-
-source revision → version → digest → state → workload
-
-dev {version,digest}
-        ↓
-stage {same}
-        ↓
-prod {same}
+       ├→ image tag
+       ├→ service chart version
+       └→ state version
 ```
 
-- Service-changing PRs increment `Chart.yaml.version`.
-- Images are tagged by version and deployed by digest.
-- `charts/service` is independently versioned and pinned by application charts.
-- Stage/prod state changes use PRs; `CODEOWNERS` applies when branch protection requires owner review.
-- Rollback restores an earlier Git state.
+Service-changing PRs increment this version.
+
+### Base chart
+
+```text
+charts/service version
+       ↓
+application Chart.yaml
+       ↓
+pinned dependency
+```
+
+The base chart is versioned independently from applications.
+
+### Artifact identity
+
+```text
+service source revision
+          ↓
+       version
+          ↓
+      image tag
+          ↓
+       digest
+          ↓
+    environment state
+          ↓
+       workload
+```
+
+Images are published with version tags and deployed by digest.
+
+### Promotion
+
+```text
+dev   {version,digest}
+          ↓ PR
+stage {same}
+          ↓ PR
+prod  {same}
+```
+
+`CODEOWNERS` covers stage/prod state. Enforcement depends on branch protection requiring code-owner review.
+
+Rollback restores an earlier environment state in Git.
 
 ## 7. Performance
 
-| Mechanism | Result |
-|---|---|
-| warm heavy/light/CD runners | agent acquisition ~51s → ~5s |
-| persistent BuildKit state | image + Maven layer reuse |
-| persistent Trivy cache | vulnerability DB reuse |
-| heavy/light split | validation does not queue behind builds |
-| cache-node affinity | host caches stay warm |
-| path filtering | unrelated changes skip service CI |
-| artifact existence checks | skip duplicate publish |
-| state-driven CD | no rebuild/rescan on deploy |
-| current-release check | matching releases skip Helm |
+```text
+warm runners
+    ↓
+~51s → ~5s acquisition
 
-**Release 1.2.14:** CI **1m26s** · CD **1m16s** · combined **2m42s**.
+BuildKit host cache
+    ↓
+reuse image + Maven layers
 
-Jenkins polls GitHub every minute; delivery can include one polling interval before CI and one before CD.
+Trivy host cache
+    ↓
+reuse vulnerability DB
+
+heavy / light runners
+    ↓
+builds do not block validation
+
+path filtering
+    ↓
+unrelated changes skip service CI
+
+artifact checks
+    ↓
+existing image/chart → no republish
+
+state-driven CD
+    ↓
+no rebuild / no rescan
+
+current release check
+    ↓
+same version + digest → no Helm work
+```
+
+**Release 1.2.14**
+
+```text
+Service CI   1m26s
+     ↓
+Deploy       1m16s
+     ↓
+Combined     2m42s
+```
+
+Jenkins polls GitHub every minute, so delivery can include one polling interval before CI and one before CD.
 
 ## 8. Evidence and limits
 
 ```text
-1.2.14 → sha256:2758e8...dcd1824
-       → state commit 75769b4
-       → deploy/main #24
-       → dev-2026.09.21.5
+app 1.2.14
+    ↓
+sha256:2758e8...dcd1824
+    ↓
+state commit 75769b4
+    ↓
+deploy/main #24
+    ↓
+dev-2026.09.21.5
 ```
 
 Implementation: [service](delivery/pipeline/vars/servicePipeline.groovy) · [platform](delivery/Jenkinsfile.platform) · [deploy](delivery/pipeline/vars/deployPipeline.groovy) · [build](delivery/pipeline/resources/lab/delivery/build-image.sh) · [scan](delivery/pipeline/resources/lab/delivery/scan-image.sh) · [publish](delivery/pipeline/resources/lab/delivery/publish-image.sh) · [verify](delivery/pipeline/resources/lab/delivery/validate-release.sh)
 
-**Known limits:** CRITICAL-only gate · SBOM not attested · Cosign transparency-log upload disabled · no-traffic canary warns and passes · app stage/prod/canary paths implemented but not exercised in this lab.
+**Known limits**
+
+```text
+CRITICAL-only vulnerability gate
+SBOM archived, not attested
+Cosign transparency-log upload disabled
+no-traffic canary warns and passes
+app stage/prod/canary paths not exercised in this lab
+```
