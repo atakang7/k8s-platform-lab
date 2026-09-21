@@ -1,59 +1,64 @@
 # Validation
 
-Configuration says what should happen. These checks prove what **did** happen.
+`validation/` checks observable outcomes. It does not own platform configuration.
 
-```mermaid
-flowchart LR
-  C[cluster] --> E[edge] --> O[observability]
-  O --> P[policy] --> A[application]
-  A --> F[full e2e]
-```
+The rule is simple: configuration belongs under `infra/`, `platform/`, `app/`, `delivery/`, or `policies/`; validation only proves that the resulting system behaves as expected.
 
-## Fast map
+## Current checks
 
-| Scope | Command | Proves |
+| Path | Command | Verifies |
 |---|---|---|
-| Kubernetes foundation | `make cluster-validate` | exact 3-node topology, versions, CIDRs, Calico, cross-node Pod traffic, dynamic storage |
-| container | `make container-validate` | build/test, OCI labels, endpoint, probes, file log, metrics, non-root minimal runtime |
-| edge smoke | `make edge-smoke` | Vault/BIND/edge workloads/DNS/HTTPS are alive |
-| edge deep | `make edge-validate` | network boundaries, Vault TLS/audit/policies, signed DNS updates, ExternalDNS lifecycle, trusted ingress |
-| observability | `make observability-smoke` | workloads, PVCs, alert rules, public metrics/Grafana endpoints, Elasticsearch, Fluent Bit |
-| policy | `make policies-smoke` | webhook replicas/TLS/scope/fail-closed behavior and real admission decisions |
-| complete platform | `make e2e-validate` | all of the above plus Jenkins and the current application release |
+| `cluster/` | `make cluster-validate` | node health, networking, cross-node Pod traffic, dynamic storage |
+| `container/` | `make container-validate` | application tests, runtime image, HTTP behavior, non-root execution, OCI metadata |
+| `edge/` | `make edge-smoke` | normal edge health, DNS, HTTPS, Kubernetes workloads |
+| `edge/` | `make edge-validate` | deeper DNS/TLS/security integration and create/delete behavior |
+| `e2e/` | `make e2e-validate` | installed platform, application metrics/logs, and admission policy |
 
-## What the full check expects
+Validation consumes the deployed system. Installation logic stays in the owning subsystem.
 
-```text
-Jenkins controller
-  └── node-3 + bound persistence + trusted hostname + 0 executors
-
-application
-  ├── configured replica count Ready
-  ├── multi-replica profiles spread across node-2 + node-3
-  ├── immutable digest
-  ├── restricted runtime
-  ├── correct PDB behavior for replica count
-  ├── DNS + trusted HTTPS
-  └── request reaches async file log
-
-telemetry
-  ├── application Prometheus target UP
-  ├── JVM metrics present
-  ├── dashboards provisioned
-  └── request log reaches Elasticsearch
-
-admission
-  └── missing CPU / memory requests are rejected by the real API path
-```
-
-The current `dev` profile is one application replica; the validator reads the live desired replica count instead of pretending dev has four. The base/prod profile defines the required four-replica layout. See [requirements coverage](../docs/REQUIREMENTS.md#1-four-pods-two-workers-nginx-health).
-
-## Failure rule
-
-A validation script should answer one question:
+## Validation layers
 
 ```text
-Does the running system match the repository contract?
+configuration
+    │
+    │ reconcile
+    │
+ running system
+    │
+    ├─ cluster validation
+    ├─ container validation
+    ├─ edge validation
+    └─ final end-to-end validation
 ```
 
-It should not mutate permanent desired state to make itself pass. Temporary validation objects are created only where the test requires them and are cleaned up afterward.
+A smoke test answers "is the normal path healthy now?". A deeper validation may deliberately create and remove temporary resources to exercise integration boundaries. Those resources are cleaned before and after the check so an interrupted previous run cannot satisfy a later validation.
+
+## Expected operating order
+
+```bash
+make cluster-validate
+make edge-smoke
+make observability-smoke
+make e2e-validate
+```
+
+Application and admission-policy checks should be run after Jenkins has delivered the application and the policy webhook is installed.
+
+For release verification, confirm at minimum:
+
+- three Kubernetes nodes are Ready;
+- ingress DNS resolves to `192.168.56.200`;
+- HTTPS is trusted for the managed hostnames;
+- Jenkins controller is healthy on node-3;
+- monitoring and logging endpoints respond;
+- `sample-java-app` has four Ready replicas spread across node-2 and node-3;
+- the live application responds through `https://app.lab.test`;
+- the running application image is an immutable digest from CI/CD;
+- the application Pod runtime keeps service-account tokens and service links disabled, uses the RuntimeDefault seccomp profile, and enforces the two-replica disruption budget;
+- the admission webhook accepts complete requests and rejects missing CPU or memory requests.
+
+## Failure handling
+
+Validation scripts should fail on the first broken invariant with enough context to identify the subsystem. They may clean up only resources that the validation itself owns; they must not repair platform state. Repair belongs in the owning subsystem's reconciliation path, then the validator is rerun.
+
+Keep validation data flow explicit. Values that connect checks—such as an end-to-end request ID—are created by the orchestrator and passed as arguments instead of being smuggled through stdout or mutable ambient state.

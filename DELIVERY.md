@@ -1,25 +1,44 @@
 # Delivery
 
-One service contract, one immutable artifact, one Git release record.
+Delivery turns source into one immutable release, records it in Git, and moves that same artifact through environments.
 
-```mermaid
-flowchart LR
-  PR[Pull request] --> CI[validate · build · scan]
-  CI --> M[merge]
-  M --> PUB[publish + sign]
-  PUB --> DEV[state/dev.yaml]
-  DEV --> D[deploy current cluster environment]
-  D --> P1[promotion PR]
-  P1 --> STAGE[state/stage.yaml]
-  STAGE --> P2[promotion PR]
-  P2 --> PROD[state/prod.yaml]
+<div align="center">
+<pre>
+source
+  │
+  ▼
+validate ──► build once ──► scan
+                              │
+                              ▼
+                       publish + sign
+                              │
+                              ▼
+                        state/dev.yaml
+                              │
+                              ▼
+                         deploy + test
+                              │
+                              ▼
+                     dev → stage → prod
+</pre>
+</div>
+
+The two rules that shape the design:
+
+```text
+build once, promote the same artifact
+Git state is the CI → CD handoff
 ```
 
-> A cluster deploys only the environment named by `clusterEnvironment` in [`environments.yaml`](environments.yaml). The repository currently selects **dev**. Stage/prod state and promotion logic are present for equivalent environment clusters; they are not three namespaces deployed into this one lab cluster.
+## Release state
 
-## Release identity
+`environments.yaml` defines the environment order, namespaces, Jenkins-owned releases, chart registry, canary policy and this cluster's `clusterEnvironment`.
 
-A release is exactly:
+```text
+dev ──► stage ──► prod
+```
+
+Each environment records only release identity:
 
 ```yaml
 sample-java-app:
@@ -27,190 +46,209 @@ sample-java-app:
   image: sha256:2758e8...
 ```
 
-- `version` = application version, image tag, and service-chart version.
-- `image` = immutable OCI digest that actually runs.
-- `state/<environment>.yaml` = desired release identity.
+`version` is the application/chart version.  
+`image` is the immutable OCI digest.
 
-The digest, not the mutable tag, is the runtime identity.
+Promotion copies the same `{version,image}` forward. A digest can enter an environment only after it has appeared in the previous environment's Git history.
+
+One cluster deploys one configured environment.
 
 ## CI
 
-```mermaid
-flowchart LR
-  C[checkout] --> V[Validate]
-  V --> B[BuildKit<br/>build + unit tests]
-  B --> S[Trivy<br/>CRITICAL gate + SBOM]
-  S --> P[Publish exact OCI]
-  P --> SG[Cosign digest]
-  SG --> CH[Publish chart]
-  CH --> ST[record state/dev.yaml]
+Every service is a thin call into the shared delivery library:
+
+```groovy
+@Library('lab-delivery') _
+servicePipeline(chart: 'app/chart', context: 'app', path: 'app/')
 ```
 
-### Pull requests
+<div align="center">
+<pre>
+PR
+└── validate → build → scan
 
-For a changed service:
+main
+└── validate → build → scan
+                     │
+                     ▼
+                 publish
+                     │
+             verify digest
+                     │
+                     ▼
+                   sign
+                     │
+              publish chart
+                     │
+                     ▼
+              state/dev.yaml
+</pre>
+</div>
+
+For released services, validation covers the Dockerfile, version change, Helm rendering and a real server-side dry-run through Kubernetes admission.
+
+BuildKit produces a single OCI layout:
 
 ```text
-hadolint
-version must increase
-Helm render + server-side dry-run
-build + unit tests
-Trivy CRITICAL gate
-SBOM archive
+BuildKit ──► app-image/
+               ├── Trivy scans it
+               └── registry receives it
 ```
 
-The webhook service is linted instead of server-dry-run before it has been installed, because its deployment is operator-owned rather than released by the application deploy job.
+The registry digest must match the scanned digest before Cosign signs it.
 
-### Main
+Published versions are immutable. If a tag already exists, it is reused only when its source revision matches the service revision being built.
 
-CI does **not** rebuild after scanning.
+The resource-request webhook uses the same build/scan/publish path, but the operator installs it because it is not listed under `releases`.
+
+## Deploy and promotion
+
+A state change drives CD.
+
+<div align="center">
+<pre>
+state/<env>.yaml
+       │
+       ▼
+promotion + signature checks
+       │
+       ▼
+Helm render + server dry-run
+       │
+       ▼
+deploy exact digest
+       │
+       ▼
+helm test
+       │
+       ▼
+healthy environment tag
+       │
+       ▼
+next promotion PR
+</pre>
+</div>
+
+If the running chart version and image digest already match state, deployment is skipped.
+
+Healthy environment state is tagged:
 
 ```text
-app-image/ OCI layout
-      │
-      ├── Trivy scans these bytes
-      └── skopeo publishes these bytes
-                 │
-                 ▼
-          registry digest
-                 │ exact digest check
-                 ▼
-              Cosign
+dev-2026.09.21.5
+stage-...
+prod-...
 ```
 
-A published version may be reused only when its OCI source-revision label matches the service source revision. Reusing a version for different source fails.
-
-**Code:** [service pipeline](delivery/pipeline/vars/servicePipeline.groovy) · [build](delivery/pipeline/resources/lab/delivery/build-image.sh) · [scan](delivery/pipeline/resources/lab/delivery/scan-image.sh) · [publish](delivery/pipeline/resources/lab/delivery/publish-image.sh)
-
-## CD
-
-```mermaid
-flowchart TB
-  ST[state/<env>.yaml]
-  PROM[promotion history check]
-  SIG[Cosign verification]
-  DRY[Helm render<br/>server dry-run]
-  HELM[helm upgrade --wait]
-  TEST[helm test]
-
-  ST --> PROM --> SIG --> DRY --> HELM --> TEST
-  TEST -->|pass| TAG[healthy environment tag]
-  TEST -->|fail| RB[runtime rollback]
-```
-
-Before deployment, the job verifies:
-
-1. a release entering stage/prod previously existed in the preceding environment's Git history;
-2. the recorded image digest carries the delivery signature;
-3. the rendered release passes the Kubernetes API server and admission chain.
-
-Then the environment-specific CD identity performs `helm upgrade --install --wait --rollback-on-failure` and `helm test`.
-
-A failed Helm test explicitly rolls the release to its previous revision.
-
-## Promotion
+Promotion stays visible in Git:
 
 ```text
-dev healthy
-   │
-   └──► PR: state/stage.yaml
-                 │ review + merge
-                 ▼
-            stage desired state
-                 │
-                 └──► PR: state/prod.yaml
-                               │ code-owner review + merge
-                               ▼
-                          prod desired state
+state/dev.yaml
+     │
+     ▼
+PR → state/stage.yaml
+     │
+     ▼
+PR → state/prod.yaml
 ```
 
-Promotion PRs copy the **same `{version,image}` pair** forward. Nothing is rebuilt between environments.
+`.github/CODEOWNERS` owns stage/prod state and `environments.yaml`. The approval boundary depends on branch protection requiring code-owner review.
 
-Environment tags use:
+### Production canary
+
+Prod currently uses:
+
+```yaml
+weight: 10
+minutes: 5
+maxErrorRate: 0.01
+```
 
 ```text
-dev-2026.09.21.1
-stage-2026.09.21.1
-prod-2026.09.21.1
+new release
+    │
+    ▼
+1 replica · 10% traffic
+    │
+    ▼
+Prometheus ingress 5xx
+    │
+    ├── fail ──► remove canary; stable stays
+    └── pass ──► update stable; remove canary
 ```
 
-A tag identifies the complete state of a healthy environment.
+The first prod install skips canary because no stable release exists yet. If no measurable traffic reaches the canary, the current implementation warns and continues.
 
-## Production canary
+## Delivery performance
 
-When the target environment has a `canary` policy:
+The pipeline is optimized around **not doing work twice**.
 
-```mermaid
-flowchart LR
-  S[stable] --> I[ingress-nginx]
-  C[canary<br/>10%] --> I
-  I --> M[Prometheus]
-  M -->|5xx > 1%| BAD[remove canary<br/>stable untouched]
-  M -->|healthy for 5 min| GOOD[roll stable<br/>remove canary]
-```
-
-The current prod policy is 10% traffic for five minutes with a 1% 5xx threshold.
-
-**Code:** [environments.yaml](environments.yaml) · [deploy.sh](delivery/pipeline/resources/lab/delivery/deploy.sh)
-
-## Zero-downtime mechanics
-
-The application chart combines:
-
-```text
-maxUnavailable: 0
-readiness probe
-startup + liveness probes
-graceful Spring shutdown
-30s pod termination grace
-Helm --wait
-post-deploy smoke test
-```
-
-Prod uses four replicas and `maxSurge: 4`. Dev/stage use one replica and `maxSurge: 1`.
-
-## Identities
-
-```mermaid
-flowchart LR
-  CI[jenkins-ci] -->|server dry-run| API[Kubernetes API]
-  API -. real write denied .-> CI
-
-  CD[jenkins-deploy-<env>] -->|release objects| NS[apps-<env>]
-  CD -. no Secret read .-> NS
-```
-
-| Identity | Runtime authority |
+| Cost | What avoids it |
 |---|---|
-| `jenkins-ci` | server-side dry-run only |
-| `jenkins-deploy-<environment>` | release objects in its one environment namespace |
-| Jenkins controller | no build executor; schedules agent Pods |
+| Kubernetes agent startup | one warm Pod per CI/light/CD execution class |
+| repeated image compilation | persistent BuildKit state on the heavy CI runner |
+| repeated vulnerability DB work | persistent Trivy cache |
+| light checks waiting behind builds | separate `lab-ci-light` runner |
+| unrelated service builds | service-path change filtering |
+| rebuilding for publish/promotion | the scanned OCI artifact is published once and promoted by digest |
+| republishing existing artifacts | source-aware image reuse + idempotent chart publication |
+| redeploying unchanged releases | running version + digest comparison |
+| unnecessary CD runs | deployment reacts to `state/**` / `environments.yaml` changes |
 
-No deployment kubeconfig is stored in Jenkins.
+<div align="center">
+<pre>
+                expensive work
+                     │
+                     ▼
+              lab-ci-runner
+          BuildKit + Trivy caches
+                     │
+          ┌──────────┴──────────┐
+          ▼                     ▼
+ lab-ci-light          lab-cd-runner
+ lint / verification        deployment
+</pre>
+</div>
 
-## Jobs
+Failed work is deliberately retried: service and deploy pipelines run again after an unsuccessful previous build even when the triggering change itself has not changed.
 
-JCasC creates four delivery multibranch jobs:
+This keeps path filtering and idempotency from turning a failed release into a silently skipped one.
 
-| Job | Entry | Role |
-|---|---|---|
-| `sample-java-app` | `app/Jenkinsfile` | service CI |
-| `resource-requests-webhook` | policy Jenkinsfile | policy image CI |
-| `platform` | `delivery/Jenkinsfile.platform` | repository checks + base-chart publish |
-| `deploy` | `delivery/Jenkinsfile.deploy` | state verification + current-environment CD |
+## Trust and failure boundary
 
-Warm-runner jobs exist only to keep one reusable agent of each execution class ready.
+```text
+CI  jenkins-ci
+    └── Kubernetes validation, dry-run only
 
-## Change map
+CD  jenkins-deploy-<environment>
+    └── own environment namespace only
+```
 
-| Change | Source |
+No deployment kubeconfig is stored in Jenkins, and the CD identity cannot read application Secrets.
+
+```text
+validation / scan / signature / promotion failure
+    └── stop before runtime change
+
+Helm readiness or test failure
+    └── restore previous runtime release
+
+bad canary
+    └── remove canary; stable stays
+```
+
+A runtime rollback does not rewrite Git. The desired release remains in state until it is fixed or reverted.
+
+## Source of truth
+
+| Concern | Source |
 |---|---|
-| service CI | [`servicePipeline.groovy`](delivery/pipeline/vars/servicePipeline.groovy) |
-| environment CD | [`deployPipeline.groovy`](delivery/pipeline/vars/deployPipeline.groovy) |
-| shared delivery helpers | [`delivery.groovy`](delivery/pipeline/vars/delivery.groovy) |
-| image build / scan / publish | [`delivery/pipeline/resources/`](delivery/pipeline/resources/lab/delivery/) |
-| Jenkins jobs / agents | [JCasC](platform/jenkins/jcasc/jenkins.yaml) |
-| service runtime | [base chart](charts/service/README.md) |
-| desired releases | [`state/`](state/) |
+| environment model | `environments.yaml` |
+| desired releases | `state/*.yaml` |
+| service CI | `delivery/pipeline/vars/servicePipeline.groovy` |
+| deployment / promotion | `delivery/pipeline/vars/deployPipeline.groovy` |
+| delivery helpers | `delivery/pipeline/vars/delivery.groovy` |
+| build / scan / publish / deploy | `delivery/pipeline/resources/lab/delivery/` |
+| Jenkins execution | `platform/jenkins/jcasc/jenkins.yaml` |
 
-Requirements mapping and deliberate requirement differences live in **[docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)**.
+Implementation details: [`delivery/`](delivery/README.md)  
+Jenkins model: [`platform/jenkins/`](platform/jenkins/README.md)
