@@ -1,65 +1,286 @@
 # Edge orchestration
 
-`infra/edge/` is the operator entry point for the host-side trust and Kubernetes edge bootstrap.
+`infra/edge/` is the operator entry point for host-side trust,
+DNS, TLS, and Kubernetes edge bootstrap.
 
-```text
+## 1. What edge-up actually does
+
+~~~text
 make edge-up
-     │
-     ├──► host Ansible · Vault / BIND9 / CA / resolver
-     ├──► Vault policies + AppRole identities
-     ├──► Kubernetes edge charts/resources
-     └──► DNS + TLS secret delivery
-```
+    │
+    ▼
+┌──────────────────────┐
+│ host foundation      │
+│ Vault · CA · prereqs │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ Vault lifecycle      │
+│ init / unseal        │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ Vault runtime        │
+│ policies · AppRoles  │
+│ DNS / TLS secrets    │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ host DNS             │
+│ BIND9 · resolver     │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ cluster edge         │
+│ VSO · MetalLB        │
+│ ingress · ExternalDNS│
+└──────────┬───────────┘
+           ▼
+     edge ready
+~~~
 
-Shared addresses are in `config.env`. Pinned component versions are in `versions.env`.
+That sequence is encoded in [bin/up](bin/up). It is intentionally one
+operator path instead of a collection of manual Helm and host commands.
 
-## First bootstrap
+## 2. Host / cluster boundary
 
-```bash
+~~~text
+                 OPERATOR HOST
+
+┌────────────────────┐
+│ Vault              │
+│ BIND9              │
+│ local CA           │
+│ system resolver    │
+└─────────┬──────────┘
+          │ trust + secrets
+          ▼
+
+                KUBERNETES
+
+┌────────────────────┐
+│ Vault Secrets      │
+│ Operator           │
+└─────────┬──────────┘
+          │
+          ├──────────────┐
+          │              │
+          ▼              ▼
+┌──────────────┐  ┌──────────────┐
+│ ExternalDNS  │  │ ingress TLS  │
+└──────────────┘  └──────────────┘
+
+┌────────────────────┐
+│ MetalLB            │
+│ ingress-nginx      │
+└────────────────────┘
+~~~
+
+Host-side trust stays outside Kubernetes. Kubernetes receives only the
+runtime material it needs.
+
+## 3. DNS trust path
+
+~~~text
+                Vault
+                  │
+                  ▼
+        secret/edge/dns/tsig
+                  │
+          ┌───────┴────────┐
+          │                │
+          ▼                ▼
+┌─────────────────┐  ┌─────────────────┐
+│ Vault Agent     │  │ VSO             │
+│ host render     │  │ K8s Secret      │
+└────────┬────────┘  └────────┬────────┘
+         │                    │
+         ▼                    ▼
+┌─────────────────┐  ┌─────────────────┐
+│ BIND9 TSIG key  │  │ ExternalDNS     │
+└────────┬────────┘  └────────┬────────┘
+         │                    │
+         └─────────┬──────────┘
+                   ▼
+             signed RFC2136
+                   │
+                   ▼
+                 BIND9
+~~~
+
+Both sides use the same Vault-backed key. BIND9 gets the host runtime
+file through Vault Agent; ExternalDNS gets the matching Kubernetes
+Secret through VSO.
+
+The edge bootstrap waits until Vault Agent has rendered the current key
+before continuing.
+
+## 4. DNS control path
+
+~~~text
+Service / Ingress
+        │
+        │ watched by
+        ▼
+┌────────────────────┐
+│ ExternalDNS        │
+│ zone filter        │
+│ sync policy        │
+└─────────┬──────────┘
+          │ signed update
+          ▼
+┌────────────────────┐
+│ BIND9              │
+│ lab.test    │
+│ authoritative only │
+└─────────┬──────────┘
+          │
+          ▼
+   DNS A records
+~~~
+
+BIND9 is authoritative for the lab zone and does not act as a recursive
+resolver for arbitrary client queries.
+
+## 5. TLS path
+
+~~~text
+local CA
+   │ issues
+   ▼
+wildcard certificate
+   │
+   ▼
+┌────────────────────┐
+│ Vault              │
+│ edge/tls/wildcard  │
+└─────────┬──────────┘
+          ▼
+┌────────────────────┐
+│ VSO                │
+└─────────┬──────────┘
+          ▼
+┌────────────────────┐
+│ Kubernetes TLS     │
+│ Secret             │
+└─────────┬──────────┘
+          ▼
+┌────────────────────┐
+│ ingress-nginx      │
+│ default wildcard   │
+└────────────────────┘
+~~~
+
+The certificate source stays in Vault. Ingress consumes only the
+Kubernetes Secret produced by VSO.
+
+## 6. Traffic path
+
+~~~text
+client
+  │ DNS lookup
+  ▼
+┌────────────────────┐
+│ BIND9              │
+│ returns .200       │
+└─────────┬──────────┘
+          ▼
+┌────────────────────┐
+│ MetalLB            │
+│ VIP 192.168.56.200 │
+└─────────┬──────────┘
+          ▼
+┌────────────────────┐
+│ ingress-nginx      │
+│ worker nodes only  │
+└─────────┬──────────┘
+          ▼
+┌────────────────────┐
+│ managed Service    │
+└────────────────────┘
+~~~
+
+MetalLB owns the edge pool and ingress explicitly uses
+`192.168.56.200`.
+
+## 7. First bootstrap vs normal run
+
+~~~text
+FIRST RUN
+
 make edge-up
-```
+    │
+    ├── initialize Vault
+    ├── retain operator state
+    ├── unseal Vault
+    └── reconcile everything
 
-`edge-up` initializes and unseals the local lab automatically. Root/unseal
-material stays outside Git in the mode-0600 operator-state file configured by
-`VAULT_INIT_OUTPUT`.
 
-## Normal operation
+LATER RUN
 
-```bash
 make edge-up
+    │
+    ├── read operator state
+    ├── unseal if needed
+    └── reconcile everything
+~~~
+
+Vault init and unseal material is written outside Git to the mode-0600
+operator-state file configured by `VAULT_INIT_OUTPUT`.
+
+After a host reboot, use the same command:
+
+~~~bash
+make edge-up
+~~~
+
+No second bootstrap procedure is required.
+
+## 8. Validation path
+
+~~~text
 make edge-smoke
-```
-
-On later runs, `edge-up` automatically unseals Vault from operator state and
-resumes reconciliation without a prompt.
-
-Deep verification:
-
-```bash
-make edge-validate
-```
-
-After a host reboot, run `make edge-up` normally.
-
-## Flow
-
-```text
-Vault · edge/dns/tsig
       │
-      ├──► Vault Agent ──► BIND9 runtime TSIG key
-      └──► VSO ──────────► ExternalDNS TSIG Secret
+      ▼
+quick edge health
 
-ExternalDNS ── signed RFC2136 ──► BIND9
 
-Vault · edge/tls/wildcard ──► VSO ──► ingress TLS Secret
+make edge-validate
+      │
+      ▼
+┌──────────────────────┐
+│ host interfaces      │
+├──────────────────────┤
+│ API not edge-exposed │
+├──────────────────────┤
+│ Vault TLS / Raft     │
+├──────────────────────┤
+│ BIND authoritative   │
+├──────────────────────┤
+│ unsigned DNS denied  │
+├──────────────────────┤
+│ ExternalDNS lifecycle│
+├──────────────────────┤
+│ HTTPS ingress        │
+└──────────────────────┘
+~~~
 
-MetalLB ── assigns + L2-advertises ──► ingress Service VIP · 192.168.56.200
-                                               │
-                                               ▼
-                                      ingress-nginx controllers
-                                               │
-                                               ▼
-                                         managed Services
-```
+Use the smoke check during normal iteration. Use the deep validation
+when proving the complete edge contract.
 
-`bin/up` coordinates state; `lib/` contains narrow Vault/Kubernetes helpers. Do not bypass this layer with persistent manual Helm or host-service changes.
+## 9. Main files
+
+| Path | Responsibility |
+|---|---|
+| `bin/up` | complete edge reconciliation order |
+| `bin/down` | remove edge releases, retain Vault data |
+| `bin/vault-init` | initialize local Vault when needed |
+| `bin/vault-unseal` | unseal from operator-held state |
+| `config.env` | shared addresses and zone values |
+| `versions.env` | pinned edge component versions |
+| `lib/vault.sh` | policies, identities, runtime secrets |
+| `lib/kubernetes.sh` | Kubernetes edge reconciliation |
+| `lib/with-kubeconfig.sh` | scoped cluster access helper |
+
+Kubernetes-resident component details continue in
+**[platform/edge/README.md](../../platform/edge/README.md)**.
