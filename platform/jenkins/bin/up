@@ -405,6 +405,52 @@ remove_agent_pods() {
     --ignore-not-found --wait=true >/dev/null
 }
 
+prime_warm_agents() (
+  set -Eeuo pipefail
+
+  local admin_user
+  local admin_password
+  local crumb_json
+  local crumb_field
+  local crumb
+  local port_forward_pid
+  local job
+
+  phase 'priming Jenkins warm agent pool'
+
+  admin_user="$(kubectl -n "${JENKINS_NAMESPACE}" get secret jenkins-admin \
+    -o jsonpath='{.data.jenkins-admin-user}' | base64 --decode)"
+  admin_password="$(kubectl -n "${JENKINS_NAMESPACE}" get secret jenkins-admin \
+    -o jsonpath='{.data.jenkins-admin-password}' | base64 --decode)"
+
+  kubectl -n "${JENKINS_NAMESPACE}" port-forward service/jenkins 18080:8080 \
+    >/tmp/lab-jenkins-port-forward.log 2>&1 &
+  port_forward_pid=$!
+  trap 'kill "${port_forward_pid}" >/dev/null 2>&1 || true' EXIT
+
+  for _ in {1..30}; do
+    if curl -fsS -u "${admin_user}:${admin_password}" \
+      http://127.0.0.1:18080/login >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+
+  crumb_json="$(curl -fsS -u "${admin_user}:${admin_password}" \
+    http://127.0.0.1:18080/crumbIssuer/api/json)"
+  crumb_field="$(jq -r '.crumbRequestField' <<< "${crumb_json}")"
+  crumb="$(jq -r '.crumb' <<< "${crumb_json}")"
+
+  for job in warm-ci-runner warm-ci-light warm-cd-runner-dev; do
+    curl -fsS -X POST \
+      -u "${admin_user}:${admin_password}" \
+      -H "${crumb_field}: ${crumb}" \
+      "http://127.0.0.1:18080/job/${job}/build" >/dev/null
+  done
+
+  pass 'Jenkins warm agent pool requested'
+)
+
 cluster_reconcile() {
   prepare_namespace
   reconcile_jenkins_approle
@@ -412,8 +458,9 @@ cluster_reconcile() {
   remove_obsolete_delivery_access
   verify_vault_secrets
   verify_agent_cluster_scope
-  remove_agent_pods
   install_jenkins
+  remove_agent_pods
+  prime_warm_agents
 }
 
 main() {
