@@ -1,128 +1,44 @@
 # Platform
 
-`platform/` owns Kubernetes-resident shared services. Host Vault, BIND9, CA, and resolver configuration remain under [`infra/`](../infra/README.md).
-
-## Shared services
+`platform/` owns the Kubernetes-resident shared services.
 
 ```text
-┌────────────────────────── Kubernetes ──────────────────────────┐
-│                                                               │
-│  Edge                  Delivery                Observability   │
-│  ────                  ────────                ─────────────   │
-│  MetalLB               Jenkins controller      Prometheus      │
-│  ingress-nginx         CI/CD agent Pods        AlertManager    │
-│  ExternalDNS                                   Grafana         │
-│  Vault Secrets Operator                        Elasticsearch   │
-│                                                Fluent Bit      │
-│                                                               │
-└───────────────────────────────────────────────────────────────┘
+platform/
+├── edge/            ingress, ExternalDNS, MetalLB, VSO
+├── jenkins/         CI/CD control plane
+├── environment/     environment namespace + deploy identity
+└── observability/   metrics, dashboards and logs
 ```
 
-The application itself stays under `app/`.
+Host-side Vault, BIND9 and CA configuration live under [`infra/`](../infra/README.md).
 
-## Edge
+## Components
 
-```text
-Kubernetes metadata ──► ExternalDNS ── signed RFC2136 ──► BIND9
+| Area | What it owns |
+|---|---|
+| [`edge/`](edge/README.md) | Kubernetes edge: ingress, DNS integration, load balancer and secret delivery |
+| [`jenkins/`](jenkins/README.md) | Jenkins controller, jobs, agents and credentials wiring |
+| `environment/` | the namespace, deploy ServiceAccount and runtime registry secret for this cluster's environment |
+| [`observability/`](observability/README.md) | Prometheus, Grafana, Alertmanager, Elasticsearch and log collection |
 
-host Vault ──► VSO ──► TLS / TSIG / credential Secrets
+The application itself stays under [`app/`](../app/README.md).
 
-MetalLB ── assigns + L2-advertises ──► ingress Service · 192.168.56.200
-                                               │
-                                               ▼
-                                      ingress-nginx ×2
-                                               │
-                         ┌─────────────────────┼─────────────────────┐
-                         ▼                     ▼                     ▼
-                        app                  Jenkins           observability
-```
-
-MetalLB automatic allocation is disabled for the edge pool. ingress-nginx explicitly owns `192.168.56.200` and is spread across workers.
-
-Reconcile through the owning orchestrator:
+## Reconcile
 
 ```bash
 make edge-up
-make edge-smoke
-make edge-validate
-```
-
-Details: [edge/README.md](edge/README.md).
-
-## Jenkins
-
-```text
-Jenkins controller · node-3 · 0 executors
-                  │ Kubernetes plugin
-         ┌────────────────┼────────────────┐
-         ▼                ▼                ▼
-lab-ci-runner     lab-ci-light      lab-cd-runner
-node-3, 1 Pod       node-2, 2 Pods      node-3
-image builds        lint, verification  deployment tools
-```
-
-JCasC owns controller configuration, credentials, Kubernetes cloud configuration, both agent templates, the `lab-delivery` library, and the delivery jobs (see [`delivery/`](../delivery/README.md)).
-
-The CI runner keeps Trivy and BuildKit caches under `/var/lib/lab-ci/` on `node-3`. CI runs as the dry-run-only `jenkins-ci` ServiceAccount, enforced by the `jenkins-ci-dry-run-only` ValidatingAdmissionPolicy. CD runs each environment as that environment's `jenkins-deploy-<environment>`, which can release into its own namespace only.
-
-```bash
 make jenkins-up
-```
-
-Endpoint: `https://jenkins.lab.test`.
-
-Details: [jenkins/README.md](jenkins/README.md).
-
-## Observability
-
-```text
-node-exporter / kube-state-metrics / targets
-                  │ scrape
-                  ▼
-             Prometheus
-              │      │
-          query│      │firing alerts
-              ▼      ▼
-           Grafana  AlertManager
-
-container logs ──► platform Fluent Bit ──┐
-                                         ├──► Elasticsearch ──► Grafana
-app.log ────────► Pod sidecar Fluent Bit ─┘
-```
-
-Prometheus and Elasticsearch run on `node-2`. Grafana, AlertManager, kube-state-metrics, and Prometheus Operator run on `node-3`. Platform Fluent Bit and node-exporter run on every node.
-
-```bash
+make environment-up
 make observability-up
-make observability-smoke
 ```
 
-Details: [observability/README.md](observability/README.md).
+Use the owning component README for configuration details and validation commands.
 
-## Operator access
-
-Human-facing platform access is intentionally easy to inspect without exposing machine credentials:
+## Access
 
 ```bash
 make endpoints
 make credentials
 ```
 
-`make credentials` prints only the Jenkins and Grafana login credentials already materialized in Kubernetes. GitHub, DockerHub, Cosign, runtime registry, Vault AppRole, DNS, and TLS secrets are never printed.
-
-## Change model
-
-```text
-change desired state in Git
-          │
-          ▼
-run owning reconciliation command
-          │
-          ▼
-observe rollout
-          │
-          ▼
-run smoke / validation
-```
-
-Manual Helm upgrades and `kubectl edit` are diagnostic actions only. Persistent changes belong under `platform/` and are reconciled from Git.
+Persistent platform changes belong in Git and are applied through the owning reconciliation command.
