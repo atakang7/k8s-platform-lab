@@ -33,6 +33,6 @@ class HelloControllerTest {
     void getReleaseReturnsAcceptanceMarker() throws Exception {
         mockMvc.perform(get("/api/release"))
                 .andExpect(status().isOk())
-                .andExpect(content().string("Lab CI/CD metrics 1.2.10"));
+                .andExpect(content().string("Lab CI/CD metrics 1.2.11"));
     }
 }
