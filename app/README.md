@@ -1,125 +1,137 @@
 # Application
 
-`app/` contains the sample Java service, its image, and the Helm values that describe how it runs.
+`app/` is the sample Java service used to exercise the platform end to end. It owns the application source, container image, runtime values and application-side logging. Delivery owns how a released image moves between environments.
 
-```text
+<div align="center">
+<pre>
+Client
+  │
+  ▼
 Ingress
   │
   ▼
 sample-java-app Service :80
   │
   ▼
-Java app :9001
-  ├── /api/foos
-  ├── /actuator/health/*
-  └── /actuator/prometheus
-```
-
-Each Pod runs the Java application plus a Fluent Bit sidecar that ships the application's file log to Elasticsearch.
+Pod
+├── Java application :9001
+│   ├── /api/foos
+│   ├── /actuator/health/*
+│   └── /actuator/prometheus
+│
+└── Fluent Bit sidecar
+    └── application file logs → Elasticsearch
+</pre>
+</div>
 
 ## Configuration
 
 | File | Owns |
 |---|---|
 | `Dockerfile` | application image |
-| `chart/Chart.yaml` | application/chart version and base-chart dependency |
-| `chart/values.yaml` | shared/default runtime configuration |
+| `chart/Chart.yaml` | application version and base-chart dependency |
+| `chart/values.yaml` | default runtime configuration |
 | `chart/values-dev.yaml` | dev overrides |
 | `chart/values-stage.yaml` | stage overrides |
-| `Jenkinsfile` | connection to the shared delivery pipeline |
+| `Jenkinsfile` | entry into the shared delivery pipeline |
 
-The chart inherits the shared [service base chart](../charts/service/README.md). Delivery supplies the immutable image digest when releasing it.
+The application chart inherits the shared [service base chart](../charts/service/README.md). Delivery injects the immutable image digest at release time.
 
+## Container image
 
-## Image
+The Dockerfile is structured around the requirements: fast rebuilds, a small runtime image and a non-root process.
 
-The Dockerfile directly addresses the requirements for build speed, image size and security:
+<div align="center">
+<pre>
+pom.xml + Maven wrapper
+        │
+        ▼
+dependency:go-offline
+        │
+        │ cached while dependencies stay unchanged
+        ▼
+     source code
+        │
+        ▼
+   JDK build stage
+        │
+        ▼
+  application.jar
+        │
+        ▼
+minimal JRE runtime
+        │
+        ▼
+   UID/GID 10001
+</pre>
+</div>
 
-```text
-JDK build image
-   │
-   ├── copy Maven wrapper + pom.xml
-   ├── dependency:go-offline
-   │      └── cached until dependencies change
-   ├── copy source
-   └── package
-          │
-          ▼
-       application.jar
-          │
-          ▼
-minimal JRE runtime image
-   └── non-root UID 10001
-```
+Both base images are pinned by digest. The final image contains only the JRE and application JAR — no Maven, JDK, compiler tooling or source tree.
 
-The build and runtime base images are pinned by digest. Only the JAR is copied into the final JRE image, so Maven, the JDK and source code do not ship in the runtime container.
+`.dockerignore` keeps the build context limited to Maven metadata and source files. Combined with the dependency-first Dockerfile layout and persistent BuildKit state in CI, unchanged dependencies remain cacheable across builds.
 
-`.dockerignore` keeps the build context limited to Maven metadata and application source. CI also reuses BuildKit state, so unchanged dependency and build layers do not need to be rebuilt.
+CI also stamps the image with the source repository and source revision through OCI labels.
 
-The runtime process runs as UID/GID `10001`, and CI injects the source repository and revision as OCI labels.
+## Runtime
 
+Environment-specific values change capacity and hostname without changing the artifact:
 
-Current environment differences are intentionally small:
-
-```text
+<div align="center">
+<pre>
 dev      1 replica   app-dev.lab.test
 stage    1 replica   app-stage.lab.test
 prod     4 replicas  app.lab.test
-```
+</pre>
+</div>
 
 Each cluster runs only the environment selected by `clusterEnvironment` in [`environments.yaml`](../environments.yaml).
 
-## Runtime contract
+The runtime contract is defined in the chart values: non-root execution, startup/readiness/liveness probes, CPU and memory requests/limits, Prometheus metrics and worker-only placement.
 
-The application:
+The four-replica configuration is spread across both workers and uses a PodDisruptionBudget with `minAvailable: 2`. Single-replica environments disable that budget.
 
-- runs as non-root UID/GID `10001`;
-- exposes readiness, liveness and startup probes;
-- exports Prometheus metrics;
-- declares CPU and memory requests/limits;
-- uses worker-only placement.
+## Application logging
 
-The four-replica configuration uses topology spreading across the workers and a PodDisruptionBudget with `minAvailable: 2`. Single-replica environment overrides disable that budget.
+The requirements specifically ask to move log forwarding away from stdout because of its performance impact. The application therefore keeps stdout for normal Kubernetes troubleshooting, while the Elasticsearch path is built around an asynchronous file.
 
+<div align="center">
+<pre>
+                    application logger
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+            stdout             AsyncAppender
+       Kubernetes view              │
+                                    ▼
+                           /var/log/app/app.log
+                                    │
+                          daily + size rotation
+                          retained history ≤ 1 GB
+                                    │
+                                    ▼
+                           Fluent Bit sidecar
+                                    │
+                                    ▼
+                        Elasticsearch · app-logs
+</pre>
+</div>
 
-## Application logs
+The implementation is split cleanly between the application and its chart:
 
-The requirements call out the cost of using stdout as the log-forwarding path. The Elasticsearch path therefore uses an asynchronous file instead:
+| Requirement | Implementation |
+|---|---|
+| asynchronous file writes | Logback `AsyncAppender` |
+| daily rotation | `SizeAndTimeBasedRollingPolicy` date pattern |
+| bounded files | 100 MB per rolled file |
+| maximum retained logs | `totalSizeCap: 1GB` |
+| forwarding | Fluent Bit sidecar tails the shared log volume |
+| destination | Elasticsearch index `app-logs` |
 
-```text
-application logger
-      │
-      ├──► stdout
-      │     Kubernetes-native troubleshooting
-      │
-      └──► AsyncAppender
-                │
-                ▼
-        /var/log/app/app.log
-                │
-        daily + size rotation
-        total history ≤ 1 GB
-                │
-                ▼
-        Fluent Bit sidecar
-                │
-                ▼
-        Elasticsearch · app-logs
-```
+The Java container and Fluent Bit share `/var/log/app` through an `emptyDir`. Elasticsearch forwarding therefore does not depend on stdout.
 
-`logback-spring.xml` implements the file side:
+## Check and release
 
-- `AsyncAppender` keeps file I/O off the request thread;
-- `SizeAndTimeBasedRollingPolicy` rotates by date;
-- each file is capped at 100 MB;
-- retained log history is capped at 1 GB.
-
-The application and Fluent Bit sidecar share `/var/log/app` through an `emptyDir`. Fluent Bit tails the files and sends them directly to the `app-logs` Elasticsearch index.
-
-stdout is still kept as the normal Kubernetes console stream, but Elasticsearch forwarding does not depend on stdout.
-
-
-## Local checks
+Local application checks:
 
 ```bash
 cd app
@@ -127,14 +139,12 @@ cd app
 ./mvnw package
 ```
 
-From the repository root:
+Container contract:
 
 ```bash
 make container-validate
 ```
 
-## Release
+The release version is `version` in `chart/Chart.yaml`. CI builds, tests, scans and publishes the image/chart, then records the immutable release in Git state.
 
-The application version is `version` in `chart/Chart.yaml`.
-
-Service CI builds, tests, scans and publishes the image/chart, then records the release in Git state. Deployment and promotion are owned by [DELIVERY.md](../DELIVERY.md); application configuration should not be changed with ad-hoc `kubectl` edits.
+See [DELIVERY.md](../DELIVERY.md) for deployment and promotion.
