@@ -346,7 +346,7 @@ jobs:
               }
             }
           }
-          logRotator { numToKeep(2) }
+          logRotator(-1, 2)
           definition {
             cps {
               script(scriptBody)
