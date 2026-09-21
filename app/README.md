@@ -1,140 +1,346 @@
 # Application
 
-The sample Java service is the workload used to exercise the platform end to end: container build, Kubernetes runtime, metrics, logs and delivery.
+The sample Java service exercises the full platform: image build,
+Kubernetes runtime, ingress, health, metrics, logs, and delivery.
 
-<div align="center">
-<pre>
-                         app.lab.test
-                                │
-                                ▼
-                         ingress-nginx
-                                │
-                                ▼
-                      sample-java-app :80
-                                │
-                                ▼
-                     ┌──────────────────┐
-                     │       Pod        │
-                     │                  │
-                     │  Java app :9001  │
-                     │        │         │
-                     │        └──────┐  │
-                     │               ▼  │
-                     │          Fluent Bit
-                     └───────────────┬──┘
-                                     │
-                                     ▼
-                               Elasticsearch
-</pre>
-</div>
+## 1. Runtime path
 
-## Image
+~~~text
+app*.lab.test
+        │
+        ▼
+┌────────────────────┐
+│ ingress-nginx      │
+└─────────┬──────────┘
+          ▼
+┌────────────────────┐
+│ Service :80        │
+└─────────┬──────────┘
+          ▼
+┌────────────────────┐
+│ application Pod    │
+│ Java :9001         │
+└─────────┬──────────┘
+          │
+     ┌────┴─────┐
+     │          │
+     ▼          ▼
+ response     metrics
+                │
+                ▼
+          Prometheus
+~~~
 
-```text
+The application endpoint is:
+
+~~~text
+GET /api/foos?val=<value>
+        │
+        ▼
+QueryStringValue: <value>
+~~~
+
+The same request value is also written to the application log.
+
+## 2. Image build
+
+~~~text
 pom.xml + Maven wrapper
           │
           ▼
-  dependency:go-offline      ← cache dependencies
+dependency:go-offline
+          │
+          │ cached separately
+          ▼
+application source
           │
           ▼
-       source
+JDK build stage
           │
           ▼
-      JDK build
+unit tests + package
           │
           ▼
-   application.jar
+application.jar
           │
           ▼
-   minimal JRE image          ← runtime only
+minimal JRE stage
           │
           ▼
-      UID 10001
-```
+non-root UID 10001
+~~~
 
-- multi-stage build: JDK for build, JRE for runtime
-- base images pinned by digest
-- dependency layer separated from source for BuildKit cache reuse
-- final image contains only the JRE + application JAR
-- runtime is non-root; source revision is recorded in OCI labels
+The runtime image contains only the JRE and application JAR.
 
-`.dockerignore` limits the build context to Maven metadata and application source.
+~~~text
+BUILD IMAGE
+JDK + Maven
+source + tests
+     │
+     │ COPY jar only
+     ▼
+RUNTIME IMAGE
+minimal JRE
+application.jar
+UID 10001
+~~~
 
-## Runtime
+Both base images are pinned by digest. Dependency metadata is copied
+before source so BuildKit can reuse the Maven dependency layer.
 
-```text
-dev      1 replica   app-dev.lab.test
-stage    1 replica   app-stage.lab.test
-prod     4 replicas  app.lab.test
-```
+OCI labels record the source repository and source revision.
 
-Each cluster runs only its `clusterEnvironment`.
+**Source:** [Dockerfile](Dockerfile)
 
-The chart defines the runtime contract:
+## 3. Environment profiles
 
-```text
-startup / readiness / liveness probes
-CPU + memory requests and limits
-non-root + RuntimeDefault seccomp
-worker-only placement
-Prometheus /actuator/prometheus
-```
+~~~text
+dev
+1 replica
+app-dev.lab.test
+PDB disabled
+maxSurge: 1
 
-Prod spreads four replicas across both workers and uses `minAvailable: 2`.  
-Single-replica environments disable the disruption budget.
 
-## Logging
+stage
+1 replica
+app-stage.lab.test
+PDB disabled
+maxSurge: 1
 
-The requirements require application logs to avoid stdout as the Elasticsearch forwarding path, write asynchronously, rotate daily and stay below 1 GB.
 
-<div align="center">
-<pre>
-                         application logger
-                         /              \
-                        /                \
-                       ▼                  ▼
-                    stdout          AsyncAppender
-                                             │
-                                             ▼
-                                  /var/log/app/app.log
-                                             │
-                                   daily + 100 MB rolls
-                                   total history ≤ 1 GB
-                                             │
-                                             ▼
-                                      Fluent Bit
-                                             │
-                                             ▼
-                               Elasticsearch · app-logs
-</pre>
-</div>
+prod / base profile
+4 replicas
+app.lab.test
+PDB minAvailable: 2
+maxSurge: 4
+~~~
 
-`logback-spring.xml` owns asynchronous file writing and rotation.  
-The chart mounts the shared `/var/log/app` volume and configures the Fluent Bit sidecar.
+Each cluster runs only the profile matching its
+`clusterEnvironment`.
 
-stdout remains available for normal Kubernetes troubleshooting; Elasticsearch forwarding reads the file instead.
+The four-replica base/prod profile spreads Pods across the two workers.
 
-## Configuration
+## 4. Pod runtime contract
+
+~~~text
+application Pod
+      │
+      ├── worker-only placement
+      ├── CPU / memory requests
+      ├── CPU / memory limits
+      ├── non-root UID 10001
+      ├── no privilege escalation
+      ├── drop ALL capabilities
+      ├── RuntimeDefault seccomp
+      └── health probes
+~~~
+
+Resources:
+
+~~~text
+request   250m CPU / 256Mi
+limit     500m CPU / 512Mi
+~~~
+
+The shared service chart also disables unnecessary service-account token
+mounting and service links.
+
+## 5. Health path
+
+~~~text
+Pod starts
+   │
+   ▼
+startup probe
+/liveness
+   │ pass
+   ▼
+readiness probe
+/readiness
+   │ pass
+   ▼
+Service traffic
+   │
+   ▼
+liveness probe
+/liveness
+~~~
+
+Readiness controls traffic. Liveness restarts a broken process. Startup
+gives the JVM time to initialize before normal liveness behavior applies.
+
+## 6. Rolling update
+
+~~~text
+stable Pods
+    │
+    ▼
+new Pod starts
+    │
+    ▼
+startup passes
+    │
+    ▼
+readiness passes
+    │
+    ▼
+new Pod receives traffic
+    │
+    ▼
+old Pod terminates
+~~~
+
+The base/prod profile uses:
+
+~~~text
+maxUnavailable: 0
+maxSurge: 4
+~~~
+
+Dev/stage keep the same zero-unavailable rule with `maxSurge: 1`.
+
+## 7. Logging
+
+The Elasticsearch forwarding path does not read stdout.
+
+~~~text
+                  application logger
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+              ▼                     ▼
+        CONSOLE appender       ASYNC_FILE
+              │                     │
+              ▼                     ▼
+        Kubernetes stdout   RollingFileAppender
+                                  │
+                                  ▼
+                         /var/log/app/app.log
+                                  │
+                         ┌────────┴────────┐
+                         │ rotation policy │
+                         │ daily           │
+                         │ max file 100 MB │
+                         │ total cap 1 GB  │
+                         └────────┬────────┘
+                                  ▼
+                         Fluent Bit sidecar
+                                  │
+                                  ▼
+                         Elasticsearch
+                         app-logs
+~~~
+
+stdout remains available for ordinary Kubernetes troubleshooting. The
+explicit Elasticsearch path uses the asynchronous file appender.
+
+**Source:** [logback-spring.xml](src/main/resources/logback-spring.xml)
+
+## 8. Shared log volume
+
+~~~text
+┌──────────────────────────────┐
+│ application Pod              │
+│                              │
+│  ┌────────────┐              │
+│  │ Java app   │              │
+│  └─────┬──────┘              │
+│        │ writes              │
+│        ▼                     │
+│  /var/log/app                │
+│  emptyDir                    │
+│        │                     │
+│        │ reads               │
+│  ┌─────▼──────┐              │
+│  │ Fluent Bit │              │
+│  │ sidecar    │              │
+│  └─────┬──────┘              │
+└────────┼─────────────────────┘
+         ▼
+   Elasticsearch
+~~~
+
+The application and Fluent Bit sidecar share the same `emptyDir`
+volume.
+
+## 9. Metrics
+
+~~~text
+Java app
+   │
+   ▼
+/actuator/prometheus
+   │
+   ▼
+ServiceMonitor
+   │
+   ▼
+Prometheus
+   │
+   ▼
+Grafana
+~~~
+
+Metrics are enabled by the application values and consumed by the
+platform observability stack.
+
+## 10. Delivery boundary
+
+~~~text
+application source
+      │
+      ▼
+Jenkins CI
+      │
+      ▼
+image digest
+      │
+      ▼
+state/<env>.yaml
+      │
+      ▼
+delivery injects digest
+      │
+      ▼
+service chart
+      │
+      ▼
+running Pod
+~~~
+
+The chart never chooses a mutable image tag at deploy time. Delivery
+injects the immutable digest recorded in environment state.
+
+See **[DELIVERY.md](../DELIVERY.md)** for the release path.
+
+## 11. Main files
 
 | Change | File |
 |---|---|
+| application code | `src/` |
 | image build | `Dockerfile` |
 | application version | `chart/Chart.yaml` |
-| runtime / logging | `chart/values.yaml` |
-| dev / stage differences | `chart/values-<environment>.yaml` |
-| application logging policy | `src/main/resources/logback-spring.xml` |
+| base/prod runtime | `chart/values.yaml` |
+| dev overrides | `chart/values-dev.yaml` |
+| stage overrides | `chart/values-stage.yaml` |
+| logging policy | `src/main/resources/logback-spring.xml` |
 | CI entry point | `Jenkinsfile` |
 
-The chart inherits [`charts/service`](../charts/service/README.md). Delivery injects the immutable image digest at release time.
+The application chart inherits the shared
+**[service chart](../charts/service/README.md)**.
 
-## Verify
+## 12. Verify
 
-```bash
+Run unit tests:
+
+~~~bash
 cd app
 ./mvnw test
+~~~
 
-# repository root
+Validate the built container from repository root:
+
+~~~bash
 make container-validate
-```
-
-Release and promotion are documented in [DELIVERY.md](../DELIVERY.md).
+~~~
