@@ -134,11 +134,16 @@ BuildKit build
    │
    ├─ Maven dependency restore
    │
-   ├─ mvnw package
-   │    ├─ Spring context test
+   ├─ Unit / slice tests
+   │    ├─ JUnit 5
+   │    ├─ @WebMvcTest(HelloController)
    │    ├─ GET /api/foos → 200
    │    ├─ missing val → 400
    │    └─ GET /api/release → expected release marker
+   │
+   ├─ Spring context test
+   │
+   ├─ mvnw package
    │
    └─ package application.jar
           │
@@ -165,7 +170,8 @@ Publish                    main only
 | Stage | What matters |
 |---|---|
 | **Validate** | Rejects invalid Dockerfile, invalid version progression, invalid Helm/admission output. |
-| **Java test/package** | `mvnw package` runs JUnit/Spring tests and produces the executable JAR. This happens inside the BuildKit stage, so Jenkins reports it under **Build** rather than as a separate stage. |
+| **Unit / slice tests** | JUnit 5 + `@WebMvcTest` exercise controller behavior; a separate `@SpringBootTest` verifies the application context. |
+| **Package** | `mvnw package` runs the tests and produces the executable JAR. This happens inside BuildKit, so Jenkins reports test/package time inside **Build** rather than as a separate Jenkins stage. |
 | **Image build** | The tested JAR is copied into the Java 21 runtime image and emitted once as `app-image/`. |
 | **Scan** | Any CRITICAL vulnerability fails CI; the same report produces the archived CycloneDX SBOM. |
 | **Publish** | Pushes the already-scanned OCI layout. Registry digest must match the scanned manifest digest. |
@@ -176,7 +182,7 @@ Publish                    main only
 
 ```text
 invalid Dockerfile/version/chart ──► stop
-Java test/package failure         ──► image build fails
+unit / slice / context test fail ──► image build fails
 CRITICAL vulnerability            ──► stop before publish
 version reused by other source   ──► reject
 registry digest changed          ──► reject
