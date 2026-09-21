@@ -3,6 +3,9 @@
 A production-style Kubernetes lab where the host, VMs, edge, delivery,
 observability, and policy layers are all managed from this repository.
 
+> **Reviewing the requirements?** Start with **[REQUIREMENTS.md](REQUIREMENTS.md)**: every
+> requirement, where it lives, and the short answers on one page.
+
 ## Repository map
 
 Each folder has its own detailed guide.
@@ -380,34 +383,8 @@ validation, recovery, rollback, stop, and teardown.
 
 ## 8. Case requirement notes
 
-A few requirements are implemented differently from their literal wording.
-These are deliberate boundaries rather than missing runtime paths.
-
-~~~text
-CASE WORDING                 REPOSITORY DESIGN
-────────────────────────────────────────────────────────────────────────────
-Ansible applies manifests  → Ansible provisions the cluster; Helm releases apps
-Jenkins LoadBalancer       → Jenkins ClusterIP → ingress-nginx → MetalLB
-Expose Elasticsearch       → Elasticsearch stays internal → Grafana exposes logs
-App X outranks App Y       → PriorityClass + HPA sample manifest
-~~~
-
-- **Application deployment:** Ansible owns host and Kubernetes provisioning.
-  Workload releases stay in Helm so release history, values, tests, wait/rollback,
-  and chart lifecycle remain in one native deployment path. See
-  [cluster automation](infra/ansible/README.md) and [delivery](delivery/README.md).
-- **Jenkins exposure:** Jenkins is a ClusterIP service behind the same
-  ingress-nginx + MetalLB edge used by the rest of the platform rather than
-  consuming a dedicated LoadBalancer. See [Jenkins](platform/jenkins/README.md).
-- **Elasticsearch exposure:** Elasticsearch is intentionally cluster-internal.
-  Operators query logs through Grafana, keeping the datastore itself off the
-  external ingress surface. See
-  [observability](platform/observability/README.md).
-- **App X / App Y:** the scheduling answer is provided as a standalone,
-  non-applied case artifact:
-  [docs/case/app-x-app-y.yaml](docs/case/app-x-app-y.yaml). App X has a higher
-  PriorityClass and an HPA; under resource pressure its pending pods may preempt
-  lower-priority App Y pods.
+Requirement-by-requirement map, the deliberate differences from the requirements
+wording, and the short answers: **[REQUIREMENTS.md](REQUIREMENTS.md)**.
 
 ## Host requirements
 
