@@ -166,16 +166,6 @@ jenkins:
                 serviceAccountName: jenkins-ci
                 enableServiceLinks: false
                 restartPolicy: Never
-                # Off node-3: its memory is the image-build runner's, which is pinned
-                # there with its caches.
-                affinity:
-                  nodeAffinity:
-                    requiredDuringSchedulingIgnoredDuringExecution:
-                      nodeSelectorTerms:
-                        - matchExpressions:
-                            - key: kubernetes.io/hostname
-                              operator: NotIn
-                              values: ["node-3"]
                 containers:
                   - name: jnlp
                     resources:
