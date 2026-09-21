@@ -7,7 +7,7 @@ The delivery contract is simple:
 ```text
                                  ┌────────────── PR ──────────────┐
                                  │                                │
-Git change ──► Jenkins discovery ├─► Validate ─► Build ─► Scan ──┤
+Java change ─► Jenkins discovery ├─► Validate ─► Maven test/package ─► Image build ─► Scan ──┤
                                  │                                │
                                  └───────────── main ─────────────┘
                                                      │
@@ -55,7 +55,8 @@ CI produces the artifact. Git state selects it. CD never rebuilds it.
 | | PR | `main` |
 |---|:---:|:---:|
 | Validate | ✓ | ✓ |
-| Build + tests | ✓ | ✓ |
+| Java tests + package | ✓ | ✓ |
+| Container image build | ✓ | ✓ |
 | Trivy + SBOM | ✓ | ✓ |
 | Publish image/chart | — | ✓ |
 | Cosign | — | ✓ |
@@ -107,20 +108,32 @@ Jenkins discovers GitHub changes by one-minute multibranch polling because this 
 
 ---
 
-## 2. CI Pipeline
+## 2. Java CI
 
 ```text
 Checkout
    │
    ▼
 Validate
-   ├─ hadolint
+   ├─ Dockerfile lint
    ├─ PR version gate
    └─ Helm render + server-side dry-run
    │
    ▼
-Build
-   └─ rootless BuildKit
+BuildKit build
+   │
+   ├─ Maven dependency restore
+   │
+   ├─ mvnw package
+   │    ├─ Spring context test
+   │    ├─ GET /api/foos → 200
+   │    ├─ missing val → 400
+   │    └─ GET /api/release → expected release marker
+   │
+   └─ package application.jar
+          │
+          ▼
+   Java 21 runtime image
           │
           ▼
       OCI layout
@@ -142,7 +155,8 @@ Publish                    main only
 | Stage | What matters |
 |---|---|
 | **Validate** | Rejects invalid Dockerfile, invalid version progression, invalid Helm/admission output. |
-| **Build** | One BuildKit build creates `app-image/`; application tests run inside the build. |
+| **Java test/package** | `mvnw package` runs JUnit/Spring tests and produces the executable JAR. This happens inside the BuildKit stage, so Jenkins reports it under **Build** rather than as a separate stage. |
+| **Image build** | The tested JAR is copied into the Java 21 runtime image and emitted once as `app-image/`. |
 | **Scan** | Any CRITICAL vulnerability fails CI; the same report produces the archived CycloneDX SBOM. |
 | **Publish** | Pushes the already-scanned OCI layout. Registry digest must match the scanned manifest digest. |
 | **Sign** | Cosign signs the immutable repository digest. |
@@ -152,7 +166,8 @@ Publish                    main only
 
 ```text
 invalid Dockerfile/version/chart ──► stop
-CRITICAL vulnerability           ──► stop before publish
+Java test/package failure         ──► image build fails
+CRITICAL vulnerability            ──► stop before publish
 version reused by other source   ──► reject
 registry digest changed          ──► reject
 state push race                  ──► refetch main + retry
@@ -204,7 +219,7 @@ Heavy CI is pinned to the node that owns its caches. BuildKit remains rootless.
 CI #27
 ├─ Checkout       3.6s
 ├─ Validate       3.8s
-├─ Build           38s
+├─ Build           38s   ← Maven tests/package + image build
 ├─ Scan           3.7s
 └─ Publish          30s
                   ─────
