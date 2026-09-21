@@ -3,7 +3,22 @@
 A production-style Kubernetes lab where the host, VMs, edge, delivery,
 observability, and policy layers are all managed from this repository.
 
-**Contents**
+## Repository map
+
+Each folder has its own detailed guide.
+
+- [infra/](infra/README.md) — VMs, kubeadm, Ansible, host DNS, Vault.
+- [platform/](platform/README.md) — edge, Jenkins, environment, observability.
+- [delivery/](delivery/README.md) — Jenkins pipelines and release scripts.
+- [state/](state/) — desired version + image digest per environment.
+- [app/](app/README.md) — Java app, image, runtime values.
+- [charts/service/](charts/service/README.md) — reusable service chart.
+- [policies/](policies/README.md) — admission controls.
+- [validation/](validation/README.md) — platform and end-to-end proof.
+- [DELIVERY.md](DELIVERY.md) — release and promotion model.
+- [RUNBOOK.md](RUNBOOK.md) — commands, credentials, recovery, teardown.
+
+## Contents
 
 1. [Physical architecture](#1-physical-architecture)
 2. [External request path](#2-external-request-path)
@@ -13,7 +28,7 @@ observability, and policy layers are all managed from this repository.
 6. [Observability path](#6-observability-path)
 7. [Operator path](#7-operator-path)
 
-[Repository map](#repository-map) · [Host requirements](#host-requirements)
+[Host requirements](#host-requirements)
 
 ## 1. Physical architecture
 
@@ -361,17 +376,6 @@ make e2e-validate
 
 Use **[RUNBOOK.md](RUNBOOK.md)** for credentials, exact commands,
 validation, recovery, rollback, stop, and teardown.
-
-## Repository map
-
-- [infra/](infra/README.md) — VMs, kubeadm, Ansible, host DNS, Vault.
-- [platform/](platform/README.md) — edge, Jenkins, environment, observability.
-- [delivery/](delivery/README.md) — Jenkins pipelines and release scripts.
-- [state/](state/) — desired version + image digest per environment.
-- [app/](app/README.md) — Java app, image, runtime values.
-- [charts/service/](charts/service/README.md) — reusable service chart.
-- [policies/](policies/README.md) — admission controls.
-- [validation/](validation/README.md) — platform and end-to-end proof.
 
 ## Host requirements
 
