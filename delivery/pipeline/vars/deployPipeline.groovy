@@ -60,10 +60,16 @@ def call() {
                         options { timeout(time: 30, unit: 'MINUTES') }
                         steps {
                             script {
-                                // A template per build is never reused, so its Pod must not
-                                // idle: cd-runner's idleMinutes would hold node memory.
-                                podTemplate(inheritFrom: 'cd-runner', serviceAccount: "jenkins-deploy-${env.CLUSTER_ENVIRONMENT}", idleMinutes: 0) {
-                                    node(POD_LABEL) {
+                                String deployLabel = "lab-cd-runner-${env.CLUSTER_ENVIRONMENT}"
+                                // Fixed environment-specific label: the same authorized Pod can
+                                // stay warm and be reused by later deploys on this cluster.
+                                podTemplate(
+                                    inheritFrom: 'cd-runner',
+                                    label: deployLabel,
+                                    serviceAccount: "jenkins-deploy-${env.CLUSTER_ENVIRONMENT}",
+                                    idleMinutes: 10
+                                ) {
+                                    node(deployLabel) {
                                         checkout scm
                                         delivery.installScripts()
                                         Map config = delivery.environments()
