@@ -198,52 +198,52 @@ Environment-specific configuration may change. The application artifact does not
 
 ## 4. Jenkins execution model
 
-The Jenkins controller has zero executors. Work runs on Kubernetes agent Pods.
+Jenkins orchestrates delivery; Kubernetes agent Pods execute it.
 
-### Multibranch delivery jobs
-
-Four multibranch jobs use three pipeline implementations:
-
-| Job | Implementation | Responsibility |
-|---|---|---|
-| `sample-java-app` | `servicePipeline` | application CI |
-| `resource-requests-webhook` | `servicePipeline` | webhook CI |
-| `platform` | `Jenkinsfile.platform` | repository/platform checks and base-chart publication |
-| `deploy` | `deployPipeline` | state verification and application CD |
-
-The service jobs share the same library implementation; service-specific Jenkinsfiles are intentionally small.
-
-### Agent classes
+The controller owns the queue, multibranch jobs, JCasC and the `lab-delivery` shared library. Its built-in node is disabled for Pipeline execution (`numExecutors: 0`), and the Helm chart's static agent is disabled. Execution capacity comes from Kubernetes-plugin Pods.
 
 ~~~text
-                    Jenkins controller
-                      0 executors
-                           │
-          ┌────────────────┼────────────────┐
-          ▼                ▼                ▼
- lab-ci-runner     lab-ci-light     lab-cd-runner
- build + scan        lint + verify      deployment
- node-3              lightweight        node-3
- persistent caches                      environment identity
+Jenkins controller
+      │
+      │ schedules
+      ▼
+Kubernetes plugin
+      │
+      ├── lab-ci-runner       build + scan
+      ├── lab-ci-light        lint + verify
+      └── lab-cd-runner-<env> deployment
 ~~~
 
-| Agent | Used for | Important property |
-|---|---|---|
-| `lab-ci-runner` | service builds and scans | persistent BuildKit + Trivy cache on node-3 |
-| `lab-ci-light` | platform lint and deployment verification | does not queue behind image builds |
-| `lab-cd-runner-<environment>` | deployment | runs as `jenkins-deploy-<environment>` |
+Four multibranch delivery jobs use three pipeline implementations:
 
-JCasC also creates three small warm-runner jobs:
+| Job | Implementation | Execution path |
+|---|---|---|
+| `sample-java-app` | `servicePipeline` | heavy CI |
+| `resource-requests-webhook` | `servicePipeline` | heavy CI |
+| `platform` | `Jenkinsfile.platform` | light CI |
+| `deploy` | `deployPipeline` | light verification → environment CD |
+
+The execution identities are different by purpose:
 
 ~~~text
-warm-ci-runner
-warm-ci-light
-warm-cd-runner-dev
+CI
+lab-ci-runner / lab-ci-light
+        │
+        ▼
+jenkins-ci
+dry-run validation only
+
+CD
+lab-cd-runner-<environment>
+        │
+        ▼
+jenkins-deploy-<environment>
+environment namespace only
 ~~~
 
-They create demand once per minute so one Pod of each execution class can remain reusable during its ten-minute idle window.
+JCasC also creates one warm job for each active execution class so the Kubernetes plugin can keep reusable agent Pods during their idle window.
 
-The Kubernetes cloud is capped at three agent Pods.
+Controller topology, agent Pod composition, Vault wiring, warm-agent behavior and reconciliation are documented in [`platform/jenkins/README.md`](platform/jenkins/README.md).
 
 ---
 
@@ -832,7 +832,7 @@ It composes the lower-level checks and proves the running platform contract, inc
 
 - cluster and edge validation;
 - admission policy behavior;
-- Jenkins placement, persistence, HTTPS and zero controller executors;
+- Jenkins placement, persistence, HTTPS and built-in-node execution policy;
 - immutable application image deployment;
 - application runtime security and replica placement;
 - DNS and HTTPS request path;
