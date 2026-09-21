@@ -1,71 +1,258 @@
 # Policies
 
-`policies/` owns admission controls that reject invalid Kubernetes desired state before it is persisted.
+`policies/` owns admission controls that reject invalid Kubernetes
+desired state before it is persisted.
 
-## Resource request policy
+## 1. Admission boundary
 
-The current policy is the custom validating webhook under `resource-requests-webhook/`.
-
-```text
+~~~text
 Deployment CREATE / UPDATE
            │
            ▼
-Kubernetes API server
-           │ AdmissionReview v1 · HTTPS
+┌──────────────────────┐
+│ Kubernetes API       │
+└──────────┬───────────┘
+           │ AdmissionReview v1
            ▼
-resource-requests-webhook
-           │ inspect containers + init containers
-      ┌────┴────┐
-      │         │
-      ▼         ▼
- CPU + RAM   missing either
-      │         │
-      ▼         ▼
-    allow      deny
-```
+┌──────────────────────┐
+│ resource-request     │
+│ validating webhook   │
+└──────────┬───────────┘
+           │
+      ┌────┴─────┐
+      │          │
+      ▼          ▼
+all requests   missing CPU
+present        or memory
+      │          │
+      ▼          ▼
+    ALLOW       DENY
+~~~
 
-The webhook applies only to namespaces carrying `delivery.lab.test/environment`. The release namespace and Kubernetes system namespaces are also excluded explicitly by namespace name, so accidentally adding the environment label cannot deadlock the webhook or core control-plane workloads.
+The webhook checks both regular containers and init containers.
 
-`failurePolicy: Fail` makes in-scope Deployment writes fail closed when the webhook cannot answer.
+## 2. Scope
 
-## Build and test
+~~~text
+namespace
+   │
+   ▼
+delivery.lab.test/environment
+   │
+   ├── present ──► policy applies
+   │
+   └── absent  ──► policy ignored
+~~~
 
-```bash
+The webhook also excludes its own release namespace and Kubernetes
+system namespaces by name.
+
+~~~text
+policy-system       excluded
+kube-system         excluded
+other system ns     excluded
+apps-<env>          in scope
+~~~
+
+This prevents an accidental environment label from deadlocking the
+webhook itself or core cluster components.
+
+## 3. Fail-closed behavior
+
+~~~text
+in-scope Deployment
+        │
+        ▼
+API calls webhook
+        │
+    ┌───┴────────┐
+    │            │
+ response      no response
+    │            │
+    ▼            ▼
+allow/deny    FAIL CLOSED
+~~~
+
+`failurePolicy: Fail` means the API rejects in-scope writes when the
+webhook cannot answer.
+
+## 4. Build and release
+
+~~~text
+webhook source
+     │
+     ▼
+go test ./...
+     │
+     ▼
+BuildKit
+     │
+     ▼
+Trivy
+     │
+     ▼
+publish immutable image
+     │
+     ▼
+state/<env>.yaml
+     │
+     ▼
+operator installs digest
+~~~
+
+Delivery builds, scans, publishes, and records the webhook like a
+service.
+
+It is not listed under Jenkins-managed `releases`, so deployment is
+operator-owned:
+
+~~~bash
+make policies-up
+~~~
+
+The operator reads the digest for this cluster's
+`clusterEnvironment`.
+
+## 5. Serving TLS
+
+~~~text
+first install
+     │
+     ▼
+generate private CA
+     │
+     ▼
+generate Service cert
+     │
+     ├──────────────┐
+     ▼              ▼
+TLS Secret      webhook caBundle
+     │              │
+     └──────┬───────┘
+            ▼
+       HTTPS admission
+~~~
+
+On normal upgrades:
+
+~~~text
+existing TLS Secret
+        │
+        ▼
+reuse serving identity
+        │
+        ▼
+stable caBundle
+~~~
+
+Deleting the TLS Secret intentionally causes the next reconciliation to
+generate a new serving identity.
+
+## 6. Runtime shape
+
+~~~text
+policy-system
+     │
+     ▼
+┌──────────────────────┐
+│ webhook Deployment   │
+│ 2 replicas           │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ ClusterIP Service    │
+│ 443 → 8443 HTTPS     │
+└──────────┬───────────┘
+           │
+           ▼
+ValidatingWebhookConfiguration
+~~~
+
+The replicas are spread across workers and protected by a disruption
+budget.
+
+The runtime image is deployed by immutable digest.
+
+## 7. Smoke validation
+
+~~~text
+make policies-smoke
+        │
+        ▼
+rollout ready
+        │
+        ▼
+digest identity
+        │
+        ▼
+replica spread
+        │
+        ▼
+TLS CA matches caBundle
+        │
+        ▼
+failurePolicy: Fail
+        │
+        ▼
+namespace scope
+        │
+        ▼
+real server dry-runs
+~~~
+
+Admission behavior is tested through the real Kubernetes API:
+
+~~~text
+CPU + memory       ──► accepted
+CPU missing        ──► rejected
+memory missing     ──► rejected
+bad init container ──► rejected
+~~~
+
+## 8. Commands
+
+Unit tests:
+
+~~~bash
 cd policies/resource-requests-webhook
 go test ./...
-```
+~~~
 
-The builder and distroless runtime bases are pinned by digest. The resulting webhook image is deployed only by immutable digest.
+Install one policy:
 
-## Deploy
-
-Delivery builds, scans and publishes the image (`resource-requests-webhook/Jenkinsfile`) and records its digest in `state/dev.yaml`. It reaches `stage` and `prod` by pull request, like any service ([delivery](../delivery/README.md)). The operator installs the digest recorded for this cluster's environment (`clusterEnvironment` in [`environments.yaml`](../environments.yaml)):
-
-```bash
+~~~bash
 make policy-up POLICY=resource-requests-webhook
-```
+~~~
 
-`make policies-up` reconciles every registered policy. Helm waits for readiness and rolls a failed upgrade back.
+Install all policies:
 
-### Serving TLS ownership
+~~~bash
+make policies-up
+~~~
 
-The Helm release owns one private serving CA and certificate in `resource-requests-webhook-tls`.
+Verify one or all:
 
-```text
-first install ──► generate CA + service certificate ──► Secret + caBundle
-upgrade       ──► reuse existing Secret              ──► stable caBundle
-delete Secret ──► next reconciliation generates a new serving identity
-```
-
-The certificate covers the webhook Service DNS names. Policy smoke verifies that the Secret CA and `ValidatingWebhookConfiguration.caBundle` are identical.
-
-## Verify
-
-```bash
+~~~bash
 make policy-smoke POLICY=resource-requests-webhook
 make policies-smoke
-```
+~~~
 
-The smoke contract verifies rollout, immutable image identity, replica spread, serving TLS, fail-closed webhook registration, namespace scope, and real server-side admission decisions for regular and init containers.
+## 9. Responsibility boundary
 
-This webhook enforces one invariant only. ResourceQuota, LimitRange, PriorityClass, PDBs, and autoscaling remain separate Kubernetes controls.
+This webhook enforces one invariant only:
+
+~~~text
+Deployment container
+resources.requests.cpu
+resources.requests.memory
+        │
+        ▼
+must both be non-zero
+~~~
+
+It does not replace ResourceQuota, LimitRange, PriorityClass, PDBs, or
+autoscaling.
+
+Implementation detail continues in
+**[resource-requests-webhook/README.md](resource-requests-webhook/README.md)**.
