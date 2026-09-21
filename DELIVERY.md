@@ -1,158 +1,271 @@
 # Delivery
-CI/CD reference. Operations: [delivery/README.md](delivery/README.md) · Jenkins: [platform/jenkins/README.md](platform/jenkins/README.md) · Base chart: [charts/service/README.md](charts/service/README.md)
 
-## Stack
-Jenkins on Kubernetes · JCasC · Maven/JUnit · rootless BuildKit · Trivy · Skopeo · Cosign · Helm/OCI · Vault/VSO · Prometheus
+CI/CD reference for this repository.
 
-Applications deploy from image digests stored in `state/<environment>.yaml`. Platform and infrastructure reconciliation is operator-owned.
+**Related:** [operations](delivery/README.md) · [Jenkins](platform/jenkins/README.md) · [service chart](charts/service/README.md)
 
-## Jenkins jobs
+## Contents
 
-Four multibranch jobs, three pipeline implementations:
+1. [Overview](#1-overview)
+2. [Components](#2-components)
+3. [Reusable templates](#3-reusable-templates)
+4. [Service CI](#4-service-ci)
+5. [Platform CI](#5-platform-ci)
+6. [Deployment](#6-deployment)
+7. [Release model](#7-release-model)
+8. [Performance](#8-performance)
+9. [Evidence and limits](#9-evidence-and-limits)
 
-```text
-sample-java-app ─────────────┐
-                            ├→ servicePipeline(chart, context, path)
-resource-requests-webhook ──┘
-
-platform ─────────────────────→ Jenkinsfile.platform
-deploy ───────────────────────→ deployPipeline()
-```
-
-`servicePipeline` lives in the pinned `lab-delivery` shared library. A service provides only its chart path, build context, and source path.
-
-### Reusable templates
+## 1. Overview
 
 ```text
-service Jenkinsfile
-      ↓
-servicePipeline(chart, context, path)
-      ↓
-validate → build/test → scan → publish → record state
+┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+│ Service CI   │ → │ Git state    │ → │ Deployment   │
+│ build/release│   │ version+digest│   │ verify/deploy│
+└──────────────┘   └──────────────┘   └──────────────┘
 ```
 
-`servicePipeline` is the standard **service release template**. Use it for a component that produces a container image and Helm chart. It owns CI behavior; the service only identifies where its source and chart live.
+Applications are built once, published to OCI, recorded in `state/<environment>.yaml`, and deployed by digest.
+
+Platform and infrastructure reconciliation is operator-owned.
+
+## 2. Components
 
 ```text
-state/<env>.yaml
-      ↓
-deployPipeline()
-      ↓
-verify → deploy → test → tag → promote
+Control     Jenkins · JCasC · Kubernetes agents
+
+Build       Maven/JUnit · rootless BuildKit
+            Trivy · Skopeo · Cosign
+
+Release     Helm/OCI · Git state
+
+Secrets     Vault · Vault Secrets Operator
+
+Canary      ingress-nginx · Prometheus
 ```
 
-`deployPipeline` is the standard **environment deployment template**. It reads configured releases from Git state and reconciles only the cluster's `clusterEnvironment`.
+JCasC defines four multibranch jobs:
 
-```text
-application chart
-      ↓
-charts/service
-      ↓
-Deployment · Service · probes · security · ingress · metrics · smoke test
-```
-
-`charts/service` is the **runtime Helm template** shared by stateless HTTP services. Application charts pin a version and provide service-specific values.
-
-| Job | Role |
+| Job | Function |
 |---|---|
-| `sample-java-app` | Jenkins-managed service |
-| `resource-requests-webhook` | CI-managed artifact; operator-managed deployment |
+| `sample-java-app` | application CI + Jenkins-managed release |
+| `resource-requests-webhook` | artifact CI; operator-managed deployment |
 | `platform` | repository/chart validation + base-chart publication |
-| `deploy` | state-driven CD |
+| `deploy` | state-driven environment deployment |
 
-## Service CI
+## 3. Reusable templates
+
+### Service pipeline
 
 ```text
-Checkout → Validate → Build/Test → Scan → [main] Publish → Record
+┌───────────────────────────┐
+│ service Jenkinsfile       │
+│ chart · context · path    │
+└─────────────┬─────────────┘
+              ↓
+┌───────────────────────────┐
+│ servicePipeline(...)      │
+└─────────────┬─────────────┘
+              ↓
+ validate → build → scan
+        → publish → record
+```
+
+Used by containerized services that publish an image and Helm chart.
+
+The service identifies its source and chart; the shared `lab-delivery` library provides the pipeline.
+
+### Deployment pipeline
+
+```text
+┌───────────────────────────┐
+│ state/<environment>.yaml  │
+└─────────────┬─────────────┘
+              ↓
+┌───────────────────────────┐
+│ deployPipeline()          │
+└─────────────┬─────────────┘
+              ↓
+ verify → deploy → test
+        → tag → promote
+```
+
+Reads Git state and reconciles the cluster configured as `clusterEnvironment`.
+
+### Service chart
+
+```text
+┌───────────────────────────┐
+│ application chart         │
+└─────────────┬─────────────┘
+              ↓
+┌───────────────────────────┐
+│ charts/service            │
+└─────────────┬─────────────┘
+              ↓
+ Deployment · Service
+ probes · security · ingress
+ metrics · PDB · smoke test
+```
+
+Shared Helm library for stateless HTTP services. Applications pin a version and provide service-specific values.
+
+## 4. Service CI
+
+```text
+Checkout → Validate → Build/Test → Scan
+                                  ↓ main
+                           Publish → Record
 ```
 
 | Stage | Work |
 |---|---|
-| Checkout | read chart/state; derive `SERVICE_REVISION` from the service path |
-| Validate | Hadolint · version bump · Helm render · server-side dry-run |
-| Build/Test | one BuildKit build; `mvnw package` runs JUnit/Spring tests and produces `application.jar` |
-| Scan | Trivy CRITICAL gate + CycloneDX SBOM from the same report |
-| Publish | push the scanned OCI layout; verify digest equality; Cosign sign; publish chart |
-| Record | commit `{version,digest}` to dev state |
+| **Checkout** | read chart/state; derive `SERVICE_REVISION` from the service path |
+| **Validate** | Hadolint · version check · Helm render · server-side dry-run |
+| **Build/Test** | BuildKit builds once; `mvnw package` runs JUnit/Spring tests and produces `application.jar` |
+| **Scan** | Trivy CRITICAL gate + CycloneDX SBOM |
+| **Publish** | push scanned OCI layout · verify digest · Cosign sign · publish chart |
+| **Record** | commit `{version,digest}` to dev state |
 
-PRs stop after scan. Publish/record run on `main`.
+Pull requests stop after scan. Publish and record run on `main`.
 
-The service job never calls CD. Its state commit is the deploy trigger.
+The state commit starts the deployment path; Service CI does not call the deploy job.
 
 Existing versions are accepted only when their OCI source revision matches the current service source revision.
 
-## Platform CI
+## 5. Platform CI
 
 ```text
-Shellcheck → [chart PR] ct lint --check-version-increment → [main] publish charts
+Shellcheck
+    ↓
+chart PR → ct lint --check-version-increment
+    ↓
+main → publish missing chart versions
 ```
 
-`charts/service` carries the shared runtime defaults: digest images, restricted security context, probes, topology spreading, optional PDB, ingress/metrics, and the HTTP Helm test.
+`charts/service` is published independently from application releases.
 
-## Deployment
+## 6. Deployment
 
 ```text
-state/<env>.yaml → Verify → Helm deploy → Helm test → Tag → Promote
+┌────────┐
+│ Verify │
+└───┬────┘
+    ↓
+┌────────┐
+│ Deploy │
+└───┬────┘
+    ↓
+┌────────┐
+│ Test   │
+└───┬────┘
+    ↓
+┌────────┐
+│ Tag    │
+└───┬────┘
+    ↓
+┌────────┐
+│ Promote│
+└────────┘
 ```
 
 | Stage | Work |
 |---|---|
-| Verify | state schema · previous-env digest history · Cosign · Helm render · server dry-run |
-| Deploy | `jenkins-deploy-<env>` runs Helm with `repository@sha256:...` |
-| Test | base HTTP smoke test + service tests |
-| Tag | `<environment>-<YYYY.MM.DD>.<n>` |
-| Promote | PR copies the same `{version,digest}` to the next environment |
+| **Verify** | state schema · previous-env digest history · Cosign · Helm render · server dry-run |
+| **Deploy** | `jenkins-deploy-<env>` runs Helm with `repository@sha256:...` |
+| **Test** | HTTP smoke test + service tests |
+| **Tag** | `<environment>-<YYYY.MM.DD>.<n>` |
+| **Promote** | PR copies the same `{version,digest}` to the next environment |
 
-Readiness failure uses Helm rollback. Failed Helm tests restore the previous revision; failed first installs are removed.
+Readiness failure rolls back automatically. Failed Helm tests restore the previous revision; failed first installs are removed.
 
-Prod supports a 10% / 5-minute canary with a 1% ingress 5xx threshold. One cluster runs one `clusterEnvironment`.
+Prod supports a 10% canary for five minutes with a 1% ingress 5xx threshold.
 
-## Versioning and releases
+## 7. Release model
+
+### Version
 
 ```text
 Chart.yaml.version
     ├→ image tag
     ├→ service chart version
     └→ state version
-
-source revision → version → image tag → digest → state → workload
-
-dev {version,digest} → stage {same} → prod {same}
 ```
 
-- Service-changing PRs increment `Chart.yaml.version`.
-- Images are tagged by version but deployed by digest.
-- `charts/service` is versioned independently and pinned by application charts.
-- Stage/prod state changes use PRs; CODEOWNERS is enforced when branch protection requires owner review.
-- Rollback restores an earlier Git state.
+Service-changing PRs increment `Chart.yaml.version`.
 
-## Optimizations
+`charts/service` has its own independent version.
+
+### Artifact identity
+
+```text
+source revision
+      ↓
+   version
+      ↓
+  image tag
+      ↓
+    digest
+      ↓
+ Git state
+      ↓
+  workload
+```
+
+Images are tagged by version and deployed by digest.
+
+### Promotion
+
+```text
+dev {version,digest}
+        ↓
+stage {same}
+        ↓
+prod {same}
+```
+
+Stage/prod state changes use pull requests. `CODEOWNERS` covers those files; enforcement depends on branch protection.
+
+Rollback restores an earlier Git state.
+
+## 8. Performance
 
 | Mechanism | Result |
 |---|---|
 | warm heavy/light/CD runners | agent acquisition ~51s → ~5s |
 | persistent BuildKit state | image + Maven layer reuse |
 | persistent Trivy cache | vulnerability DB reuse |
-| heavy/light split | verification does not queue behind builds |
+| heavy/light split | validation does not queue behind builds |
 | cache-node affinity | host caches stay warm |
 | path filtering | unrelated changes skip service CI |
-| artifact existence checks | no duplicate publish |
+| artifact existence checks | skip duplicate publish |
 | state-driven CD | no rebuild/rescan on deploy |
-| current-release check | no-op releases skip Helm |
-
-Release `1.2.14`: **CI 1m26s · CD 1m16s · combined 2m42s**.
-
-Jenkins polls GitHub every minute; wall-clock delivery can include one polling interval before CI and one before CD.
-
-## Evidence
+| current-release check | matching releases skip Helm |
 
 ```text
-1.2.14 → sha256:2758e8...dcd1824 → state commit 75769b4
-       → deploy/main #24 → dev-2026.09.21.5
+release 1.2.14
+
+CI      1m26s
+CD      1m16s
+total   2m42s
+```
+
+Jenkins polls GitHub every minute; delivery can include one polling interval before CI and one before CD.
+
+## 9. Evidence and limits
+
+```text
+1.2.14
+  ↓
+sha256:2758e8...dcd1824
+  ↓
+state commit 75769b4
+  ↓
+deploy/main #24
+  ↓
+dev-2026.09.21.5
 ```
 
 Implementation: [service](delivery/pipeline/vars/servicePipeline.groovy) · [platform](delivery/Jenkinsfile.platform) · [deploy](delivery/pipeline/vars/deployPipeline.groovy) · [build](delivery/pipeline/resources/lab/delivery/build-image.sh) · [scan](delivery/pipeline/resources/lab/delivery/scan-image.sh) · [publish](delivery/pipeline/resources/lab/delivery/publish-image.sh) · [verify](delivery/pipeline/resources/lab/delivery/validate-release.sh)
 
-## Known limits
-
-CRITICAL-only vulnerability gate · SBOM not attested · Cosign transparency-log upload disabled · no-traffic canary warns and passes · app stage/prod/canary paths are implemented but not exercised in this lab.
+**Known limits:** CRITICAL-only vulnerability gate · SBOM not attested · Cosign transparency-log upload disabled · no-traffic canary warns and passes · app stage/prod/canary paths are implemented but not exercised in this lab.
