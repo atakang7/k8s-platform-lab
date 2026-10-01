@@ -4,7 +4,13 @@ Run commands from the repository root.
 
 ## 1. Full bring-up
 
+A new host needs the tools first. See
+[Host requirements](README.md#host-requirements).
+
 ~~~text
+make prerequisites
+      │
+      ▼
 make cluster-up
       │
       ▼

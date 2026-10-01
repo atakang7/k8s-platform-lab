@@ -354,6 +354,9 @@ stays cluster-internal; Grafana and Prometheus are exposed through ingress.
 ## 7. Operator path
 
 ~~~text
+make prerequisites
+      │
+      ▼
 make cluster-up
       │
       ▼
@@ -388,6 +391,33 @@ wording, and the short answers: **[REQUIREMENTS.md](REQUIREMENTS.md)**.
 
 ## Host requirements
 
-The complete environment is intended to run from an **Ubuntu x86_64**
-operator host with VirtualBox, Vagrant, Ansible, Kubernetes/Helm tooling,
-GNU Make, and the standard CLI utilities used by the repository.
+The operator host is **Ubuntu x86_64** with CPU virtualization enabled.
+If the host is itself a VM, it needs nested virtualization.
+Plan for 8 GiB of free RAM, because the three cluster VMs use that much.
+
+Install everything with one command:
+
+~~~bash
+make prerequisites
+~~~
+
+Then log out and back in, so the `vboxusers` and `docker` groups apply.
+
+~~~text
+make prerequisites
+      │
+      ├── apt ─────────► VirtualBox · Vagrant (HashiCorp repo)
+      │                  Ansible + posix/general collections
+      │                  kubectl 1.34 (pkgs.k8s.io) · Helm (helm repo)
+      │                  Docker · dig/nsupdate · jq · python3-yaml
+      │                  git · make · ssh · iproute2
+      │
+      └── VirtualBox ──► default vboxnet0 DHCP off
+                         (it overlaps the MetalLB pool)
+~~~
+
+Vault and BIND9 are not listed. `make edge-up` installs them with Ansible.
+
+The kubectl minor version follows the cluster version in
+`infra/ansible/group_vars/all.yml`. The script is
+[infra/bin/prerequisites](infra/bin/prerequisites).
