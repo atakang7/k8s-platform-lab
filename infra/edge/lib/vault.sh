@@ -63,21 +63,27 @@ write_policies() {
 configure_approles() {
   phase 'configuring the DNS and TLS AppRoles'
 
+  # Vault Agent on this host logs in over 127.0.0.1.
   vault write auth/approle/role/dns-host \
     token_policies=dns-read \
     token_ttl=1h \
     token_max_ttl=4h \
     token_num_uses=0 \
     secret_id_ttl=0 \
-    secret_id_num_uses=0 >/dev/null
+    secret_id_num_uses=0 \
+    secret_id_bound_cidrs=127.0.0.1/32 \
+    token_bound_cidrs=127.0.0.1/32 >/dev/null
   vault write auth/approle/role/dns-host/role-id role_id=dns-host >/dev/null
 
+  # Vault Secrets Operator in the cluster logs in from the worker edge IPs.
   vault write auth/approle/role/dns-vso \
     token_policies=dns-read \
     token_ttl=1h \
     token_max_ttl=4h \
     secret_id_ttl=0 \
-    secret_id_num_uses=0 >/dev/null
+    secret_id_num_uses=0 \
+    secret_id_bound_cidrs="${CLUSTER_VAULT_CLIENTS}" \
+    token_bound_cidrs="${CLUSTER_VAULT_CLIENTS}" >/dev/null
   vault write auth/approle/role/dns-vso/role-id role_id=dns-vso >/dev/null
 
   vault write auth/approle/role/tls-vso \
@@ -85,7 +91,9 @@ configure_approles() {
     token_ttl=1h \
     token_max_ttl=4h \
     secret_id_ttl=0 \
-    secret_id_num_uses=0 >/dev/null
+    secret_id_num_uses=0 \
+    secret_id_bound_cidrs="${CLUSTER_VAULT_CLIENTS}" \
+    token_bound_cidrs="${CLUSTER_VAULT_CLIENTS}" >/dev/null
   vault write auth/approle/role/tls-vso/role-id role_id=tls-vso >/dev/null
 }
 
@@ -147,6 +155,7 @@ install_host_agent_login() {
     return
   fi
 
+  destroy_approle_secret_ids dns-host
   printf 'dns-host' > "${TEMPORARY_DIRECTORY}/role-id"
   vault write -f -field=secret_id auth/approle/role/dns-host/secret-id > "${TEMPORARY_DIRECTORY}/secret-id"
 
