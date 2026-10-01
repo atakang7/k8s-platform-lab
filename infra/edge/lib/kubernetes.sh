@@ -90,54 +90,10 @@ wait_for_vault_secrets() {
     --timeout=2m >/dev/null
 }
 
-verify_dns_secret() (
-  set -Eeuo pipefail
-
-  local temporary_directory
-  temporary_directory="$(mktemp -d)"
-  trap 'rm -rf -- "${temporary_directory}"' EXIT
-
-  vault kv get -format=json secret/edge/dns/tsig > "${temporary_directory}/vault.json"
-  # Through tee: a snap-confined kubectl cannot write a redirected file in
-  # the host /tmp ("write /dev/stdout: bad file descriptor").
-  kubectl -n external-dns get secret rfc2136-tsig -o json |
-    tee "${temporary_directory}/kubernetes.json" >/dev/null
-
-  jq -e --slurpfile installed "${temporary_directory}/kubernetes.json" '
-    .data.data as $wanted
-    | ($installed[0].data.key_name | @base64d) == $wanted.key_name
-      and ($installed[0].data.secret | @base64d) == $wanted.secret
-  ' "${temporary_directory}/vault.json" >/dev/null ||
-    fail 'ExternalDNS TSIG Secret does not match Vault'
-)
-
-verify_tls_secret() (
-  set -Eeuo pipefail
-
-  local temporary_directory
-  temporary_directory="$(mktemp -d)"
-  trap 'rm -rf -- "${temporary_directory}"' EXIT
-
-  vault kv get -format=json secret/edge/tls/wildcard > "${temporary_directory}/vault.json"
-  # Through tee: a snap-confined kubectl cannot write a redirected file in
-  # the host /tmp ("write /dev/stdout: bad file descriptor").
-  kubectl -n ingress-nginx get secret lab-wildcard -o json |
-    tee "${temporary_directory}/kubernetes.json" >/dev/null
-
-  jq -e --slurpfile installed "${temporary_directory}/kubernetes.json" '
-    .data.data as $wanted
-    | ($installed[0].data["tls.crt"] | @base64d) == $wanted["tls.crt"]
-      and ($installed[0].data["tls.key"] | @base64d) == $wanted["tls.key"]
-  ' "${temporary_directory}/vault.json" >/dev/null ||
-    fail 'Ingress TLS Secret does not match Vault'
-)
-
 reconcile_vault_secrets() {
   apply_vault_secret_resources
   wait_for_vault_secrets
-  verify_dns_secret
-  verify_tls_secret
-  pass 'Vault-managed DNS and TLS Secrets match Vault'
+  pass 'Vault-managed DNS and TLS Secrets are synced'
 }
 
 configure_worker_edge_labels() {

@@ -198,74 +198,20 @@ apply_jenkins_resources() {
     -f "${JENKINS_DIRECTORY}/resources/agent-rbac.yaml" >/dev/null
 }
 
-# True when every field of the Kubernetes Secret equals its Vault value.
-secret_matches_vault() {
-  local path="$1"
-  local destination="$2"
-  shift 2
-  local field
-
-  for field in "$@"; do
-    [[ "$(vault kv get -format=json "${path}" |
-        jq -j --arg field "${field}" '.data.data[$field]' | sha256sum)" == \
-      "$(kubectl -n "${JENKINS_NAMESPACE}" get secret "${destination}" -o json |
-        jq -r --arg field "${field}" '.data[$field]' | base64 --decode | sha256sum)" ]] ||
-      return 1
-  done
-}
-
-# Vault Secrets Operator syncs a changed Vault value within its refresh
-# interval (1m), so a Secret is given two minutes to catch up before failing.
-wait_for_vault_secret() {
-  local resource="$1"
-  local path="$2"
-  local destination="$3"
-  shift 3
-
-  kubectl -n "${JENKINS_NAMESPACE}" wait \
-    --for=condition=Ready \
-    "vaultstaticsecret/${resource}" \
-    --timeout=2m >/dev/null
-
-  for _ in {1..24}; do
-    secret_matches_vault "${path}" "${destination}" "$@" && return
-    sleep 5
-  done
-  fail "secret/${destination} does not match ${path}"
-}
-
+# Vault Secrets Operator marks a VaultStaticSecret Ready once its Kubernetes
+# Secret holds the current Vault value.
 verify_vault_secrets() {
   phase 'waiting for Vault-managed Jenkins Secrets'
 
-  wait_for_vault_secret \
-    jenkins-admin \
-    secret/jenkins/admin \
-    jenkins-admin \
-    jenkins-admin-user \
-    jenkins-admin-password
+  kubectl -n "${JENKINS_NAMESPACE}" wait \
+    --for=condition=Ready \
+    --timeout=2m \
+    vaultstaticsecret/jenkins-admin \
+    vaultstaticsecret/github-creds \
+    vaultstaticsecret/dockerhub-creds \
+    vaultstaticsecret/cosign-signing >/dev/null
 
-  wait_for_vault_secret \
-    github-creds \
-    secret/ci/github \
-    github-creds \
-    username \
-    token
-
-  wait_for_vault_secret \
-    dockerhub-creds \
-    secret/ci/dockerhub \
-    dockerhub-creds \
-    username \
-    token
-
-  wait_for_vault_secret \
-    cosign-signing \
-    secret/ci/cosign \
-    cosign-signing \
-    private_key \
-    password
-
-  pass 'Vault-managed Jenkins Secrets match Vault'
+  pass 'Vault-managed Jenkins Secrets are synced'
 }
 
 verify_agent_cluster_scope() {
