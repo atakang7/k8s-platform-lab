@@ -198,29 +198,6 @@ apply_jenkins_resources() {
     -f "${JENKINS_DIRECTORY}/resources/agent-rbac.yaml" >/dev/null
 }
 
-remove_obsolete_delivery_access() {
-  # Retain this cleanup because an operator may upgrade an older cluster
-  # directly to the current repository state. These objects carried delivery
-  # access before per-environment deploy identities (platform/environment).
-  kubectl -n "${JENKINS_NAMESPACE}" delete secret \
-    jenkins-agent-token \
-    jenkins-kubeconfig \
-    --ignore-not-found >/dev/null
-
-  kubectl -n "${JENKINS_NAMESPACE}" delete serviceaccount \
-    jenkins-agent \
-    --ignore-not-found >/dev/null
-
-  kubectl -n default delete role \
-    jenkins-app-deployer \
-    --ignore-not-found >/dev/null
-
-  kubectl -n default delete rolebinding \
-    jenkins-app-deployer \
-    jenkins-ci-dry-run \
-    --ignore-not-found >/dev/null
-}
-
 # True when every field of the Kubernetes Secret equals its Vault value.
 secret_matches_vault() {
   local path="$1"
@@ -385,7 +362,6 @@ cluster_reconcile() {
   prepare_namespace
   reconcile_jenkins_approle
   apply_jenkins_resources
-  remove_obsolete_delivery_access
   verify_vault_secrets
   verify_agent_cluster_scope
   install_jenkins

@@ -143,18 +143,6 @@ verify_cd_access() {
     fail "jenkins-deploy-${environment_name} can read Secrets"
 }
 
-# Clusters set up before per-environment deploy identities still carry the
-# token-minting model; remove it so no identity keeps that access.
-remove_token_minting_access() {
-  local namespace="$1"
-
-  kubectl -n "${namespace}" delete \
-    serviceaccount/deployer \
-    role/deployer-token-minter \
-    rolebinding/deployer-token-minter \
-    --ignore-not-found >/dev/null
-}
-
 verify_ci_dry_run_only() {
   local namespace="$1"
   local denial
@@ -217,7 +205,6 @@ cluster_reconcile() {
   phase "reconciling environment ${environment_name} in namespace ${namespace}"
   apply_environment_manifest "${environment_name}" "${namespace}" "${role_id}"
   reconcile_registry_identity "${namespace}"
-  remove_token_minting_access "${namespace}"
   verify_access_model "${environment_name}" "${namespace}"
   verify_registry_secret "${namespace}"
 

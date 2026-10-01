@@ -173,12 +173,6 @@ install_fluent_bit() {
 apply_observability_ingress() {
   begin_phase 'applying the observability ingress'
 
-  # Remove the retired split Elasticsearch ingress when reconciling clusters
-  # created by an older repository revision.
-  kubectl -n "${NAMESPACE}" delete ingress \
-    observability-elasticsearch \
-    --ignore-not-found
-
   kubectl apply -f "${OBSERVABILITY_DIRECTORY}/ingress.yaml"
 
   complete_phase
