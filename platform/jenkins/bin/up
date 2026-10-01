@@ -42,99 +42,22 @@ vault_fields_are_present() {
   done
 }
 
-vault_fields_match() {
-  local path="$1"
-  local first_field="$2"
-  local first_value="$3"
-  local second_field="$4"
-  local second_value="$5"
-
-  vault kv get -format=json "${path}" 2>/dev/null |
-    jq -e \
-      --arg first_field "${first_field}" \
-      --arg first_value "${first_value}" \
-      --arg second_field "${second_field}" \
-      --arg second_value "${second_value}" '
-        .data.data[$first_field] == $first_value
-        and .data.data[$second_field] == $second_value
-      ' >/dev/null
-}
-
-# Stores a two-field external credential in Vault from operator variables.
-# With both variables unset, an existing Vault entry is reused; returns 1 when
-# neither exists.
-#   reconcile_external_secret <path> <field> <value> <variable> <field> <value> <variable>
-reconcile_external_secret() {
-  local path="$1"
-  local first_field="$2"
-  local first_value="$3"
-  local first_variable="$4"
-  local second_field="$5"
-  local second_value="$6"
-  local second_variable="$7"
-
-  if [[ -z "${first_value}" && -z "${second_value}" ]]; then
-    if vault_fields_are_present "${path}" "${first_field}" "${second_field}"; then
-      return 0
-    fi
-    return 1
-  fi
-
-  [[ -n "${first_value}" ]] ||
-    fail "${first_variable} is required when ${second_variable} is set"
-  [[ -n "${second_value}" ]] ||
-    fail "${second_variable} is required when ${first_variable} is set"
-
-  if vault_fields_match "${path}" \
-    "${first_field}" "${first_value}" "${second_field}" "${second_value}"; then
-    return 0
-  fi
-
-  jq -n \
-    --arg first_field "${first_field}" \
-    --arg first_value "${first_value}" \
-    --arg second_field "${second_field}" \
-    --arg second_value "${second_value}" \
-    '{($first_field): $first_value, ($second_field): $second_value}' |
-    vault kv put "${path}" - >/dev/null
-}
-
-reconcile_external_credentials() {
+# The CI credentials come from .env; the commands that load them into Vault
+# are at the top of that file.
+check_ci_credentials() {
+  local path
   local -a missing_paths=()
 
-  reconcile_external_secret secret/ci/github \
-    username "${GITHUB_USERNAME:-}" GITHUB_USERNAME \
-    token "${GITHUB_TOKEN:-}" GITHUB_TOKEN ||
-    missing_paths+=('secret/ci/github')
+  for path in secret/ci/github secret/ci/dockerhub secret/ci/cosign; do
+    if ! vault kv get "${path}" >/dev/null 2>&1; then
+      missing_paths+=("${path}")
+    fi
+  done
 
-  reconcile_external_secret secret/ci/dockerhub \
-    username "${DOCKERHUB_USERNAME:-}" DOCKERHUB_USERNAME \
-    token "${DOCKERHUB_TOKEN:-}" DOCKERHUB_TOKEN ||
-    missing_paths+=('secret/ci/dockerhub')
-
-  reconcile_external_secret secret/ci/cosign \
-    private_key "${COSIGN_PRIVATE_KEY:-}" COSIGN_PRIVATE_KEY \
-    password "${COSIGN_PASSWORD:-}" COSIGN_PASSWORD ||
-    missing_paths+=('secret/ci/cosign')
-
-  if [[ "${#missing_paths[@]}" -eq 0 ]]; then
-    return
+  if [[ "${#missing_paths[@]}" -gt 0 ]]; then
+    printf 'Missing Vault path: %s\n' "${missing_paths[@]}" >&2
+    fail 'CI credentials are missing in Vault; run the vault kv put commands at the top of .env'
   fi
-
-  printf 'FAIL | missing external Jenkins credentials\n' >&2
-  printf 'Missing Vault path: %s\n' "${missing_paths[@]}" >&2
-  cat >&2 <<'MESSAGE'
-Inject the variables for each missing path and rerun:
-  export GITHUB_USERNAME='<GitHub username>'
-  export GITHUB_TOKEN='<GitHub token with contents, commit-status and pull-request access>'
-  export DOCKERHUB_USERNAME='<Docker Hub username>'
-  export DOCKERHUB_TOKEN='<Docker Hub access token>'
-  export COSIGN_PASSWORD='<new signing key password>'
-  cosign generate-key-pair   # commit cosign.pub (see README.md), keep cosign.key out of Git
-  export COSIGN_PRIVATE_KEY="$(cat cosign.key)"
-  make jenkins-up
-MESSAGE
-  exit 1
 }
 
 ensure_admin_credential() (
@@ -186,7 +109,7 @@ operator_reconcile() {
   phase 'reconciling Jenkins credentials in Vault'
 
   require_vault_operator_token
-  reconcile_external_credentials
+  check_ci_credentials
   configure_vault_identity
   ensure_admin_credential
 

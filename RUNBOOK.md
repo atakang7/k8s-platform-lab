@@ -24,6 +24,10 @@ make edge-up
       └──── normal run ────► make edge-smoke
       │
       ▼
+load .env into Vault
+(first build, §4)
+      │
+      ▼
 make jenkins-up
       │
       ▼
@@ -118,23 +122,16 @@ For edge details, see
 
 ## 4. CI credentials
 
-Before the first Jenkins reconciliation, provide credentials that are
-not already stored in Vault:
+The credentials live in `.env` at the repository root. Git ignores it.
+Start from the template:
 
 ~~~bash
-export GITHUB_USERNAME=...
-export GITHUB_TOKEN=...
-export DOCKERHUB_USERNAME=...
-export DOCKERHUB_TOKEN=...
-export COSIGN_PASSWORD=...
-export COSIGN_PRIVATE_KEY="$(cat cosign.key)"
+cp .env.example .env    # then fill in the values
 ~~~
 
-Runtime image-pull credentials are separate:
-
-~~~bash
-vault kv put secret/runtime/dockerhub   username=...   token=...
-~~~
+The commands at the top of `.env` load it into Vault. Run them after
+`make edge-up`. `make jenkins-up` and `make environment-up` stop with a
+clear message when a path is missing.
 
 ~~~text
 CI credentials
