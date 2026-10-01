@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
+# Installs, or removes, the Kubernetes side of the edge: Vault Secrets
+# Operator, MetalLB, ingress-nginx, ExternalDNS and the edge health endpoint.
+# Runs through the SSH tunnel (with-kubeconfig.sh).
+#
+#   kubernetes.sh full   everything (default)
+#   kubernetes.sh vso    only Vault Secrets Operator, before Vault logins exist
+#   kubernetes.sh down   remove everything
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly ROOT
-readonly EDGE_PLATFORM_DIRECTORY="${ROOT}/platform/edge"
+readonly EDGE_DIRECTORY="${ROOT}/platform/edge"
 
+# shellcheck source=../versions.env
 source "${ROOT}/infra/edge/versions.env"
 
 fail() {
@@ -20,31 +28,8 @@ pass() {
   printf 'PASS | %s\n' "$1"
 }
 
-install_release() {
-  local release_name="$1"
-  local namespace="$2"
-  local chart_reference="$3"
-  local chart_version="$4"
-  local values_directory="$5"
-  local values_file="${EDGE_PLATFORM_DIRECTORY}/${values_directory}/values.yaml"
-
-  phase "reconciling ${release_name} ${chart_version} in ${namespace}"
-
-  helm upgrade --install "${release_name}" "${chart_reference}" \
-    --namespace "${namespace}" \
-    --version "${chart_version}" \
-    --values "${values_file}" \
-    --wait \
-    --rollback-on-failure \
-    --timeout 5m \
-    --history-max 5 \
-    --hide-notes
-
-  pass "${release_name} is ready"
-}
-
-configure_helm_repositories() {
-  phase 'refreshing edge Helm repositories'
+add_helm_repositories() {
+  phase 'refreshing the edge Helm repositories'
 
   helm repo add metallb https://metallb.github.io/metallb --force-update >/dev/null
   helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx --force-update >/dev/null
@@ -54,111 +39,112 @@ configure_helm_repositories() {
 }
 
 install_vault_secrets_operator() {
-  kubectl create namespace vault-secrets-operator --dry-run=client -o yaml |
-    kubectl apply -f - >/dev/null
+  phase "installing Vault Secrets Operator ${VSO_CHART_VERSION}"
 
-  install_release \
-    vault-secrets-operator \
-    vault-secrets-operator \
-    hashicorp/vault-secrets-operator \
-    "${VSO_CHART_VERSION}" \
-    vault-secrets-operator
+  helm upgrade --install vault-secrets-operator hashicorp/vault-secrets-operator \
+    --namespace vault-secrets-operator \
+    --create-namespace \
+    --version "${VSO_CHART_VERSION}" \
+    --values "${EDGE_DIRECTORY}/vault-secrets-operator/values.yaml" \
+    --wait \
+    --rollback-on-failure \
+    --timeout 5m \
+    --history-max 5 \
+    --hide-notes
 }
 
-apply_vault_secret_resources() {
-  local resource
-  local resources_directory="${EDGE_PLATFORM_DIRECTORY}/vault-secrets-operator/resources"
+sync_edge_secrets() {
+  phase 'syncing the DNS and TLS Secrets from Vault'
 
-  for resource in \
-    external-dns-connection.yaml \
-    external-dns-secret.yaml \
-    ingress-connection.yaml \
-    ingress-secret.yaml; do
-    kubectl apply -f "${resources_directory}/${resource}" >/dev/null
-  done
+  kubectl apply -f "${EDGE_DIRECTORY}/vault-secrets-operator/resources/external-dns-connection.yaml" >/dev/null
+  kubectl apply -f "${EDGE_DIRECTORY}/vault-secrets-operator/resources/external-dns-secret.yaml" >/dev/null
+  kubectl apply -f "${EDGE_DIRECTORY}/vault-secrets-operator/resources/ingress-connection.yaml" >/dev/null
+  kubectl apply -f "${EDGE_DIRECTORY}/vault-secrets-operator/resources/ingress-secret.yaml" >/dev/null
+
+  kubectl -n external-dns wait --for=condition=Ready --timeout=2m \
+    vaultstaticsecret/rfc2136-tsig >/dev/null
+  kubectl -n ingress-nginx wait --for=condition=Ready --timeout=2m \
+    vaultstaticsecret/lab-wildcard >/dev/null
 }
 
-wait_for_vault_secrets() {
-  phase 'waiting for Vault-managed DNS and TLS Secrets'
+label_edge_workers() {
+  phase 'labelling node-2 and node-3 as edge workers'
 
-  kubectl -n external-dns wait \
-    --for=condition=Ready vaultstaticsecret/rfc2136-tsig \
-    --timeout=2m >/dev/null
-
-  kubectl -n ingress-nginx wait \
-    --for=condition=Ready vaultstaticsecret/lab-wildcard \
-    --timeout=2m >/dev/null
-}
-
-reconcile_vault_secrets() {
-  apply_vault_secret_resources
-  wait_for_vault_secrets
-  pass 'Vault-managed DNS and TLS Secrets are synced'
-}
-
-configure_worker_edge_labels() {
-  phase 'reconciling worker edge labels'
   kubectl label node node-2 node-3 edge.lab.test/worker=true --overwrite >/dev/null
 }
 
 install_metallb() {
-  kubectl create namespace metallb-system --dry-run=client -o yaml |
-    kubectl label -f - \
-      pod-security.kubernetes.io/enforce=privileged \
-      pod-security.kubernetes.io/audit=privileged \
-      pod-security.kubernetes.io/warn=privileged \
-      --local -o yaml |
-    kubectl apply -f - >/dev/null
+  phase "installing MetalLB ${METALLB_CHART_VERSION}"
 
-  install_release \
-    metallb \
-    metallb-system \
-    metallb/metallb \
-    "${METALLB_CHART_VERSION}" \
-    metallb
+  # The MetalLB speaker needs host networking, which the privileged Pod
+  # Security level allows.
+  if ! kubectl get namespace metallb-system >/dev/null 2>&1; then
+    kubectl create namespace metallb-system >/dev/null
+  fi
+  kubectl label namespace metallb-system \
+    pod-security.kubernetes.io/enforce=privileged \
+    pod-security.kubernetes.io/audit=privileged \
+    pod-security.kubernetes.io/warn=privileged \
+    --overwrite >/dev/null
 
-  kubectl apply \
-    -f "${EDGE_PLATFORM_DIRECTORY}/metallb/resources/ip-address-pool.yaml" >/dev/null
+  helm upgrade --install metallb metallb/metallb \
+    --namespace metallb-system \
+    --version "${METALLB_CHART_VERSION}" \
+    --values "${EDGE_DIRECTORY}/metallb/values.yaml" \
+    --wait \
+    --rollback-on-failure \
+    --timeout 5m \
+    --history-max 5 \
+    --hide-notes
+
+  kubectl apply -f "${EDGE_DIRECTORY}/metallb/resources/ip-address-pool.yaml" >/dev/null
 }
 
 install_ingress() {
-  install_release \
-    ingress-nginx \
-    ingress-nginx \
-    ingress-nginx/ingress-nginx \
-    "${INGRESS_NGINX_CHART_VERSION}" \
-    ingress-nginx
+  phase "installing ingress-nginx ${INGRESS_NGINX_CHART_VERSION}"
+
+  helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+    --namespace ingress-nginx \
+    --version "${INGRESS_NGINX_CHART_VERSION}" \
+    --values "${EDGE_DIRECTORY}/ingress-nginx/values.yaml" \
+    --wait \
+    --rollback-on-failure \
+    --timeout 5m \
+    --history-max 5 \
+    --hide-notes
 }
 
 install_external_dns() {
-  install_release \
-    external-dns \
-    external-dns \
-    external-dns/external-dns \
-    "${EXTERNAL_DNS_CHART_VERSION}" \
-    external-dns
+  phase "installing ExternalDNS ${EXTERNAL_DNS_CHART_VERSION}"
+
+  helm upgrade --install external-dns external-dns/external-dns \
+    --namespace external-dns \
+    --version "${EXTERNAL_DNS_CHART_VERSION}" \
+    --values "${EDGE_DIRECTORY}/external-dns/values.yaml" \
+    --wait \
+    --rollback-on-failure \
+    --timeout 5m \
+    --history-max 5 \
+    --hide-notes
 }
 
 install_health_endpoint() {
-  phase 'reconciling edge health endpoint'
+  phase 'installing the edge health endpoint'
 
-  kubectl apply -f "${EDGE_PLATFORM_DIRECTORY}/health/resources.yaml" >/dev/null
+  kubectl apply -f "${EDGE_DIRECTORY}/health/resources.yaml" >/dev/null
   kubectl -n stage3-validation rollout status deployment/backend --timeout=3m >/dev/null
-
-  pass 'edge health endpoint is ready'
 }
 
 remove_edge() {
-  phase 'removing Kubernetes edge resources'
+  phase 'removing the Kubernetes edge'
 
   helm --namespace external-dns uninstall external-dns --ignore-not-found
   helm --namespace ingress-nginx uninstall ingress-nginx --ignore-not-found
   helm --namespace metallb-system uninstall metallb --ignore-not-found
 
-  kubectl -n external-dns delete vaultstaticsecret rfc2136-tsig \
-    --ignore-not-found --wait=true
-  kubectl -n ingress-nginx delete vaultstaticsecret lab-wildcard \
-    --ignore-not-found --wait=true
+  # Remove the synced Secrets while the operator still runs to clean them up.
+  kubectl -n external-dns delete vaultstaticsecret rfc2136-tsig --ignore-not-found --wait=true
+  kubectl -n ingress-nginx delete vaultstaticsecret lab-wildcard --ignore-not-found --wait=true
 
   helm --namespace vault-secrets-operator uninstall vault-secrets-operator --ignore-not-found
 
@@ -171,38 +157,30 @@ remove_edge() {
     --ignore-not-found --wait=true
 }
 
-reconcile_vso_foundation() {
-  configure_helm_repositories
-  install_vault_secrets_operator
-}
-
-reconcile_full_edge() {
-  reconcile_vso_foundation
-  reconcile_vault_secrets
-  configure_worker_edge_labels
-  install_metallb
-  install_ingress
-  install_external_dns
-  install_health_endpoint
-
-  pass 'edge controllers are reconciled'
-}
-
 main() {
-  local mode="${1:-full}"
-
-  case "${mode}" in
+  case "${1:-full}" in
     full)
-      reconcile_full_edge
+      add_helm_repositories
+      install_vault_secrets_operator
+      sync_edge_secrets
+      label_edge_workers
+      install_metallb
+      install_ingress
+      install_external_dns
+      install_health_endpoint
+      pass 'the Kubernetes edge is installed'
       ;;
     vso)
-      reconcile_vso_foundation
+      add_helm_repositories
+      install_vault_secrets_operator
+      pass 'Vault Secrets Operator is installed'
       ;;
     down)
       remove_edge
+      pass 'the Kubernetes edge is removed'
       ;;
     *)
-      fail "unknown mode: ${mode}; expected full, vso, or down"
+      fail "unknown mode: $1; expected full, vso or down"
       ;;
   esac
 }

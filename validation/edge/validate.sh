@@ -31,15 +31,15 @@ require_commands() {
 validate_host_network() (
   set -Eeuo pipefail
 
+  local host_addresses
   local ssh_config
   local node
   local addresses
   local edge_ip
   local private_port
 
-  [[ "$(ip -o -4 addr show |
-    awk -v address="${EDGE_HOST_IP}/24" '$4 == address { print $4; exit }')" \
-    == "${EDGE_HOST_IP}/24" ]] ||
+  host_addresses="$(ip -o -4 addr show)"
+  [[ "${host_addresses}" == *" ${EDGE_HOST_IP}/24 "* ]] ||
     fail 'host edge IP is missing'
 
   ssh_config="$(mktemp)"

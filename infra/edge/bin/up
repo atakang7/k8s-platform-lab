@@ -49,19 +49,19 @@ wait_for_current_tsig() (
 
   local attempt
   local expected_tsig
+  local key_name
+  local secret
   local -r max_attempts=60
   local -r poll_interval_seconds=0.5
 
   expected_tsig="$(mktemp)"
   trap 'rm -f -- "${expected_tsig}"' EXIT
 
-  vault kv get -format=json secret/edge/dns/tsig |
-    jq -r '
-      "\nkey \"" + .data.data.key_name + "\" {" +
-      "\n  algorithm hmac-sha256;" +
-      "\n  secret \"" + .data.data.secret + "\";" +
-      "\n};\n"
-    ' > "${expected_tsig}"
+  # The key file Vault Agent renders for BIND (roles/vault_agent/files/tsig.ctmpl).
+  key_name="$(vault kv get -field=key_name secret/edge/dns/tsig)"
+  secret="$(vault kv get -field=secret secret/edge/dns/tsig)"
+  printf '\nkey "%s" {\n  algorithm hmac-sha256;\n  secret "%s";\n};\n\n' \
+    "${key_name}" "${secret}" > "${expected_tsig}"
 
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     if sudo -n systemctl is-active --quiet vault-agent &&

@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
+# Installs observability: kube-prometheus-stack (Prometheus, Alertmanager,
+# Grafana), Elasticsearch, Fluent Bit, the Grafana dashboards and the ingress.
+# Runs through the SSH tunnel to the cluster (with-kubeconfig.sh).
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly ROOT
 readonly OBSERVABILITY_DIRECTORY="${ROOT}/platform/observability"
-readonly NAMESPACE=observability
+# Prometheus on node-2 and Grafana beside Jenkins on node-3 need this much room.
 readonly MINIMUM_WORKER_MEMORY_KI=1450000
 
 # shellcheck source=../versions.env
@@ -12,75 +15,55 @@ source "${OBSERVABILITY_DIRECTORY}/versions.env"
 # shellcheck source=../../../infra/edge/config.env
 source "${ROOT}/infra/edge/config.env"
 
-CURRENT_PHASE='startup'
-
-begin_phase() {
-  CURRENT_PHASE="$1"
-  printf 'WAIT | %s\n' "${CURRENT_PHASE}"
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
 }
 
-complete_phase() {
-  printf 'PASS | %s\n' "${CURRENT_PHASE}"
+phase() {
+  printf 'WAIT | %s\n' "$1"
 }
 
-report_failure() {
-  local status=$?
-  printf 'FAIL | %s (exit %s)\n' "${CURRENT_PHASE}" "${status}" >&2
-  exit "${status}"
+pass() {
+  printf 'PASS | %s\n' "$1"
 }
-trap report_failure ERR
 
-validate_worker_capacity() {
+check_worker_memory() {
   local node
-  local allocatable_memory
+  local memory
 
-  begin_phase 'validating worker readiness and memory capacity'
+  phase 'checking that both workers are Ready and have enough memory'
 
-  # This layout needs room for Prometheus on node-2 and Grafana beside
-  # Jenkins on node-3.
   for node in node-2 node-3; do
     kubectl wait --for=condition=Ready "node/${node}" --timeout=5s >/dev/null
-    allocatable_memory="$(kubectl get node "${node}" \
-      -o jsonpath='{.status.allocatable.memory}')"
+    memory="$(kubectl get node "${node}" -o jsonpath='{.status.allocatable.memory}')"
 
-    if [[ "${allocatable_memory}" != *Ki ]]; then
-      printf 'FAIL | %s reports unsupported allocatable memory: %s\n' \
-        "${node}" "${allocatable_memory}" >&2
-      return 1
+    if [[ "${memory}" != *Ki ]]; then
+      fail "${node} reports allocatable memory in an unexpected unit: ${memory}"
     fi
-
-    if (( ${allocatable_memory%Ki} < MINIMUM_WORKER_MEMORY_KI )); then
-      printf 'FAIL | %s needs at least %sKi allocatable memory; found %s\n' \
-        "${node}" "${MINIMUM_WORKER_MEMORY_KI}" "${allocatable_memory}" >&2
-      return 1
+    if (( ${memory%Ki} < MINIMUM_WORKER_MEMORY_KI )); then
+      fail "${node} needs at least ${MINIMUM_WORKER_MEMORY_KI}Ki allocatable memory; has ${memory}"
     fi
   done
-
-  complete_phase
 }
 
-prepare_foundation() {
-  begin_phase 'preparing the observability namespace and Helm repositories'
+prepare_namespace() {
+  phase 'creating the observability namespace and adding the Helm repositories'
 
-  kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml |
-    kubectl apply -f - >/dev/null
+  if ! kubectl get namespace observability >/dev/null 2>&1; then
+    kubectl create namespace observability >/dev/null
+  fi
 
-  helm repo add prometheus-community \
-    https://prometheus-community.github.io/helm-charts \
-    --force-update >/dev/null
-  helm repo add fluent \
-    https://fluent.github.io/helm-charts \
-    --force-update >/dev/null
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update >/dev/null
+  helm repo add fluent https://fluent.github.io/helm-charts --force-update >/dev/null
   helm repo update prometheus-community fluent >/dev/null
-
-  complete_phase
 }
 
 install_prometheus_stack() {
-  begin_phase 'reconciling kube-prometheus-stack (timeout: 10m)'
+  phase "installing kube-prometheus-stack ${KUBE_PROMETHEUS_STACK_CHART_VERSION} (up to 10 minutes)"
 
   helm upgrade --install observability prometheus-community/kube-prometheus-stack \
-    --namespace "${NAMESPACE}" \
+    --namespace observability \
     --version "${KUBE_PROMETHEUS_STACK_CHART_VERSION}" \
     --values "${OBSERVABILITY_DIRECTORY}/kube-prometheus-stack/values.yaml" \
     --wait \
@@ -89,76 +72,43 @@ install_prometheus_stack() {
     --history-max 5 \
     --hide-notes
 
-  complete_phase
+  kubectl -n observability rollout status \
+    statefulset/alertmanager-observability-kube-prometh-alertmanager --timeout=3m
 }
 
-wait_for_alertmanager() {
-  begin_phase 'waiting for Alertmanager readiness (timeout: 3m)'
+install_elasticsearch_and_alerts() {
+  phase 'installing Elasticsearch and the alert rules'
 
-  kubectl -n "${NAMESPACE}" rollout status \
-    statefulset/alertmanager-observability-kube-prometh-alertmanager \
-    --timeout=3m
-
-  complete_phase
+  kubectl apply -f "${OBSERVABILITY_DIRECTORY}/elasticsearch/resources.yaml"
+  kubectl apply -f "${OBSERVABILITY_DIRECTORY}/alerts/pod-restarts.yaml"
 }
 
-apply_elasticsearch_and_alerts() {
-  begin_phase 'applying Elasticsearch and alerting resources'
+# Grafana's dashboard sidecar loads every ConfigMap labelled grafana_dashboard=1.
+install_dashboards() {
+  phase 'installing the Grafana dashboards'
 
-  kubectl apply \
-    -f "${OBSERVABILITY_DIRECTORY}/elasticsearch/resources.yaml"
-  kubectl apply \
-    -f "${OBSERVABILITY_DIRECTORY}/alerts/pod-restarts.yaml"
+  kubectl -n observability delete configmap lab-cluster-dashboard --ignore-not-found >/dev/null
+  kubectl -n observability create configmap lab-cluster-dashboard \
+    --from-file=cluster.json="${OBSERVABILITY_DIRECTORY}/dashboards/cluster.json" >/dev/null
+  kubectl -n observability label configmap lab-cluster-dashboard grafana_dashboard=1 >/dev/null
 
-  complete_phase
-}
-
-reconcile_dashboard() {
-  local configmap_name="$1"
-  local key="$2"
-  local dashboard_file="$3"
-
-  kubectl -n "${NAMESPACE}" create configmap "${configmap_name}" \
-    --from-file="${key}=${dashboard_file}" \
-    --dry-run=client -o yaml |
-    kubectl apply -f - >/dev/null
-
-  kubectl -n "${NAMESPACE}" label configmap "${configmap_name}" \
-    grafana_dashboard=1 \
-    --overwrite >/dev/null
-}
-
-reconcile_grafana_dashboards() {
-  begin_phase 'reconciling Grafana dashboards'
-
-  reconcile_dashboard \
-    lab-cluster-dashboard \
-    cluster.json \
-    "${OBSERVABILITY_DIRECTORY}/dashboards/cluster.json"
-
-  reconcile_dashboard \
-    lab-logs-dashboard \
-    logs.json \
-    "${OBSERVABILITY_DIRECTORY}/dashboards/logs.json"
-
-  complete_phase
+  kubectl -n observability delete configmap lab-logs-dashboard --ignore-not-found >/dev/null
+  kubectl -n observability create configmap lab-logs-dashboard \
+    --from-file=logs.json="${OBSERVABILITY_DIRECTORY}/dashboards/logs.json" >/dev/null
+  kubectl -n observability label configmap lab-logs-dashboard grafana_dashboard=1 >/dev/null
 }
 
 wait_for_elasticsearch() {
-  begin_phase 'waiting for Elasticsearch readiness (timeout: 8m)'
+  phase 'waiting for Elasticsearch (up to 8 minutes)'
 
-  kubectl -n "${NAMESPACE}" rollout status \
-    statefulset/logs-es \
-    --timeout=8m
-
-  complete_phase
+  kubectl -n observability rollout status statefulset/logs-es --timeout=8m
 }
 
 install_fluent_bit() {
-  begin_phase 'reconciling Fluent Bit (timeout: 5m)'
+  phase "installing Fluent Bit ${FLUENT_BIT_CHART_VERSION}"
 
   helm upgrade --install fluent-bit fluent/fluent-bit \
-    --namespace "${NAMESPACE}" \
+    --namespace observability \
     --version "${FLUENT_BIT_CHART_VERSION}" \
     --values "${OBSERVABILITY_DIRECTORY}/fluent-bit/values.yaml" \
     --wait \
@@ -166,81 +116,57 @@ install_fluent_bit() {
     --timeout 5m \
     --history-max 5 \
     --hide-notes
-
-  complete_phase
 }
 
-apply_observability_ingress() {
-  begin_phase 'applying the observability ingress'
+install_ingress() {
+  phase 'installing the observability ingress'
 
   kubectl apply -f "${OBSERVABILITY_DIRECTORY}/ingress.yaml"
-
-  complete_phase
 }
 
-# ExternalDNS publishes the ingress record only once ingress-nginx has set the
-# Ingress address, so reconciliation is not complete until the name resolves.
-# Without this, observability-smoke runs before its own endpoint exists.
-wait_for_observability_dns() {
-  local -r host="observability.${DNS_ZONE}"
-  local resolved_address
+# ExternalDNS publishes the ingress record only after ingress-nginx sets the
+# Ingress address. Waiting here means observability-smoke never runs before
+# its own endpoint exists.
+wait_for_dns() {
+  local host="observability.${DNS_ZONE}"
+  local answer
+  local address
 
-  begin_phase 'waiting for the observability ingress DNS record (timeout: 3m)'
+  phase "waiting for ${host} to resolve (up to 3 minutes)"
 
   for _ in {1..90}; do
-    resolved_address="$(getent ahostsv4 "${host}" 2>/dev/null | awk 'NR == 1 {print $1}' || true)"
-    if [[ "${resolved_address}" == "${INGRESS_VIP}" ]]; then
-      complete_phase
+    answer="$(getent ahostsv4 "${host}" || true)"
+    address="${answer%% *}"
+    if [[ "${address}" == "${INGRESS_VIP}" ]]; then
       return
     fi
     sleep 2
   done
 
-  printf 'FAIL | %s did not resolve to %s\n' "${host}" "${INGRESS_VIP}" >&2
-  return 1
-}
-
-cluster_reconcile() {
-  validate_worker_capacity
-  prepare_foundation
-  install_prometheus_stack
-  wait_for_alertmanager
-  apply_elasticsearch_and_alerts
-  reconcile_grafana_dashboards
-  wait_for_elasticsearch
-  install_fluent_bit
-  apply_observability_ingress
-  wait_for_observability_dns
-
-  printf 'PASS | observability components reconciled; run make observability-smoke\n'
-}
-
-operator_reconcile() {
-  begin_phase 'running observability reconciliation through the Kubernetes API tunnel'
-  "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
-  CURRENT_PHASE='observability reconciliation completed'
-  complete_phase
+  fail "${host} did not resolve to ${INGRESS_VIP}"
 }
 
 main() {
   case "${1:-}" in
-    --cluster)
-      [[ "$#" -eq 1 ]] || {
-        printf 'FAIL | observability cluster mode does not accept extra arguments\n' >&2
-        return 1
-      }
-      cluster_reconcile
-      ;;
     '')
-      [[ "$#" -eq 0 ]] || {
-        printf 'FAIL | observability reconciliation does not accept arguments\n' >&2
-        return 1
-      }
-      operator_reconcile
+      [[ "$#" -eq 0 ]] || fail 'observability up does not accept arguments'
+      exec "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+      ;;
+    --cluster)
+      [[ "$#" -eq 1 ]] || fail 'observability up --cluster does not accept extra arguments'
+      check_worker_memory
+      prepare_namespace
+      install_prometheus_stack
+      install_elasticsearch_and_alerts
+      install_dashboards
+      wait_for_elasticsearch
+      install_fluent_bit
+      install_ingress
+      wait_for_dns
+      pass 'observability is installed; run make observability-smoke'
       ;;
     *)
-      printf 'FAIL | unknown argument: %s\n' "$1" >&2
-      return 1
+      fail "unknown argument: $1"
       ;;
   esac
 }

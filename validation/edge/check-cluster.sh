@@ -1,300 +1,253 @@
 #!/usr/bin/env bash
+# Cluster side of the edge validation. Runs through the SSH tunnel
+# (with-kubeconfig.sh).
+#
+#   check-cluster.sh           deep checks, including a Service DNS lifecycle
+#   check-cluster.sh --smoke   nodes and edge workloads only
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly ROOT
+readonly VALIDATION_DIRECTORY="${ROOT}/validation/edge"
+
+# shellcheck source=../../infra/edge/config.env
 source "${ROOT}/infra/edge/config.env"
 
-readonly VALIDATION_NAMESPACE=stage3-validation
+# Must match metallb.io/loadBalancerIPs in edge-service.yaml.
 readonly VALIDATION_VIP=192.168.56.201
-readonly EXTERNAL_DNS_OWNER=lab-stage3
-
-pass() {
-  printf 'PASS | %s\n' "$1"
-}
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
   exit 1
 }
 
-check_ready_nodes() {
-  local nodes
+pass() {
+  printf 'PASS | %s\n' "$1"
+}
 
-  nodes="$(kubectl get nodes -o json)"
-  jq -e '
-    (.items | length == 3)
-    and all(
-      .items[];
-      any(.status.conditions[]; .type == "Ready" and .status == "True")
-    )
-  ' <<< "${nodes}" >/dev/null ||
-    fail 'cluster does not contain exactly three Ready nodes'
+check_ready_nodes() {
+  local ready
+
+  ready="$(kubectl get nodes \
+    -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{" "}{end}')"
+
+  if [[ "${ready}" != 'True True True ' ]]; then
+    fail "the cluster should have three Ready nodes; Ready states: ${ready}"
+  fi
 }
 
 check_edge_workloads() {
   local timeout="$1"
 
-  kubectl -n metallb-system rollout status deployment/metallb-controller \
-    --timeout="${timeout}" >/dev/null
-  kubectl -n metallb-system rollout status daemonset/metallb-speaker \
-    --timeout="${timeout}" >/dev/null
-  kubectl -n vault-secrets-operator rollout status \
-    deployment/vault-secrets-operator-controller-manager \
-    --timeout="${timeout}" >/dev/null
-  kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller \
-    --timeout="${timeout}" >/dev/null
-  kubectl -n external-dns rollout status deployment/external-dns \
-    --timeout="${timeout}" >/dev/null
+  kubectl -n metallb-system rollout status deployment/metallb-controller --timeout="${timeout}" >/dev/null
+  kubectl -n metallb-system rollout status daemonset/metallb-speaker --timeout="${timeout}" >/dev/null
+  kubectl -n vault-secrets-operator rollout status deployment/vault-secrets-operator-controller-manager --timeout="${timeout}" >/dev/null
+  kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller --timeout="${timeout}" >/dev/null
+  kubectl -n external-dns rollout status deployment/external-dns --timeout="${timeout}" >/dev/null
 }
 
 check_metallb() {
-  [[ "$(kubectl -n metallb-system get ipaddresspool edge \
-    -o jsonpath='{.spec.autoAssign}')" == false ]] ||
-    fail 'MetalLB edge pool allows automatic allocation'
+  local auto_assign
+  local ingress_ip
+  local node_ports
 
-  [[ "$(kubectl -n ingress-nginx get service ingress-nginx-controller \
-    -o jsonpath='{.status.loadBalancer.ingress[0].ip}')" == "${INGRESS_VIP}" ]] ||
-    fail "ingress VIP is not ${INGRESS_VIP}"
+  auto_assign="$(kubectl -n metallb-system get ipaddresspool edge -o jsonpath='{.spec.autoAssign}')"
+  ingress_ip="$(kubectl -n ingress-nginx get service ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
+  node_ports="$(kubectl -n ingress-nginx get service ingress-nginx-controller -o jsonpath='{.spec.allocateLoadBalancerNodePorts}')"
 
-  [[ "$(kubectl -n ingress-nginx get service ingress-nginx-controller \
-    -o jsonpath='{.spec.allocateLoadBalancerNodePorts}')" == false ]] ||
-    fail 'ingress Service allocated NodePorts'
+  if [[ "${auto_assign}" != false ]]; then
+    fail 'the MetalLB edge pool hands out IPs automatically'
+  fi
+  if [[ "${ingress_ip}" != "${INGRESS_VIP}" ]]; then
+    fail "the ingress Service has IP ${ingress_ip}, not ${INGRESS_VIP}"
+  fi
+  if [[ "${node_ports}" != false ]]; then
+    fail 'the ingress Service allocated NodePorts'
+  fi
 
-  pass 'MetalLB allocation is explicit'
+  pass 'MetalLB hands out edge IPs only on request'
 }
 
 check_ingress_placement() {
-  local workers
+  local nodes
 
-  workers="$(
-    kubectl -n ingress-nginx get pods \
-      -l app.kubernetes.io/component=controller,app.kubernetes.io/instance=ingress-nginx \
-      -o json |
-      jq -r '.items[] | select(.status.phase == "Running") | .spec.nodeName' |
-      sort -u
-  )"
+  nodes="$(kubectl -n ingress-nginx get pods \
+    --selector app.kubernetes.io/component=controller,app.kubernetes.io/instance=ingress-nginx \
+    --field-selector status.phase=Running \
+    -o jsonpath='{.items[*].spec.nodeName}')"
 
-  [[ "${workers}" == $'node-2\nnode-3' ]] ||
-    fail 'ingress replicas are not spread across both workers'
+  if [[ " ${nodes} " != *' node-2 '* || " ${nodes} " != *' node-3 '* ]]; then
+    fail "ingress replicas should run on node-2 and node-3; run on: ${nodes}"
+  fi
 
-  pass 'ingress replicas run on separate workers'
+  pass 'ingress replicas run on both workers'
 }
 
 check_vault_secrets_operator() {
-  local namespace
+  local dns_skip_verify
+  local dns_ca
+  local ingress_skip_verify
+  local ingress_ca
+  local tls_type
 
-  for namespace in external-dns ingress-nginx; do
-    [[ "$(kubectl -n "${namespace}" get vaultconnection edge \
-      -o jsonpath='{.spec.skipTLSVerify}')" == false ]] ||
-      fail "${namespace} Vault connection disables TLS verification"
+  dns_skip_verify="$(kubectl -n external-dns get vaultconnection edge -o jsonpath='{.spec.skipTLSVerify}')"
+  dns_ca="$(kubectl -n external-dns get vaultconnection edge -o jsonpath='{.spec.caCertSecretRef}')"
+  ingress_skip_verify="$(kubectl -n ingress-nginx get vaultconnection edge -o jsonpath='{.spec.skipTLSVerify}')"
+  ingress_ca="$(kubectl -n ingress-nginx get vaultconnection edge -o jsonpath='{.spec.caCertSecretRef}')"
+  tls_type="$(kubectl -n ingress-nginx get secret lab-wildcard -o jsonpath='{.type}')"
 
-    [[ "$(kubectl -n "${namespace}" get vaultconnection edge \
-      -o jsonpath='{.spec.caCertSecretRef}')" == vault-ca ]] ||
-      fail "${namespace} Vault CA is missing"
-  done
-
-  kubectl -n external-dns get secret rfc2136-tsig >/dev/null
-
-  [[ "$(kubectl -n ingress-nginx get secret lab-wildcard \
-    -o jsonpath='{.type}')" == kubernetes.io/tls ]] ||
-    fail 'VSO has not synchronized the ingress TLS Secret'
+  if [[ "${dns_skip_verify}" != false || "${ingress_skip_verify}" != false ]]; then
+    fail 'a Vault connection skips TLS verification'
+  fi
+  if [[ "${dns_ca}" != vault-ca || "${ingress_ca}" != vault-ca ]]; then
+    fail 'a Vault connection does not use the vault-ca certificate'
+  fi
+  kubectl -n external-dns get secret rfc2136-tsig >/dev/null ||
+    fail 'the DNS TSIG Secret has not been synced from Vault'
+  if [[ "${tls_type}" != kubernetes.io/tls ]]; then
+    fail 'the ingress TLS Secret has not been synced from Vault'
+  fi
 
   pass 'Vault-managed DNS and TLS Secrets are present'
 }
 
 check_external_dns_configuration() {
-  local deployment
+  local arguments
+  local tsig_secret
 
-  deployment="$(kubectl -n external-dns get deployment external-dns -o json)"
+  arguments=" $(kubectl -n external-dns get deployment external-dns -o jsonpath='{.spec.template.spec.containers[0].args[*]}') "
+  tsig_secret="$(kubectl -n external-dns get deployment external-dns \
+    -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="EXTERNAL_DNS_RFC2136_TSIG_SECRET")].valueFrom.secretKeyRef.name}')"
 
-  jq -e --arg zone "${DNS_ZONE}" --arg owner "${EXTERNAL_DNS_OWNER}" '
-    [.spec.template.spec.containers[0].args[]] as $args
-    | ($args | any(. == "--domain-filter=" + $zone))
-      and ($args | any(. == "--policy=sync"))
-      and ($args | any(. == "--registry=txt"))
-      and ($args | any(. == "--txt-owner-id=" + $owner))
-      and ($args | any(. == "--source=service"))
-      and ($args | any(. == "--source=ingress"))
-  ' <<< "${deployment}" >/dev/null ||
-    fail 'ExternalDNS ownership, sync, domain, or source configuration is wrong'
+  if [[ "${arguments}" != *" --domain-filter=${DNS_ZONE} "* ]]; then
+    fail "ExternalDNS is not limited to ${DNS_ZONE}"
+  fi
+  if [[ "${arguments}" != *' --policy=sync '* ]]; then
+    fail 'ExternalDNS does not delete records it no longer needs (--policy=sync)'
+  fi
+  if [[ "${arguments}" != *' --registry=txt '* || "${arguments}" != *' --txt-owner-id=lab-stage3 '* ]]; then
+    fail 'ExternalDNS does not mark its records with the lab-stage3 owner'
+  fi
+  if [[ "${arguments}" != *' --source=service '* || "${arguments}" != *' --source=ingress '* ]]; then
+    fail 'ExternalDNS does not watch both Services and Ingresses'
+  fi
+  if [[ "${tsig_secret}" != rfc2136-tsig ]]; then
+    fail 'ExternalDNS does not take its TSIG key from the rfc2136-tsig Secret'
+  fi
 
-  jq -e '
-    .spec.template.spec.containers[0].env[]
-    | select(.name == "EXTERNAL_DNS_RFC2136_TSIG_SECRET")
-    | .valueFrom.secretKeyRef.name == "rfc2136-tsig"
-  ' <<< "${deployment}" >/dev/null ||
-    fail 'ExternalDNS TSIG does not come from the expected Secret'
-
-  pass 'ExternalDNS configuration is scoped and owned'
+  pass 'ExternalDNS is scoped to its zone and owns its records'
 }
 
-cleanup_validation_services() {
-  kubectl -n "${VALIDATION_NAMESPACE}" delete service \
-    explicit-edge \
-    no-edge-request \
-    --ignore-not-found \
-    --wait=true >/dev/null 2>&1 || true
+delete_validation_services() {
+  kubectl -n stage3-validation delete service explicit-edge no-edge-request \
+    --ignore-not-found --wait=true >/dev/null 2>&1 || true
 }
 
-check_private_load_balancer_default() {
-  kubectl -n "${VALIDATION_NAMESPACE}" apply -f - >/dev/null <<'EOF_PRIVATE_SERVICE'
-apiVersion: v1
-kind: Service
-metadata:
-  name: no-edge-request
-spec:
-  type: LoadBalancer
-  selector:
-    app: stage3-backend
-  ports:
-    - port: 80
-      targetPort: 5678
-EOF_PRIVATE_SERVICE
+check_private_service_stays_private() {
+  local address
 
+  kubectl -n stage3-validation apply -f "${VALIDATION_DIRECTORY}/private-service.yaml" >/dev/null
   sleep 5
 
-  [[ -z "$(kubectl -n "${VALIDATION_NAMESPACE}" get service no-edge-request \
-    -o jsonpath='{.status.loadBalancer.ingress[*].ip}')" ]] ||
-    fail 'unannotated LoadBalancer Service received an edge IP'
+  address="$(kubectl -n stage3-validation get service no-edge-request -o jsonpath='{.status.loadBalancer.ingress[*].ip}')"
+  if [[ -n "${address}" ]]; then
+    fail "a LoadBalancer Service that did not ask for the edge got edge IP ${address}"
+  fi
 
-  pass 'unannotated LoadBalancer Service remains private'
+  pass 'a LoadBalancer Service without an edge request stays private'
 }
 
-create_explicit_edge_service() {
-  local service_hostname="$1"
-
-  kubectl -n "${VALIDATION_NAMESPACE}" apply -f - >/dev/null <<EOF_EDGE_SERVICE
-apiVersion: v1
-kind: Service
-metadata:
-  name: explicit-edge
-  annotations:
-    metallb.io/address-pool: edge
-    metallb.io/loadBalancerIPs: ${VALIDATION_VIP}
-    external-dns.alpha.kubernetes.io/hostname: ${service_hostname}
-spec:
-  type: LoadBalancer
-  allocateLoadBalancerNodePorts: false
-  selector:
-    app: stage3-backend
-  ports:
-    - port: 80
-      targetPort: 5678
-EOF_EDGE_SERVICE
-}
-
-wait_for_service_dns() {
-  local service_hostname="$1"
-
-  for _ in {1..90}; do
-    if [[ "$(kubectl -n "${VALIDATION_NAMESPACE}" get service explicit-edge \
-      -o jsonpath='{.status.loadBalancer.ingress[0].ip}')" == "${VALIDATION_VIP}" ]] &&
-      [[ "$(dig +short "@${EDGE_HOST_IP}" "${service_hostname}" A | tail -1)" \
-        == "${VALIDATION_VIP}" ]]; then
-      return
-    fi
-    sleep 2
-  done
-
-  fail 'new Service did not receive its requested VIP and DNS record'
-}
-
-wait_for_dns_removal() {
-  local service_hostname="$1"
-
-  for _ in {1..90}; do
-    if [[ -z "$(dig +short "@${EDGE_HOST_IP}" "${service_hostname}" A)" ]]; then
-      return
-    fi
-    sleep 2
-  done
-
-  fail 'Service DNS record was not deleted'
-}
-
+# A Service asking for an edge IP and hostname gets both, and its DNS record
+# goes away with it.
 check_service_dns_lifecycle() {
-  local service_hostname
+  local hostname="service-$$.${DNS_ZONE}"
+  local address
+  local service_ip
+  local created=false
+  local removed=false
 
-  # An interrupted previous run must not satisfy today's create/delete proof.
-  cleanup_validation_services
+  kubectl -n stage3-validation apply -f "${VALIDATION_DIRECTORY}/edge-service.yaml" >/dev/null
+  kubectl -n stage3-validation annotate service explicit-edge \
+    "external-dns.alpha.kubernetes.io/hostname=${hostname}" --overwrite >/dev/null
 
-  kubectl -n "${VALIDATION_NAMESPACE}" rollout status deployment/backend \
-    --timeout=180s >/dev/null
+  for _ in {1..90}; do
+    service_ip="$(kubectl -n stage3-validation get service explicit-edge -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
+    address="$(dig +short "@${EDGE_HOST_IP}" "${hostname}" A)"
+    if [[ "${service_ip}" == "${VALIDATION_VIP}" && "${address}" == *"${VALIDATION_VIP}"* ]]; then
+      created=true
+      break
+    fi
+    sleep 2
+  done
+  if [[ "${created}" != true ]]; then
+    fail "the edge Service did not get IP ${VALIDATION_VIP} and DNS record ${hostname}"
+  fi
+  pass 'a new edge Service got its requested IP and DNS record'
 
-  check_private_load_balancer_default
+  kubectl -n stage3-validation delete service explicit-edge --wait=true >/dev/null
 
-  service_hostname="service-$$.${DNS_ZONE}"
-  create_explicit_edge_service "${service_hostname}"
-  wait_for_service_dns "${service_hostname}"
-  pass 'new Service received its requested VIP and DNS A record'
-
-  kubectl -n "${VALIDATION_NAMESPACE}" delete service explicit-edge \
-    --wait=true >/dev/null
-
-  wait_for_dns_removal "${service_hostname}"
-  pass 'Service deletion removed its owned DNS record'
+  for _ in {1..90}; do
+    address="$(dig +short "@${EDGE_HOST_IP}" "${hostname}" A)"
+    if [[ -z "${address}" ]]; then
+      removed=true
+      break
+    fi
+    sleep 2
+  done
+  if [[ "${removed}" != true ]]; then
+    fail "DNS record ${hostname} stayed after its Service was deleted"
+  fi
+  pass 'deleting the Service removed its DNS record'
 }
 
 check_ingress_dns_and_tls() {
+  local host="stage3.${DNS_ZONE}"
+  local address
   local response
-  local -r host="stage3.${DNS_ZONE}"
 
   for _ in {1..90}; do
-    if [[ "$(dig +short "@${EDGE_HOST_IP}" "${host}" A | tail -1)" \
-      == "${INGRESS_VIP}" ]]; then
-      response="$(
-        curl \
-          --noproxy '*' \
-          --silent \
-          --show-error \
-          --fail \
-          --max-time 3 \
-          "https://${host}" 2>/dev/null || true
-      )"
-
+    address="$(dig +short "@${EDGE_HOST_IP}" "${host}" A)"
+    if [[ "${address}" == *"${INGRESS_VIP}"* ]]; then
+      response="$(curl --noproxy '*' --silent --show-error --fail --max-time 3 "https://${host}" 2>/dev/null || true)"
       if [[ "${response}" == stage3-edge-ok ]]; then
-        pass 'Ingress DNS and trusted HTTPS are working'
+        pass 'Ingress DNS and trusted HTTPS work'
         return
       fi
     fi
     sleep 2
   done
 
-  fail 'validation backend is not reachable through DNS and trusted HTTPS'
-}
-
-run_smoke_checks() {
-  check_ready_nodes
-  check_edge_workloads 30s
-}
-
-run_deep_checks() {
-  trap cleanup_validation_services EXIT
-
-  check_ready_nodes
-  check_edge_workloads 90s
-  pass 'three nodes and edge workloads are Ready'
-
-  check_metallb
-  check_ingress_placement
-  check_vault_secrets_operator
-  check_external_dns_configuration
-  check_service_dns_lifecycle
-  check_ingress_dns_and_tls
+  fail "https://${host} is not reachable through DNS and trusted HTTPS"
 }
 
 main() {
   case "${1:-}" in
     --smoke)
-      [[ "$#" -eq 1 ]] || fail 'edge cluster smoke accepts only --smoke'
-      run_smoke_checks
+      [[ "$#" -eq 1 ]] || fail 'check-cluster --smoke does not accept extra arguments'
+      check_ready_nodes
+      check_edge_workloads 30s
       ;;
     '')
-      run_deep_checks
+      # An interrupted earlier run must not satisfy this run's checks.
+      delete_validation_services
+      trap delete_validation_services EXIT
+
+      check_ready_nodes
+      check_edge_workloads 90s
+      pass 'three nodes and the edge workloads are Ready'
+
+      check_metallb
+      check_ingress_placement
+      check_vault_secrets_operator
+      check_external_dns_configuration
+
+      kubectl -n stage3-validation rollout status deployment/backend --timeout=180s >/dev/null
+      check_private_service_stays_private
+      check_service_dns_lifecycle
+      check_ingress_dns_and_tls
       ;;
     *)
-      fail "unknown edge cluster validation argument: $1"
+      fail "unknown argument: $1"
       ;;
   esac
 }

@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
-readonly root
-source "${root}/infra/edge/config.env"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly ROOT
+source "${ROOT}/infra/edge/config.env"
 
 main() {
-  cd "${root}"
+  cd "${ROOT}"
 
-  "${root}/infra/edge/lib/with-kubeconfig.sh" \
-    "${root}/infra/edge/lib/kubernetes.sh" down
+  "${ROOT}/infra/edge/lib/with-kubeconfig.sh" \
+    "${ROOT}/infra/edge/lib/kubernetes.sh" down
 
   sudo -n \
-    ANSIBLE_CONFIG="${root}/infra/ansible/ansible.cfg" \
+    ANSIBLE_CONFIG="${ROOT}/infra/ansible/ansible.cfg" \
     ansible-playbook \
       -i localhost, \
       -c local \
-      "${root}/infra/ansible/playbooks/edge-host.yml" \
+      "${ROOT}/infra/ansible/playbooks/edge-host.yml" \
       --tags resolver \
       -e "edge_host_ip=${EDGE_HOST_IP}" \
       -e "dns_zone=${DNS_ZONE}" \

@@ -1,387 +1,408 @@
 #!/usr/bin/env bash
+# End-to-end proof of the whole platform: the host-side validations, then
+# policies, Jenkins, the application in this cluster's environment, and its
+# metrics and logs. One request with a unique ID is traced from HTTPS through
+# the application log file into Elasticsearch.
+#
+# Runs in two halves:
+#   1. On the host: cluster, edge and observability validations.
+#   2. With --cluster, through the SSH tunnel: everything in the cluster.
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly ROOT
+
+# shellcheck source=../../infra/edge/config.env
 source "${ROOT}/infra/edge/config.env"
+
+readonly JENKINS_HOST="jenkins.${DNS_ZONE}"
+readonly OBSERVABILITY_HOST="observability.${DNS_ZONE}"
+
+# Set in the cluster half by read_application.
+NAMESPACE=''
+APPLICATION_HOST=''
+DEPLOYMENT=''
+REPLICAS=''
+REQUEST_ID=''
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
   exit 1
 }
 
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
 pass() {
   printf 'PASS | %s\n' "$1"
 }
 
-require_command() {
-  local command_name="$1"
-
-  command -v "${command_name}" >/dev/null 2>&1 ||
-    fail "required command is unavailable: ${command_name}"
-}
-
-# The environment this cluster runs (clusterEnvironment). Its release's
-# size and hostname come from its own values, so they are read from the
-# cluster rather than assumed here.
-environment_namespace() {
-  python3 - "${ROOT}/environments.yaml" <<'PY'
-import sys
-import yaml
-
-path = sys.argv[1]
-with open(path, encoding="utf-8") as source:
-    config = yaml.safe_load(source)
-
-environments = config.get("environments") if isinstance(config, dict) else None
-if not isinstance(environments, list) or not environments:
-    raise SystemExit(f"{path}: environments must be a non-empty list")
-
-selected = [e for e in environments if isinstance(e, dict) and e.get("name") == config.get("clusterEnvironment")]
-if len(selected) != 1 or not isinstance(selected[0].get("namespace"), str):
-    raise SystemExit(f"{path}: clusterEnvironment must name one environment with a namespace")
-
-print(selected[0]["namespace"])
-PY
-}
+# ---- Host half ----
 
 run_host_validations() {
-  (
-    cd "${ROOT}"
-    PYTHONNOUSERSITE=1 make cluster-validate
-    make edge-validate
-    make observability-smoke
-  )
+  phase 'running the cluster, edge and observability validations'
+
+  cd "${ROOT}"
+  make cluster-validate
+  make edge-validate
+  make observability-smoke
 }
 
-validate_policies() {
+# ---- Cluster half: policies and Jenkins ----
+
+check_policies() {
   "${ROOT}/policies/bin/smoke" --cluster
 }
 
-validate_jenkins_executor_policy() {
-  local host="$1"
+check_jenkins_secrets() {
+  phase 'checking the Jenkins Secrets'
 
-  python3 - "https://${host}/api/json?tree=numExecutors" <<'PY'
-import base64
-import json
-import subprocess
-import sys
-import urllib.request
-
-secret = json.loads(
-    subprocess.check_output(
-        ["kubectl", "-n", "jenkins", "get", "secret", "jenkins-admin", "-o", "json"]
-    )
-)
-
-username = base64.b64decode(secret["data"]["jenkins-admin-user"]).decode()
-password = base64.b64decode(secret["data"]["jenkins-admin-password"]).decode()
-credentials = base64.b64encode(f"{username}:{password}".encode()).decode()
-
-request = urllib.request.Request(
-    sys.argv[1],
-    headers={"Authorization": f"Basic {credentials}"},
-)
-
-opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-with opener.open(request, timeout=15) as response:
-    payload = json.load(response)
-
-if payload.get("numExecutors") != 0:
-    raise SystemExit("Jenkins controller numExecutors is not zero")
-PY
+  kubectl -n jenkins get secret jenkins-admin >/dev/null || fail 'Jenkins Secret jenkins-admin is missing'
+  kubectl -n jenkins get secret github-creds >/dev/null || fail 'Jenkins Secret github-creds is missing'
+  kubectl -n jenkins get secret dockerhub-creds >/dev/null || fail 'Jenkins Secret dockerhub-creds is missing'
 }
 
-validate_jenkins() {
-  local secret
-  local controller_pod
-  local -r namespace=jenkins
-  local -r host="jenkins.${DNS_ZONE}"
+check_jenkins_placement() {
+  local nodes
+  local volume_phases
 
-  for secret in jenkins-admin github-creds dockerhub-creds; do
-    kubectl -n "${namespace}" get secret "${secret}" >/dev/null ||
-      fail "Jenkins prerequisite ${secret} is missing"
-  done
+  phase 'checking where Jenkins runs and that its volume is bound'
 
-  kubectl -n "${namespace}" rollout status statefulset/jenkins \
-    --timeout=90s >/dev/null
+  kubectl -n jenkins rollout status statefulset/jenkins --timeout=90s >/dev/null
 
-  controller_pod="$(
-    kubectl -n "${namespace}" get pod \
-      -l app.kubernetes.io/component=jenkins-controller \
-      -o json
-  )"
-
-  jq -e '
-    .items
-    | length == 1
-      and .[0].spec.nodeName == "node-3"
-  ' <<< "${controller_pod}" >/dev/null ||
-    fail 'Jenkins controller is not running on node-3'
-
-  kubectl -n "${namespace}" get pvc -o json |
-    jq -e '.items | any(.status.phase == "Bound")' >/dev/null ||
-    fail 'Jenkins persistence is not Bound'
-
-  [[ "$(kubectl -n "${namespace}" get ingress jenkins \
-    -o jsonpath='{.spec.ingressClassName}')" == nginx ]] ||
-    fail 'Jenkins ingress is missing'
-
-  [[ "$(dig +short "@${EDGE_HOST_IP}" "${host}" A | tail -1)" \
-    == "${INGRESS_VIP}" ]] ||
-    fail 'Jenkins hostname does not use the ingress LoadBalancer'
-
-  curl \
-    --noproxy '*' \
-    --silent \
-    --show-error \
-    --fail \
-    --location \
-    --max-time 15 \
-    "https://${host}/login" \
-    --output /dev/null ||
-    fail 'Jenkins HTTPS endpoint failed'
-
-  validate_jenkins_executor_policy "${host}" ||
-    fail 'Jenkins controller executor count is not zero'
-
-  pass 'Jenkins credentials, placement, persistence, HTTPS, and executor policy'
-}
-
-validate_application() {
-  local namespace="$1"
-  local request_id="$2"
-  local deployment
-  local pdb
-  local pods
-  local response
-  local logged=false
-  local pod
-  local host
-  local replicas
-
-  kubectl -n "${namespace}" rollout status deployment/sample-java-app \
-    --timeout=90s >/dev/null
-
-  deployment="$(
-    kubectl -n "${namespace}" get deployment sample-java-app -o json
-  )"
-
-  replicas="$(jq -r '.spec.replicas' <<< "${deployment}")"
-  jq -e '.spec.replicas >= 1 and .status.readyReplicas == .spec.replicas' \
-    <<< "${deployment}" >/dev/null ||
-    fail "application has not all ${replicas} replicas ready"
-
-  host="$(
-    kubectl -n "${namespace}" get ingress sample-java-app \
-      -o jsonpath='{.spec.rules[0].host}'
-  )"
-  [[ "${host}" == *".${DNS_ZONE}" ]] ||
-    fail "application host ${host} is outside ${DNS_ZONE}"
-
-  jq -e '
-    .spec.template.spec.containers[]
-    | select(.name == "app")
-    | .image
-    | test("@sha256:[0-9a-f]{64}$")
-  ' <<< "${deployment}" >/dev/null ||
-    fail 'application image is not immutable'
-
-  jq -e '
-    .spec.template.spec as $pod
-    | ($pod.automountServiceAccountToken == false)
-      and ($pod.enableServiceLinks == false)
-      and ($pod.terminationGracePeriodSeconds == 30)
-      and ($pod.securityContext.seccompProfile.type == "RuntimeDefault")
-      and (
-        $pod.containers
-        | all(
-            .securityContext.runAsNonRoot == true
-            and .securityContext.allowPrivilegeEscalation == false
-            and (.securityContext.capabilities.drop | index("ALL") != null)
-          )
-      )
-      and (
-        $pod.containers
-        | any(.name == "app" and .imagePullPolicy == "IfNotPresent")
-      )
-  ' <<< "${deployment}" >/dev/null ||
-    fail 'application Pod runtime security or lifecycle contract is wrong'
-
-  # A budget must leave a Pod evictable, or no node can be drained; a single
-  # replica needs none.
-  if ((replicas > 1)); then
-    pdb="$(kubectl -n "${namespace}" get poddisruptionbudget sample-java-app -o json)"
-    jq -e --argjson replicas "${replicas}" '.spec.minAvailable < $replicas' \
-      <<< "${pdb}" >/dev/null ||
-      fail 'application PodDisruptionBudget leaves no Pod evictable'
-  elif kubectl -n "${namespace}" get poddisruptionbudget sample-java-app >/dev/null 2>&1; then
-    fail 'single-replica application has a PodDisruptionBudget that blocks drains'
+  nodes="$(kubectl -n jenkins get pods \
+    --selector app.kubernetes.io/component=jenkins-controller \
+    -o jsonpath='{.items[*].spec.nodeName}')"
+  if [[ "${nodes}" != node-3 ]]; then
+    fail "the Jenkins controller should run once on node-3; runs on: ${nodes}"
   fi
 
-  pods="$(
-    kubectl -n "${namespace}" get pods \
-      -l app.kubernetes.io/name=sample-java-app \
-      -o json
-  )"
+  volume_phases="$(kubectl -n jenkins get pvc -o jsonpath='{.items[*].status.phase}')"
+  if [[ "${volume_phases}" != *Bound* ]]; then
+    fail 'the Jenkins volume is not Bound'
+  fi
+}
 
-  jq -e --argjson replicas "${replicas}" '
-    [.items[] | select(.status.phase == "Running") | .spec.nodeName] as $nodes
-    | ($nodes | length) == $replicas
-      and ($replicas == 1 or ($nodes | unique | sort) == ["node-2", "node-3"])
-  ' <<< "${pods}" >/dev/null ||
-    fail 'application is not spread across both workers'
+check_jenkins_endpoint() {
+  local ingress_class
+  local address
 
-  [[ "$(dig +short "@${EDGE_HOST_IP}" "${host}" A | tail -1)" \
-    == "${INGRESS_VIP}" ]] ||
-    fail 'application DNS is wrong'
+  phase "checking https://${JENKINS_HOST}"
 
-  response="$(
-    curl \
-      --noproxy '*' \
-      --silent \
-      --show-error \
-      --fail \
-      --get \
-      --data-urlencode "val=${request_id}" \
-      "https://${host}/api/foos"
-  )"
+  ingress_class="$(kubectl -n jenkins get ingress jenkins -o jsonpath='{.spec.ingressClassName}')"
+  if [[ "${ingress_class}" != nginx ]]; then
+    fail 'the Jenkins ingress is missing'
+  fi
 
-  [[ "${response}" == "QueryStringValue: ${request_id}" ]] ||
-    fail 'application HTTPS response is wrong'
+  address="$(dig +short "@${EDGE_HOST_IP}" "${JENKINS_HOST}" A)"
+  if [[ "${address}" != *"${INGRESS_VIP}"* ]]; then
+    fail "${JENKINS_HOST} resolves to ${address:-nothing}, not the ingress VIP ${INGRESS_VIP}"
+  fi
+
+  if ! curl --noproxy '*' --silent --show-error --fail --location --max-time 15 \
+    --output /dev/null "https://${JENKINS_HOST}/login"; then
+    fail "https://${JENKINS_HOST}/login does not answer"
+  fi
+}
+
+# Builds run on agents only; the controller has no executors.
+check_jenkins_executors() {
+  local admin_user
+  local admin_password
+  local answer
+  local executors
+
+  phase 'checking that the Jenkins controller runs no builds itself'
+
+  admin_user="$(kubectl -n jenkins get secret jenkins-admin \
+    -o go-template='{{ index .data "jenkins-admin-user" | base64decode }}')"
+  admin_password="$(kubectl -n jenkins get secret jenkins-admin \
+    -o go-template='{{ index .data "jenkins-admin-password" | base64decode }}')"
+
+  answer="$(curl --noproxy '*' --silent --show-error --fail --max-time 15 \
+    --user "${admin_user}:${admin_password}" \
+    "https://${JENKINS_HOST}/api/json?tree=numExecutors")"
+  executors="$(jq -r .numExecutors <<< "${answer}")"
+
+  if [[ "${executors}" != 0 ]]; then
+    fail "the Jenkins controller has ${executors} executors, not 0"
+  fi
+}
+
+# ---- Cluster half: the application ----
+
+read_application() {
+  local environment
+
+  environment="$("${ROOT}/platform/bin/cluster-environment")"
+  NAMESPACE="${environment#* }"
+
+  phase "checking sample-java-app in ${NAMESPACE}"
+
+  kubectl -n "${NAMESPACE}" rollout status deployment/sample-java-app --timeout=90s >/dev/null
+
+  DEPLOYMENT="$(kubectl -n "${NAMESPACE}" get deployment sample-java-app -o json)"
+  REPLICAS="$(jq -r .spec.replicas <<< "${DEPLOYMENT}")"
+  APPLICATION_HOST="$(kubectl -n "${NAMESPACE}" get ingress sample-java-app -o jsonpath='{.spec.rules[0].host}')"
+}
+
+check_application_replicas() {
+  local ready
+
+  ready="$(jq -r .status.readyReplicas <<< "${DEPLOYMENT}")"
+  if [[ "${REPLICAS}" -lt 1 || "${ready}" != "${REPLICAS}" ]]; then
+    fail "sample-java-app has ${ready} of ${REPLICAS} replicas ready"
+  fi
+}
+
+check_application_image() {
+  local image
+
+  image="$(jq -r '.spec.template.spec.containers[] | select(.name == "app") | .image' <<< "${DEPLOYMENT}")"
+  if [[ ! "${image}" =~ @sha256:[0-9a-f]{64}$ ]]; then
+    fail "sample-java-app image is not pinned by digest: ${image}"
+  fi
+}
+
+check_application_pod_security() {
+  local automount
+  local service_links
+  local grace_period
+  local seccomp
+  local pull_policy
+  local container_count
+  local non_root_count
+  local no_escalation_count
+  local drop_all_count
+
+  automount="$(jq -r .spec.template.spec.automountServiceAccountToken <<< "${DEPLOYMENT}")"
+  service_links="$(jq -r .spec.template.spec.enableServiceLinks <<< "${DEPLOYMENT}")"
+  grace_period="$(jq -r .spec.template.spec.terminationGracePeriodSeconds <<< "${DEPLOYMENT}")"
+  seccomp="$(jq -r .spec.template.spec.securityContext.seccompProfile.type <<< "${DEPLOYMENT}")"
+  pull_policy="$(jq -r '.spec.template.spec.containers[] | select(.name == "app") | .imagePullPolicy' <<< "${DEPLOYMENT}")"
+
+  container_count="$(jq -r '.spec.template.spec.containers | length' <<< "${DEPLOYMENT}")"
+  non_root_count="$(jq -r '[.spec.template.spec.containers[] | select(.securityContext.runAsNonRoot == true)] | length' <<< "${DEPLOYMENT}")"
+  no_escalation_count="$(jq -r '[.spec.template.spec.containers[] | select(.securityContext.allowPrivilegeEscalation == false)] | length' <<< "${DEPLOYMENT}")"
+  drop_all_count="$(jq -r '[.spec.template.spec.containers[] | select(.securityContext.capabilities.drop | index("ALL"))] | length' <<< "${DEPLOYMENT}")"
+
+  if [[ "${automount}" != false ]]; then
+    fail 'sample-java-app Pods mount a ServiceAccount token'
+  fi
+  if [[ "${service_links}" != false ]]; then
+    fail 'sample-java-app Pods get Service environment variables (enableServiceLinks)'
+  fi
+  if [[ "${grace_period}" != 30 ]]; then
+    fail "sample-java-app termination grace period is ${grace_period}s, not 30s"
+  fi
+  if [[ "${seccomp}" != RuntimeDefault ]]; then
+    fail "sample-java-app seccomp profile is ${seccomp}, not RuntimeDefault"
+  fi
+  if [[ "${pull_policy}" != IfNotPresent ]]; then
+    fail "sample-java-app pull policy is ${pull_policy}, not IfNotPresent"
+  fi
+  if [[ "${non_root_count}" != "${container_count}" ]]; then
+    fail 'a sample-java-app container may run as root'
+  fi
+  if [[ "${no_escalation_count}" != "${container_count}" ]]; then
+    fail 'a sample-java-app container allows privilege escalation'
+  fi
+  if [[ "${drop_all_count}" != "${container_count}" ]]; then
+    fail 'a sample-java-app container keeps Linux capabilities'
+  fi
+}
+
+# A budget must leave a Pod evictable, or no node can be drained; a single
+# replica needs none.
+check_application_disruption_budget() {
+  local min_available
+
+  if [[ "${REPLICAS}" -eq 1 ]]; then
+    if kubectl -n "${NAMESPACE}" get poddisruptionbudget sample-java-app >/dev/null 2>&1; then
+      fail 'single-replica sample-java-app has a PodDisruptionBudget that blocks node drains'
+    fi
+    return
+  fi
+
+  min_available="$(kubectl -n "${NAMESPACE}" get poddisruptionbudget sample-java-app -o jsonpath='{.spec.minAvailable}')"
+  if [[ "${min_available}" -ge "${REPLICAS}" ]]; then
+    fail "sample-java-app PodDisruptionBudget (minAvailable ${min_available}) leaves no Pod evictable"
+  fi
+}
+
+check_application_placement() {
+  local nodes
+  local -a node_list
+
+  nodes="$(kubectl -n "${NAMESPACE}" get pods \
+    --selector app.kubernetes.io/name=sample-java-app \
+    --field-selector status.phase=Running \
+    -o jsonpath='{.items[*].spec.nodeName}')"
+  read -ra node_list <<< "${nodes}"
+
+  if [[ "${#node_list[@]}" != "${REPLICAS}" ]]; then
+    fail "${#node_list[@]} of ${REPLICAS} sample-java-app replicas are running"
+  fi
+  if [[ "${REPLICAS}" -gt 1 && ( " ${nodes} " != *' node-2 '* || " ${nodes} " != *' node-3 '* ) ]]; then
+    fail "sample-java-app replicas should be spread over node-2 and node-3; run on: ${nodes}"
+  fi
+}
+
+check_application_request() {
+  local address
+  local response
+
+  phase "sending request ${REQUEST_ID} to https://${APPLICATION_HOST}"
+
+  if [[ "${APPLICATION_HOST}" != *".${DNS_ZONE}" ]]; then
+    fail "sample-java-app host ${APPLICATION_HOST} is outside ${DNS_ZONE}"
+  fi
+
+  address="$(dig +short "@${EDGE_HOST_IP}" "${APPLICATION_HOST}" A)"
+  if [[ "${address}" != *"${INGRESS_VIP}"* ]]; then
+    fail "${APPLICATION_HOST} resolves to ${address:-nothing}, not the ingress VIP ${INGRESS_VIP}"
+  fi
+
+  response="$(curl --noproxy '*' --silent --show-error --fail --get \
+    --data-urlencode "val=${REQUEST_ID}" \
+    "https://${APPLICATION_HOST}/api/foos")"
+  if [[ "${response}" != "QueryStringValue: ${REQUEST_ID}" ]]; then
+    fail "sample-java-app answered: ${response}"
+  fi
+}
+
+# The application writes request logs to a file asynchronously; one of the
+# replicas must have it within 15 seconds.
+check_application_file_log() {
+  local pods
+  local pod
+
+  pods="$(kubectl -n "${NAMESPACE}" get pods \
+    --selector app.kubernetes.io/name=sample-java-app \
+    -o jsonpath='{.items[*].metadata.name}')"
 
   for _ in {1..15}; do
-    while IFS= read -r pod; do
-      if kubectl -n "${namespace}" exec "${pod}" -c app -- \
-        grep -Fq "${request_id}" /var/log/app/app.log; then
-        logged=true
-        break
+    for pod in ${pods}; do
+      if kubectl -n "${NAMESPACE}" exec "${pod}" -c app -- \
+        grep -Fq "${REQUEST_ID}" /var/log/app/app.log; then
+        return
       fi
-    done < <(
-      kubectl -n "${namespace}" get pods \
-        -l app.kubernetes.io/name=sample-java-app \
-        -o name
-    )
-
-    [[ "${logged}" == true ]] && break
+    done
     sleep 1
   done
 
-  [[ "${logged}" == true ]] ||
-    fail 'request did not reach the asynchronous application file log'
-
-  pass 'application replicas, immutable image, runtime security, disruption budget, placement, DNS, HTTPS, and file logging'
+  fail "request ${REQUEST_ID} did not reach the application log file"
 }
 
-validate_observability() {
-  local namespace="$1"
-  local request_id="$2"
-  local metrics
-  local found=0
-  local -r host="observability.${DNS_ZONE}"
+# ---- Cluster half: observability ----
 
-  kubectl -n "${namespace}" get servicemonitor sample-java-app >/dev/null ||
-    fail 'application ServiceMonitor is absent'
+check_application_metrics() {
+  local up
+  local up_value
+  local heap
+  local heap_series
 
-  metrics="$(
-    curl \
-      --noproxy '*' \
-      --silent \
-      --show-error \
-      --fail \
-      --get \
-      --data-urlencode 'query=up{service="sample-java-app"}' \
-      "https://${host}/prometheus/api/v1/query"
-  )"
+  phase 'checking the application metrics in Prometheus'
 
-  jq -e '
-    .status == "success"
-    and (.data.result | any(.value[1] == "1"))
-  ' <<< "${metrics}" >/dev/null ||
-    fail 'application Prometheus target is not UP'
+  kubectl -n "${NAMESPACE}" get servicemonitor sample-java-app >/dev/null ||
+    fail 'the sample-java-app ServiceMonitor is missing'
 
-  metrics="$(
-    curl \
-      --noproxy '*' \
-      --silent \
-      --show-error \
-      --fail \
-      --get \
-      --data-urlencode 'query=jvm_memory_used_bytes{area="heap"}' \
-      "https://${host}/prometheus/api/v1/query"
-  )"
+  up="$(curl --noproxy '*' --silent --show-error --fail --get \
+    --data-urlencode 'query=up{service="sample-java-app"}' \
+    "https://${OBSERVABILITY_HOST}/prometheus/api/v1/query")"
+  up_value="$(jq -r '.data.result[0].value[1] // "none"' <<< "${up}")"
+  if [[ "${up_value}" != 1 ]]; then
+    fail "Prometheus does not see sample-java-app as up (up = ${up_value})"
+  fi
 
-  jq -e '
-    .status == "success"
-    and (.data.result | length > 0)
-  ' <<< "${metrics}" >/dev/null ||
-    fail 'application JVM metric is absent'
+  heap="$(curl --noproxy '*' --silent --show-error --fail --get \
+    --data-urlencode 'query=jvm_memory_used_bytes{area="heap"}' \
+    "https://${OBSERVABILITY_HOST}/prometheus/api/v1/query")"
+  heap_series="$(jq -r '.data.result | length' <<< "${heap}")"
+  if [[ "${heap_series}" -eq 0 ]]; then
+    fail 'Prometheus has no JVM heap metric from sample-java-app'
+  fi
+}
 
-  kubectl -n observability get configmap \
-    lab-cluster-dashboard \
-    lab-logs-dashboard >/dev/null ||
-    fail 'Grafana dashboards are not provisioned'
+check_dashboards() {
+  local values
+  local log_datasource
 
-  helm -n observability get values observability -o json |
-    jq -e '
-      .grafana.additionalDataSources
-      | any(.uid == "application-logs" and .database == "app-logs")
-    ' >/dev/null ||
-    fail 'Grafana application log datasource is absent'
+  phase 'checking the Grafana dashboards and log datasource'
+
+  kubectl -n observability get configmap lab-cluster-dashboard >/dev/null ||
+    fail 'the Grafana cluster dashboard is missing'
+  kubectl -n observability get configmap lab-logs-dashboard >/dev/null ||
+    fail 'the Grafana logs dashboard is missing'
+
+  values="$(helm -n observability get values observability -o json)"
+  log_datasource="$(jq -r '.grafana.additionalDataSources[] | select(.uid == "application-logs") | .database' <<< "${values}")"
+  if [[ "${log_datasource}" != app-logs ]]; then
+    fail 'Grafana has no application-logs datasource on the app-logs index'
+  fi
+}
+
+# Fluent Bit ships the application log file to Elasticsearch.
+check_log_delivery() {
+  local search
+  local hits
+
+  phase "checking that request ${REQUEST_ID} reached Elasticsearch"
 
   for _ in {1..30}; do
-    found="$(
-      kubectl get --raw \
-        "/api/v1/namespaces/observability/services/http:logs-es-http:9200/proxy/app-logs/_search?q=log:${request_id}" \
-        2>/dev/null |
-        jq -r '.hits.total.value' || true
-    )"
-
-    if [[ "${found:-}" =~ ^[0-9]+$ && "${found}" -gt 0 ]]; then
-      break
+    search="$(kubectl get --raw \
+      "/api/v1/namespaces/observability/services/http:logs-es-http:9200/proxy/app-logs/_search?q=log:${REQUEST_ID}" \
+      2>/dev/null || true)"
+    if [[ -n "${search}" ]]; then
+      hits="$(jq -r '.hits.total.value // 0' <<< "${search}")"
+      if [[ "${hits}" -gt 0 ]]; then
+        return
+      fi
     fi
     sleep 2
   done
 
-  [[ "${found:-}" =~ ^[0-9]+$ && "${found}" -gt 0 ]] ||
-    fail 'application request log did not reach Elasticsearch'
-
-  pass 'application metrics, dashboards, and log delivery'
-}
-
-run_cluster_validations() {
-  local command_name
-  local namespace
-  local request_id
-
-  for command_name in kubectl jq dig curl python3 helm; do
-    require_command "${command_name}"
-  done
-
-  validate_policies
-  validate_jenkins
-
-  namespace="$(environment_namespace)"
-  request_id="e2e-$(date +%s)-$$"
-
-  validate_application "${namespace}" "${request_id}"
-  validate_observability "${namespace}" "${request_id}"
-
-  pass 'complete platform validation'
+  fail "request ${REQUEST_ID} did not reach Elasticsearch"
 }
 
 main() {
   case "${1:-}" in
-    --cluster)
-      [[ "$#" -eq 1 ]] || fail 'e2e cluster mode accepts only --cluster'
-      run_cluster_validations
-      ;;
     '')
+      [[ "$#" -eq 0 ]] || fail 'e2e validation does not accept arguments'
       run_host_validations
-      "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+      exec "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+      ;;
+    --cluster)
+      [[ "$#" -eq 1 ]] || fail 'e2e validation --cluster does not accept extra arguments'
+      REQUEST_ID="e2e-$(date +%s)-$$"
+
+      check_policies
+      check_jenkins_secrets
+      check_jenkins_placement
+      check_jenkins_endpoint
+      check_jenkins_executors
+      pass 'Jenkins secrets, placement, HTTPS and executor policy'
+
+      read_application
+      check_application_replicas
+      check_application_image
+      check_application_pod_security
+      check_application_disruption_budget
+      check_application_placement
+      check_application_request
+      check_application_file_log
+      pass 'application replicas, image, security, disruption budget, placement, HTTPS and file log'
+
+      check_application_metrics
+      check_dashboards
+      check_log_delivery
+      pass 'application metrics, dashboards and log delivery'
+
+      pass 'the whole platform is validated end to end'
       ;;
     *)
-      fail "unknown e2e validation argument: $1"
+      fail "unknown argument: $1"
       ;;
   esac
 }

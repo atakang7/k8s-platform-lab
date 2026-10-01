@@ -1,6 +1,6 @@
 # The application namespace of this cluster's delivery environment
 # (clusterEnvironment in environments.yaml).
-# platform/environment/bin/up renders __NAMESPACE__, __ENVIRONMENT__ and __ROLE_ID__.
+# platform/environment/bin/up renders __NAMESPACE__ and __ENVIRONMENT__.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -104,7 +104,7 @@ spec:
   method: appRole
   mount: approle
   appRole:
-    roleId: __ROLE_ID__
+    roleId: registry-pull-vso   # pinned by platform/environment/bin/up
     secretRef: registry-pull-approle
 ---
 # Image pull Secret the base chart references by default.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
-readonly root
-source "${root}/infra/edge/config.env"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly ROOT
+source "${ROOT}/infra/edge/config.env"
 export VAULT_ADDR=https://127.0.0.1:8200
 
 fail() {

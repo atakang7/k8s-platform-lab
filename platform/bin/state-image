@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Prints the image digest a service runs in this cluster's environment.
+
+It reads state/<clusterEnvironment>.yaml, which delivery writes. Prints
+nothing when the service has no release there yet.
+
+    state-image <service>
+"""
+import pathlib
+import sys
+
+import yaml
+
+if len(sys.argv) != 2:
+    sys.exit("usage: state-image <service>")
+service = sys.argv[1]
+
+root = pathlib.Path(__file__).resolve().parents[2]
+config = yaml.safe_load((root / "environments.yaml").read_text(encoding="utf-8"))
+state_path = root / "state" / f"{config['clusterEnvironment']}.yaml"
+state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+
+release = state["services"].get(service) or {}
+print(release.get("image") or "")

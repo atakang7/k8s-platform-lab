@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
+# Installs the resource-requests admission webhook at the image digest this
+# cluster's environment records in state/<environment>.yaml.
+# Runs through the SSH tunnel to the cluster (with-kubeconfig.sh).
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly ROOT
-readonly POLICY_NAMESPACE=policy-system
-readonly RESOURCE_REQUESTS_WEBHOOK=resource-requests-webhook
-readonly RESOURCE_REQUESTS_CHART="${ROOT}/policies/resource-requests-webhook/helm/resource-requests-webhook"
+readonly WEBHOOK_CHART="${ROOT}/policies/resource-requests-webhook/helm/resource-requests-webhook"
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
@@ -20,43 +21,18 @@ pass() {
   printf 'PASS | %s\n' "$1"
 }
 
-# The image digest this cluster's environment (clusterEnvironment in
-# environments.yaml) wants, from its state/<name>.yaml, recorded there by
-# delivery.
-resolve_state_digest() {
-  local name="$1"
-
-  python3 - "${ROOT}/environments.yaml" "${ROOT}/state" "${name}" <<'PY'
-import sys
-import yaml
-
-config_path, state_directory, name = sys.argv[1:]
-with open(config_path, encoding="utf-8") as source:
-    environment = yaml.safe_load(source)["clusterEnvironment"]
-path = f"{state_directory}/{environment}.yaml"
-with open(path, encoding="utf-8") as source:
-    state = yaml.safe_load(source)
-
-services = state.get("services") if isinstance(state, dict) else None
-if not isinstance(services, dict) or name not in services:
-    raise SystemExit(f"{path}: services has no entry for {name}")
-
-print((services[name] or {}).get("image") or "")
-PY
-}
-
-reconcile_resource_requests_webhook() {
+install_resource_requests_webhook() {
   local digest
 
-  digest="$(resolve_state_digest "${RESOURCE_REQUESTS_WEBHOOK}")"
-  [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] ||
-    fail "this cluster's environment has no ${RESOURCE_REQUESTS_WEBHOOK} release yet; its CI on main records one in the first environment, then promote it"
+  digest="$("${ROOT}/platform/bin/state-image" resource-requests-webhook)"
+  if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    fail "this cluster's environment has no resource-requests-webhook release yet; its CI on main records one in the first environment"
+  fi
 
-  phase 'reconciling policy resource-requests-webhook (timeout: 5m)'
+  phase "installing resource-requests-webhook at ${digest}"
 
-  helm upgrade --install "${RESOURCE_REQUESTS_WEBHOOK}" \
-    "${RESOURCE_REQUESTS_CHART}" \
-    --namespace "${POLICY_NAMESPACE}" \
+  helm upgrade --install resource-requests-webhook "${WEBHOOK_CHART}" \
+    --namespace policy-system \
     --create-namespace \
     --set-string "image.digest=${digest}" \
     --wait \
@@ -64,19 +40,18 @@ reconcile_resource_requests_webhook() {
     --timeout 5m \
     --history-max 5 \
     --hide-notes
-
-  pass 'policy resource-requests-webhook reconciled'
 }
 
 main() {
   case "${1:-}" in
     '')
       [[ "$#" -eq 0 ]] || fail 'policies up does not accept arguments'
-      "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+      exec "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
       ;;
     --cluster)
       [[ "$#" -eq 1 ]] || fail 'policies up --cluster does not accept extra arguments'
-      reconcile_resource_requests_webhook
+      install_resource_requests_webhook
+      pass 'resource-requests-webhook is installed'
       ;;
     *)
       fail "unknown argument: $1"

@@ -1,0 +1,26 @@
+# policies/bin/smoke dry-runs this against the cluster: it must be DENIED
+# (the init container "setup" has no CPU request).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: policy-smoke-init-missing-cpu
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: policy-smoke-init-missing-cpu
+  template:
+    metadata:
+      labels:
+        app: policy-smoke-init-missing-cpu
+    spec:
+      initContainers:
+        - name: setup
+          image: registry.k8s.io/pause@sha256:278fb9dbcca9518083ad1e11276933a2e96f23de604a3a08cc3c80002767d24c
+          resources:
+            requests: {memory: 16Mi}
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause@sha256:278fb9dbcca9518083ad1e11276933a2e96f23de604a3a08cc3c80002767d24c
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
