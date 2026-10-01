@@ -2,7 +2,7 @@
 # jinja2 in ~/.local breaks its templating (environmentfilter was removed).
 export PYTHONNOUSERSITE := 1
 
-.PHONY: prerequisites cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up environment-up observability-up observability-smoke endpoints credentials policies-up policy-up policies-smoke policy-smoke vault-init vault-unseal e2e-validate destroy
+.PHONY: prerequisites cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up environment-up observability-up observability-smoke endpoints credentials policies-up policies-smoke vault-init vault-unseal e2e-validate destroy
 
 prerequisites:
 	./infra/bin/prerequisites
@@ -49,16 +49,10 @@ credentials:
 	@bash ./platform/bin/credentials
 
 policies-up:
-	./policies/bin/up all
-
-policy-up:
-	./policies/bin/up "$(POLICY)"
+	./policies/bin/up
 
 policies-smoke:
-	./policies/bin/smoke all
-
-policy-smoke:
-	./policies/bin/smoke "$(POLICY)"
+	./policies/bin/smoke
 
 vault-init:
 	./infra/edge/bin/vault-init

@@ -219,22 +219,10 @@ cd policies/resource-requests-webhook
 go test ./...
 ~~~
 
-Install one policy:
-
-~~~bash
-make policy-up POLICY=resource-requests-webhook
-~~~
-
-Install all policies:
+Install and verify:
 
 ~~~bash
 make policies-up
-~~~
-
-Verify one or all:
-
-~~~bash
-make policy-smoke POLICY=resource-requests-webhook
 make policies-smoke
 ~~~
 

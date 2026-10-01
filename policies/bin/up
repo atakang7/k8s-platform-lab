@@ -68,48 +68,18 @@ reconcile_resource_requests_webhook() {
   pass 'policy resource-requests-webhook reconciled'
 }
 
-reconcile_policy() {
-  local policy="$1"
-
-  case "${policy}" in
-    resource-requests-webhook)
+main() {
+  case "${1:-}" in
+    '')
+      [[ "$#" -eq 0 ]] || fail 'policies up does not accept arguments'
+      "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+      ;;
+    --cluster)
+      [[ "$#" -eq 1 ]] || fail 'policies up --cluster does not accept extra arguments'
       reconcile_resource_requests_webhook
       ;;
     *)
-      fail "unknown policy '${policy}'; supported policies: resource-requests-webhook"
-      ;;
-  esac
-}
-
-cluster_reconcile() {
-  local requested="$1"
-
-  if [[ "${requested}" == all ]]; then
-    requested=resource-requests-webhook
-  fi
-
-  reconcile_policy "${requested}"
-}
-
-operator_reconcile() {
-  local requested="$1"
-
-  "${ROOT}/infra/edge/lib/with-kubeconfig.sh" \
-    "$0" --cluster "${requested}"
-}
-
-main() {
-  case "${1:-}" in
-    --cluster)
-      [[ "$#" -eq 2 ]] || fail 'cluster mode requires exactly one policy name'
-      cluster_reconcile "$2"
-      ;;
-    '')
-      fail 'policy name is required; run make policy-up POLICY=resource-requests-webhook'
-      ;;
-    *)
-      [[ "$#" -eq 1 ]] || fail 'policy reconciliation accepts exactly one policy name'
-      operator_reconcile "$1"
+      fail "unknown argument: $1"
       ;;
   esac
 }

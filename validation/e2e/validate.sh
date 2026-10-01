@@ -55,7 +55,7 @@ run_host_validations() {
 }
 
 validate_policies() {
-  "${ROOT}/policies/bin/smoke" --cluster resource-requests-webhook
+  "${ROOT}/policies/bin/smoke" --cluster
 }
 
 validate_jenkins_executor_policy() {
