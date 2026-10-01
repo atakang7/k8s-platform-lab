@@ -67,10 +67,12 @@ if VBoxManage list dhcpservers | grep -q 'HostInterfaceNetworking-vboxnet0'; the
 fi
 
 
-echo "==> Adding $USER to the vboxusers and docker groups"
+echo "==> Adding $USER to the docker group"
 
-sudo usermod -aG vboxusers,docker "$USER"
+# Only `make container-validate` uses Docker on the host. The bring-up does
+# not, so it can continue in this session; the group applies at next login.
+sudo usermod -aG docker "$USER"
 
 
 echo
-echo "Done. Log out and back in so the new groups apply."
+echo "Done."

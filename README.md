@@ -401,7 +401,7 @@ Install everything with one command:
 make prerequisites
 ~~~
 
-Then log out and back in, so the `vboxusers` and `docker` groups apply.
+Continue with `make cluster-up` in the same shell. No new login is needed.
 
 ~~~text
 make prerequisites
