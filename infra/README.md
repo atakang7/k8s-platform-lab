@@ -297,6 +297,7 @@ stored in the repository.
 
 | Path | Responsibility |
 |---|---|
+| `bin/prerequisites` | install operator-host tools |
 | `ansible/site.yml` | cluster provisioning entry point |
 | `ansible/group_vars/all.yml` | versions, CIDRs, topology pins |
 | `ansible/roles/` | OS, runtime, Kubernetes, network, storage |
