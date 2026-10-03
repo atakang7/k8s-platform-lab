@@ -355,3 +355,4 @@ make e2e-validate
 - Observability:
   [platform/observability/README.md](platform/observability/README.md)
 - Validation: [validation/README.md](validation/README.md)
+- Whole runbook in a fresh VM: [test/README.md](test/README.md)

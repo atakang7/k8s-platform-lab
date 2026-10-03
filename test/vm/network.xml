@@ -1,0 +1,12 @@
+<!-- The test VM's own network. The fixed MAC that test/bin/up gives the VM always gets
+     192.168.150.10: https://libvirt.org/formatnetwork.html#addressing -->
+<network>
+  <name>lab-test</name>
+  <forward mode='nat'/>
+  <ip address='192.168.150.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.150.100' end='192.168.150.200'/>
+      <host mac='52:54:00:15:00:10' ip='192.168.150.10'/>
+    </dhcp>
+  </ip>
+</network>

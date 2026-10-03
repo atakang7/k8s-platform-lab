@@ -2,7 +2,7 @@
 # jinja2 in ~/.local breaks its templating (environmentfilter was removed).
 export PYTHONNOUSERSITE := 1
 
-.PHONY: prerequisites cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up environment-up observability-up observability-smoke endpoints credentials policies-up policies-smoke vault-init vault-unseal e2e-validate destroy
+.PHONY: prerequisites cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up environment-up observability-up observability-smoke endpoints credentials policies-up policies-smoke vault-init vault-unseal e2e-validate test-vm test-vm-ssh test-vm-snapshot test-vm-restore test-vm-snapshot-delete test-vm-destroy destroy
 
 prerequisites:
 	./infra/bin/prerequisites
@@ -63,6 +63,28 @@ vault-unseal:
 
 e2e-validate:
 	./validation/e2e/validate.sh
+
+test-vm:
+	./test/bin/up
+
+test-vm-ssh:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR ubuntu@192.168.150.10
+
+test-vm-snapshot:
+	virsh -c qemu:///system snapshot-create-as lab-test ready
+
+test-vm-restore:
+	virsh -c qemu:///system snapshot-revert lab-test ready --running
+
+test-vm-snapshot-delete:
+	virsh -c qemu:///system snapshot-delete lab-test ready
+
+test-vm-destroy:
+	-virsh -c qemu:///system destroy lab-test
+	-virsh -c qemu:///system undefine lab-test --remove-all-storage --snapshots-metadata
+	-virsh -c qemu:///system net-destroy lab-test
+	-virsh -c qemu:///system net-undefine lab-test
+	-virsh -c qemu:///system vol-delete --pool default ubuntu-24.04-server-cloudimg-amd64.img
 
 destroy:
 	vagrant destroy
