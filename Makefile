@@ -7,8 +7,9 @@ export PYTHONNOUSERSITE := 1
 prerequisites:
 	./infra/bin/prerequisites
 
+# --provision reruns Ansible on VMs that already exist, so this reconciles.
 cluster-up:
-	vagrant up
+	vagrant up --provision
 
 cluster-validate:
 	./validation/cluster/validate.sh
