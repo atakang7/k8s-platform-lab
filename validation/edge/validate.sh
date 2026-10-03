@@ -51,7 +51,9 @@ validate_host_network() (
     fail 'Vagrant SSH configuration is empty'
 
   for node in 1 2 3; do
-    addresses="$(ssh -F "${ssh_config}" "node-${node}" 'ip -o -4 addr show')" ||
+    # A busy node can take seconds to accept SSH; retry instead of failing.
+    addresses="$(ssh -F "${ssh_config}" -o ConnectTimeout=10 -o ConnectionAttempts=6 \
+      "node-${node}" 'ip -o -4 addr show')" ||
       fail "node-${node} SSH is unavailable"
 
     grep -q "10.50.0.$((node + 9))/24" <<< "${addresses}" ||
