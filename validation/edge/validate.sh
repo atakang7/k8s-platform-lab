@@ -84,6 +84,8 @@ validate_host_network() (
 
 validate_vault() {
   local status_json
+  local dns_policy
+  local tls_policy
 
   status_json="$(vault status -format=json 2>/dev/null)" ||
     fail 'Vault is unavailable or sealed'
@@ -109,12 +111,15 @@ validate_vault() {
 
   require_vault_operator_token
 
-  vault policy read dns-read |
-    grep -q 'secret/data/edge/dns/tsig' ||
+  # Read into a variable first: `vault … | grep -q` under pipefail fails when
+  # grep exits early and vault gets SIGPIPE, which reported a present policy
+  # as absent.
+  dns_policy="$(vault policy read dns-read)"
+  [[ "${dns_policy}" == *secret/data/edge/dns/tsig* ]] ||
     fail 'DNS read policy is absent'
 
-  vault policy read tls-read |
-    grep -q 'secret/data/edge/tls/wildcard' ||
+  tls_policy="$(vault policy read tls-read)"
+  [[ "${tls_policy}" == *secret/data/edge/tls/wildcard* ]] ||
     fail 'TLS read policy is absent'
 
   vault audit list -format=json |
@@ -126,12 +131,13 @@ validate_vault() {
 
 validate_bind() {
   local unauthorized_record
+  local soa
 
   systemctl is-active --quiet named ||
     fail 'BIND is not running'
 
-  dig +short "@${EDGE_HOST_IP}" "${DNS_ZONE}" SOA |
-    grep -q "ns.${DNS_ZONE}" ||
+  soa="$(dig +short "@${EDGE_HOST_IP}" "${DNS_ZONE}" SOA)"
+  [[ "${soa}" == *"ns.${DNS_ZONE}"* ]] ||
     fail 'authoritative zone is unavailable'
 
   [[ -z "$(dig +short "@${EDGE_HOST_IP}" example.com A)" ]] ||
@@ -152,11 +158,13 @@ validate_bind() {
 }
 
 validate_cluster_edge() {
+  local resolved
+
   "${ROOT}/infra/edge/lib/with-kubeconfig.sh" \
     "${ROOT}/validation/edge/check-cluster.sh"
 
-  resolvectl query "edge.${DNS_ZONE}" |
-    grep -q "${INGRESS_VIP}" ||
+  resolved="$(resolvectl query "edge.${DNS_ZONE}")"
+  [[ "${resolved}" == *"${INGRESS_VIP}"* ]] ||
     fail 'host split DNS did not resolve the ingress Service record'
 
   [[ "$(dig +short "@${EDGE_HOST_IP}" "edge.${DNS_ZONE}" A | tail -1)" \
