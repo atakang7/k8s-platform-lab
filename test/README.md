@@ -38,8 +38,8 @@ sudo modprobe kvm_intel
 cat /sys/module/kvm_intel/parameters/nested    # Y
 ~~~
 
-The test VM needs about 83 GiB free on the host: its disk grows up to
-70 GiB, and a snapshot adds its 13 GiB of memory. Check with `df -h /`.
+The test VM needs about 82 GiB free on the host: its disk grows up to
+70 GiB, and a snapshot adds its 12 GiB of memory. Check with `df -h /`.
 
 Fill in `.env` as [RUNBOOK.md §4](../RUNBOOK.md#4-ci-credentials) shows.
 

@@ -57,7 +57,7 @@ create_vm() {
   # host-passthrough lets VirtualBox run inside the VM.
   virt-install \
     --name lab-test \
-    --memory 13312 \
+    --memory 12288 \
     --vcpus 8 \
     --cpu host-passthrough \
     --osinfo ubuntu24.04 \
