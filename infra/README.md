@@ -73,7 +73,7 @@ delivery, Jenkins, and observability are owned by higher-level directories.
    │ node-2             │    │ node-3             │
    │ WORKER             │    │ WORKER             │
    │ 10.50.0.11         │    │ 10.50.0.12         │
-   │ 2 CPU · 2 GiB      │    │ 2 CPU · 4 GiB      │
+   │ 2 CPU · 4 GiB      │    │ 2 CPU · 4 GiB      │
    │ edge 192.168.56.11 │    │ edge 192.168.56.12 │
    └─────────┬──────────┘    └─────────┬──────────┘
              │                         │

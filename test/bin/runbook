@@ -9,11 +9,6 @@ readonly ROOT
 # refuses to start.
 export LC_ALL=C.UTF-8
 
-# node-2 starves at 2 GiB (Prometheus, Fluent Bit, ingress); node-3 needs
-# 4 GiB for Jenkins builds next to Grafana. Read by the Vagrantfile.
-export NODE_2_MEMORY=3072
-export WORKER_MEMORY=4096
-
 # shellcheck source=../../infra/edge/config.env
 source "${ROOT}/infra/edge/config.env"
 
