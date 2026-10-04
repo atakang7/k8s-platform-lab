@@ -46,14 +46,17 @@ push_image() {
 
 resolve_registry_digest() {
   local tag="$1"
+  local repo_digests
   local digest
 
   # Docker records Docker Hub RepoDigests without the docker.io/ prefix.
-  digest="$(docker image inspect \
+  repo_digests="$(docker image inspect \
     --format '{{range .RepoDigests}}{{println .}}{{end}}' \
-    "${tag}" |
-    sed -n "s#^${REPOSITORY#docker.io/}@\\(sha256:[0-9a-f]\\{64\\}\\)\$#\\1#p" |
-    head -n1)"
+    "${tag}")"
+  digest="$(sed -n "s#^${REPOSITORY#docker.io/}@\\(sha256:[0-9a-f]\\{64\\}\\)\$#\\1#p" <<< "${repo_digests}")"
+  # Keep the first match. Not `| head -n1`: under pipefail, head exiting early
+  # can kill sed and fail the line.
+  digest="${digest%%$'\n'*}"
 
   [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] ||
     fail "no registry digest recorded for ${tag}"

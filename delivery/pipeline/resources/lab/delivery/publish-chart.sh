@@ -17,8 +17,12 @@ source "${SCRIPT_DIRECTORY}/registry.sh"
 read_chart_identity() {
   local metadata="$1"
   local field="$2"
+  local value
 
-  sed -n "s/^${field}: //p" <<< "${metadata}" | head -n1
+  # First match only. Not `| head -n1`: under pipefail, head exiting early can
+  # kill sed and fail the line.
+  value="$(sed -n "s/^${field}: //p" <<< "${metadata}")"
+  printf '%s\n' "${value%%$'\n'*}"
 }
 
 main() {

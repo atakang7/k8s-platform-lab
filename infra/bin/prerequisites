@@ -79,7 +79,12 @@ disable_vbox_dhcp() {
 
   # It hands out 192.168.56.101-254, which overlaps the MetalLB pool.
   # The Vagrantfile refuses to start until it is off.
-  if VBoxManage list dhcpservers | grep -q 'HostInterfaceNetworking-vboxnet0'; then
+  local dhcp_servers
+
+  # Saved first: `VBoxManage … | grep -q` under pipefail fails when grep exits
+  # early, which would silently skip this step.
+  dhcp_servers="$(VBoxManage list dhcpservers)"
+  if [[ "${dhcp_servers}" == *HostInterfaceNetworking-vboxnet0* ]]; then
     VBoxManage dhcpserver modify --netname HostInterfaceNetworking-vboxnet0 --disable
   fi
 }
