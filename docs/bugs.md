@@ -11,7 +11,7 @@ The platform never broke; every late failure was a check misreading a healthy sy
 **2. node-2 drops SSH during edge validation** · `493c958`, `5f37264`
 - Found: `node-2 SSH is unavailable` in 6 of 16 runs, always right after `make edge-up`.
 - Cause: a busy node-2 drops the session; `ConnectionAttempts` only retries the TCP connect, and Vagrant's `LogLevel FATAL` hid the error.
-- Fix: retry the whole SSH command for a minute with `LogLevel=ERROR`; Ansible `timeout = 60`, `retries = 3`.
+- Fix: retry the whole SSH command for a minute with `LogLevel=ERROR`; Ansible `timeout = 60`, `retries = 3`. The node SSH check was later dropped when validation was shortened.
 
 **3. node-2 runs out of memory** · `a73cc9a`
 - Found: 47 MB free of 2 GiB, load average 31 on 2 CPUs.

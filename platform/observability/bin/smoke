@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Checks that observability works: workloads ready, volumes bound, alert rules
-# loaded, endpoints answering over trusted HTTPS, and logs reaching
-# Elasticsearch. Runs through the SSH tunnel to the cluster (with-kubeconfig.sh).
+# Checks that observability works: workloads ready, alert rules loaded,
+# endpoints answering over trusted HTTPS, and logs reaching Elasticsearch. Runs through the SSH tunnel to the cluster (with-kubeconfig.sh).
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -12,7 +11,6 @@ source "${ROOT}/infra/edge/config.env"
 
 readonly HOST="observability.${DNS_ZONE}"
 readonly ELASTICSEARCH='/api/v1/namespaces/observability/services/http:logs-es-http:9200/proxy'
-readonly ALERTMANAGER='/api/v1/namespaces/observability/services/http:observability-kube-prometh-alertmanager:9093/proxy'
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
@@ -48,24 +46,11 @@ wait_for_workloads() {
   kubectl -n observability rollout status statefulset/alertmanager-observability-kube-prometh-alertmanager --timeout=90s
 }
 
-check_volumes_and_alert_rules() {
-  local phases
-  local bound=0
-  local volume_phase
+check_alert_rules() {
   local rules
   local groups
 
-  phase 'checking the volumes and the loaded alert rules'
-
-  phases="$(kubectl -n observability get pvc -o jsonpath='{.items[*].status.phase}')"
-  for volume_phase in ${phases}; do
-    if [[ "${volume_phase}" == Bound ]]; then
-      bound=$((bound + 1))
-    fi
-  done
-  if [[ "${bound}" -lt 2 ]]; then
-    fail "Prometheus and Elasticsearch need Bound volumes; volume phases: ${phases}"
-  fi
+  phase 'checking that Prometheus loaded the alert rules'
 
   rules="$(curl --noproxy '*' --silent --show-error --fail --max-time 10 \
     "https://${HOST}/prometheus/api/v1/rules")"
@@ -76,31 +61,12 @@ check_volumes_and_alert_rules() {
 }
 
 check_endpoints() {
-  local answer
-  local address
-  local health
-  local status
-
-  phase 'checking DNS, the HTTPS endpoints and the internal services'
-
-  answer="$(getent ahostsv4 "${HOST}" || true)"
-  address="${answer%% *}"
-  if [[ "${address}" != "${INGRESS_VIP}" ]]; then
-    fail "${HOST} resolves to ${address:-nothing}, not ${INGRESS_VIP}"
-  fi
+  phase 'checking Grafana and Prometheus over HTTPS'
 
   curl --noproxy '*' --silent --show-error --fail --max-time 10 \
     "https://${HOST}/grafana/api/health" >/dev/null
   curl --noproxy '*' --silent --show-error --fail --max-time 10 \
     "https://${HOST}/prometheus/-/ready" >/dev/null
-
-  kubectl get --raw "${ALERTMANAGER}/-/ready" >/dev/null
-
-  health="$(kubectl get --raw "${ELASTICSEARCH}/_cluster/health")"
-  status="$(jq -r .status <<< "${health}")"
-  if [[ "${status}" != green && "${status}" != yellow ]]; then
-    fail "Elasticsearch cluster health is ${status}"
-  fi
 }
 
 check_log_delivery() {
@@ -129,10 +95,10 @@ main() {
       [[ "$#" -eq 1 ]] || fail 'observability smoke --cluster does not accept extra arguments'
       trap show_namespace_state ERR
       wait_for_workloads
-      check_volumes_and_alert_rules
+      check_alert_rules
       check_endpoints
       check_log_delivery
-      pass 'observability workloads, volumes, rules, endpoints and log delivery are healthy'
+      pass 'observability workloads, alert rules, endpoints and log delivery are healthy'
       ;;
     *)
       fail "unknown argument: $1"

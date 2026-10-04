@@ -62,22 +62,13 @@ make cluster-validate
 3 Ready nodes
         │
         ▼
-roles + private IPs
-        │
-        ▼
-version / package pins
-        │
-        ▼
-Pod + Service CIDRs
-        │
-        ▼
-Calico networking
+Calico running
         │
         ▼
 cross-node Pod traffic
         │
         ▼
-dynamic local-path PVC
+dynamic local-path volume
 ~~~
 
 This validates the kubeadm/Ansible result, not merely the playbook exit
@@ -89,13 +80,7 @@ code.
 make container-validate
         │
         ▼
-build test stage
-        │
-        ▼
-build runtime image
-        │
-        ▼
-OCI source + revision
+build image (runs unit tests)
         │
         ▼
 run container
@@ -104,26 +89,11 @@ run container
 HTTP query response
         │
         ▼
-health endpoints
-        │
-        ▼
-file log
-        │
-        ▼
-request line not on stdout
-        │
-        ▼
-Prometheus metrics
+ready + metrics endpoints
         │
         ▼
 non-root runtime
-        │
-        ▼
-no build tools/source
 ~~~
-
-Optional registry push validation can also verify that the registry
-returns an immutable SHA256 digest.
 
 ## 5. Edge smoke vs deep validation
 
@@ -137,28 +107,22 @@ normal-path health
 make edge-validate
       │
       ▼
-host network boundary
+control-plane ports not on the edge
       │
       ▼
-Vault TLS / Raft / audit
+Vault unsealed
       │
       ▼
-BIND authoritative only
+BIND answers, rejects unsigned updates
       │
       ▼
-unsigned update rejected
+Secrets synced from Vault
       │
       ▼
-ExternalDNS integration
-      │
-      ▼
-HTTPS ingress
+Ingress DNS + trusted HTTPS
 ~~~
 
-Deep edge validation deliberately exercises trust and network boundaries.
-
-It also checks that the control plane has no edge NIC and that private
-control-plane ports are not exposed through worker edge addresses.
+Edge validation exercises the trust and network boundaries.
 
 ## 6. Observability smoke
 
@@ -167,9 +131,6 @@ make observability-smoke
         │
         ▼
 workloads ready
-        │
-        ▼
-PVCs bound
         │
         ▼
 alert rule loaded
@@ -193,15 +154,6 @@ make policies-smoke
         │
         ▼
 webhook rollout
-        │
-        ▼
-immutable digest
-        │
-        ▼
-replica spread
-        │
-        ▼
-TLS / caBundle
         │
         ▼
 fail-closed config
@@ -231,13 +183,16 @@ observability smoke
 policy admission
       │
       ▼
-Jenkins
+Jenkins over HTTPS
       │
       ▼
-application
+app runs the recorded release
       │
       ▼
-metrics + log delivery
+one request → Elasticsearch
+      │
+      ▼
+Prometheus scrapes the app
       │
       ▼
 complete platform PASS
@@ -246,115 +201,7 @@ complete platform PASS
 The final check crosses subsystem boundaries instead of repeating only
 local health checks.
 
-## 9. Jenkins checks
-
-~~~text
-Jenkins
-   │
-   ├── required Secrets exist
-   ├── controller Ready
-   ├── controller on node-3
-   ├── PVC Bound
-   ├── ingress present
-   ├── DNS → ingress VIP
-   ├── HTTPS login works
-   └── numExecutors == 0
-~~~
-
-This proves the controller is persistent, reachable, correctly placed,
-and not being used as a build executor.
-
-## 10. Application checks
-
-The validator reads the deployed replica count from the cluster instead
-of hard-coding four replicas.
-
-~~~text
-current environment release
-          │
-          ▼
-all replicas Ready
-          │
-          ▼
-immutable image digest
-          │
-          ▼
-runtime security
-          │
-          ▼
-PDB rule
-          │
-          ▼
-worker placement
-          │
-          ▼
-DNS + HTTPS
-          │
-          ▼
-request ID in app.log
-~~~
-
-Replica behavior follows the active environment profile:
-
-~~~text
-dev / stage
-1 replica
-no PDB
-
-
-base / prod
-4 replicas
-spread across node-2 + node-3
-PDB must leave a Pod evictable
-~~~
-
-For any multi-replica environment, the validator requires running Pods
-across both workers.
-
-## 11. End-to-end request evidence
-
-~~~text
-generate request ID
-        │
-        ▼
-HTTPS /api/foos
-        │
-        ▼
-correct response
-        │
-        ▼
-same ID in app.log
-        │
-        ▼
-same ID in Elasticsearch
-~~~
-
-One request ID ties the HTTP path and the log-delivery path together.
-
-The orchestrator passes that value explicitly instead of hiding it in
-ambient state.
-
-## 12. Metrics evidence
-
-~~~text
-application ServiceMonitor
-        │
-        ▼
-Prometheus target UP
-        │
-        ▼
-JVM heap metric present
-        │
-        ▼
-Grafana dashboards exist
-        │
-        ▼
-app-logs datasource exists
-~~~
-
-This verifies both collection and dashboard provisioning.
-
-## 13. Command map
+## 9. Command map
 
 | Path | Command | Purpose |
 |---|---|---|
@@ -366,7 +213,7 @@ This verifies both collection and dashboard provisioning.
 | policies | `make policies-smoke` | admission behavior |
 | `e2e/` | `make e2e-validate` | complete platform |
 
-## 14. Failure rule
+## 10. Failure rule
 
 ~~~text
 validator finds failure

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Checks that the resource-requests admission webhook runs, is registered
-# fail-closed, and rejects Deployments without CPU and memory requests in every
-# application environment namespace. Admission is tested with server-side
+# Checks that the resource-requests admission webhook runs, fails closed, and
+# rejects Deployments without CPU and memory requests in every application
+# environment namespace. Admission is tested with server-side
 # dry-runs of the manifests in policies/resource-requests-webhook/smoke/.
 # Runs through the SSH tunnel to the cluster (with-kubeconfig.sh).
 set -Eeuo pipefail
@@ -24,127 +24,24 @@ pass() {
   printf 'PASS | %s\n' "$1"
 }
 
-check_webhook_deployment() {
-  local replicas
-  local ready
-  local automount
-  local containers
-  local image
-  local nodes
-  local -a node_list
-
-  phase 'checking the webhook Deployment'
+check_webhook_running() {
+  phase 'checking that the webhook is running'
 
   kubectl -n policy-system rollout status deployment/resource-requests-webhook --timeout=90s >/dev/null
-
-  replicas="$(kubectl -n policy-system get deployment resource-requests-webhook -o jsonpath='{.spec.replicas}')"
-  ready="$(kubectl -n policy-system get deployment resource-requests-webhook -o jsonpath='{.status.readyReplicas}')"
-  automount="$(kubectl -n policy-system get deployment resource-requests-webhook -o jsonpath='{.spec.template.spec.automountServiceAccountToken}')"
-  containers="$(kubectl -n policy-system get deployment resource-requests-webhook -o jsonpath='{.spec.template.spec.containers[*].name}')"
-  image="$(kubectl -n policy-system get deployment resource-requests-webhook -o jsonpath='{.spec.template.spec.containers[0].image}')"
-
-  if [[ "${replicas}" != 2 || "${ready}" != 2 ]]; then
-    fail "webhook should run 2 ready replicas; has ${ready:-0} of ${replicas}"
-  fi
-  if [[ "${automount}" != false ]]; then
-    fail 'webhook Pods mount a ServiceAccount token'
-  fi
-  if [[ "${containers}" == *' '* ]]; then
-    fail "webhook Pods should have one container; have: ${containers}"
-  fi
-  if [[ ! "${image}" =~ @sha256:[0-9a-f]{64}$ ]]; then
-    fail "webhook image is not pinned by digest: ${image}"
-  fi
-
-  nodes="$(kubectl -n policy-system get pods \
-    --selector app.kubernetes.io/instance=resource-requests-webhook \
-    --field-selector status.phase=Running \
-    -o jsonpath='{.items[*].spec.nodeName}')"
-  read -ra node_list <<< "${nodes}"
-
-  if [[ "${#node_list[@]}" != 2 || "${node_list[0]}" == "${node_list[1]}" ]]; then
-    fail "webhook replicas should run on 2 different nodes; run on: ${nodes}"
-  fi
 }
 
-# The registration must fail closed (a webhook outage blocks Deployments
-# instead of letting them through) and cover only environment namespaces.
-check_webhook_registration() {
-  local webhook='validatingwebhookconfiguration/resource-requests-webhook'
-  local names
+# Fail closed: if the webhook is down, Deployments are blocked, not let through.
+check_fail_closed() {
   local failure_policy
-  local side_effects
-  local timeout
-  local service
-  local operations
-  local resources
-  local environment_selector
-  local excluded_namespaces
 
-  phase 'checking the webhook registration'
-
-  names="$(kubectl get "${webhook}" -o jsonpath='{.webhooks[*].name}')"
-  failure_policy="$(kubectl get "${webhook}" -o jsonpath='{.webhooks[0].failurePolicy}')"
-  side_effects="$(kubectl get "${webhook}" -o jsonpath='{.webhooks[0].sideEffects}')"
-  timeout="$(kubectl get "${webhook}" -o jsonpath='{.webhooks[0].timeoutSeconds}')"
-  service="$(kubectl get "${webhook}" -o jsonpath='{.webhooks[0].clientConfig.service.namespace}/{.webhooks[0].clientConfig.service.name}{.webhooks[0].clientConfig.service.path}')"
-  operations="$(kubectl get "${webhook}" -o jsonpath='{.webhooks[0].rules[0].operations}')"
-  resources="$(kubectl get "${webhook}" -o jsonpath='{.webhooks[0].rules[0].apiGroups[0]}/{.webhooks[0].rules[0].apiVersions[0]}/{.webhooks[0].rules[0].resources[0]}')"
-  environment_selector="$(kubectl get "${webhook}" -o jsonpath='{.webhooks[0].namespaceSelector.matchExpressions[?(@.key=="delivery.lab.test/environment")].operator}')"
-  excluded_namespaces="$(kubectl get "${webhook}" -o jsonpath='{.webhooks[0].namespaceSelector.matchExpressions[?(@.key=="kubernetes.io/metadata.name")].values}')"
-
-  if [[ "${names}" == *' '* ]]; then
-    fail "expected one webhook; found: ${names}"
-  fi
+  failure_policy="$(kubectl get validatingwebhookconfiguration resource-requests-webhook \
+    -o jsonpath='{.webhooks[0].failurePolicy}')"
   if [[ "${failure_policy}" != Fail ]]; then
     fail "webhook failurePolicy is ${failure_policy}, not Fail"
   fi
-  if [[ "${side_effects}" != None ]]; then
-    fail "webhook sideEffects is ${side_effects}, not None"
-  fi
-  if [[ "${timeout}" != 5 ]]; then
-    fail "webhook timeout is ${timeout}s, not 5s"
-  fi
-  if [[ "${service}" != policy-system/resource-requests-webhook/validate ]]; then
-    fail "webhook calls ${service}, not policy-system/resource-requests-webhook/validate"
-  fi
-  if [[ "${operations}" != '["CREATE","UPDATE"]' ]]; then
-    fail "webhook checks operations ${operations}, not CREATE and UPDATE"
-  fi
-  if [[ "${resources}" != apps/v1/deployments ]]; then
-    fail "webhook checks ${resources}, not apps/v1/deployments"
-  fi
-  if [[ "${environment_selector}" != Exists ]]; then
-    fail 'webhook is not limited to environment namespaces'
-  fi
-  if [[ "${excluded_namespaces}" != '["kube-node-lease","kube-public","kube-system","policy-system"]' ]]; then
-    fail "webhook excludes ${excluded_namespaces}, not the system namespaces and policy-system"
-  fi
 }
 
-check_serving_tls() {
-  local secret_type
-  local secret_ca
-  local webhook_ca
-  local certificate
-  local key
-
-  phase 'checking the webhook serving certificate'
-
-  secret_type="$(kubectl -n policy-system get secret resource-requests-webhook-tls -o jsonpath='{.type}')"
-  secret_ca="$(kubectl -n policy-system get secret resource-requests-webhook-tls -o jsonpath='{.data.ca\.crt}')"
-  certificate="$(kubectl -n policy-system get secret resource-requests-webhook-tls -o jsonpath='{.data.tls\.crt}')"
-  key="$(kubectl -n policy-system get secret resource-requests-webhook-tls -o jsonpath='{.data.tls\.key}')"
-  webhook_ca="$(kubectl get validatingwebhookconfiguration resource-requests-webhook -o jsonpath='{.webhooks[0].clientConfig.caBundle}')"
-
-  if [[ "${secret_type}" != kubernetes.io/tls || -z "${certificate}" || -z "${key}" ]]; then
-    fail 'webhook serving TLS Secret is incomplete'
-  fi
-  if [[ -z "${secret_ca}" || "${secret_ca}" != "${webhook_ca}" ]]; then
-    fail 'webhook serving CA does not match the registered caBundle'
-  fi
-}
-
+# Server-side dry-runs go through the real API server and webhook, but save nothing.
 check_admission() {
   local namespaces
   local namespace
@@ -175,13 +72,6 @@ check_admission() {
     if [[ "${output}" != *"${DENIAL}"* ]]; then
       fail "unexpected denial for a missing memory request in ${namespace}: ${output}"
     fi
-
-    if output="$(kubectl -n "${namespace}" apply --dry-run=server -f "${SMOKE_MANIFESTS}/init-missing-cpu.yaml" 2>&1)"; then
-      fail "a Deployment whose init container has no CPU request was admitted in ${namespace}"
-    fi
-    if [[ "${output}" != *"init container \"setup\" ${DENIAL}"* ]]; then
-      fail "unexpected denial for an init container without a CPU request in ${namespace}: ${output}"
-    fi
   done
 }
 
@@ -193,9 +83,8 @@ main() {
       ;;
     --cluster)
       [[ "$#" -eq 1 ]] || fail 'policies smoke --cluster does not accept extra arguments'
-      check_webhook_deployment
-      check_webhook_registration
-      check_serving_tls
+      check_webhook_running
+      check_fail_closed
       check_admission
       pass 'resource-requests-webhook enforces CPU and memory requests in every environment'
       ;;

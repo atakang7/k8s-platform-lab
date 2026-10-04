@@ -266,5 +266,4 @@ Expected decisions:
 regular CPU + memory  ──► accepted
 CPU missing           ──► rejected
 memory missing        ──► rejected
-bad init container    ──► rejected
 ~~~

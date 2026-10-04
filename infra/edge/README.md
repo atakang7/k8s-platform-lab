@@ -249,17 +249,15 @@ make edge-validate
       │
       ▼
 ┌──────────────────────┐
-│ host interfaces      │
-├──────────────────────┤
 │ API not edge-exposed │
 ├──────────────────────┤
-│ Vault TLS / Raft     │
+│ Vault unsealed       │
 ├──────────────────────┤
 │ BIND authoritative   │
 ├──────────────────────┤
 │ unsigned DNS denied  │
 ├──────────────────────┤
-│ ExternalDNS lifecycle│
+│ Secrets from Vault   │
 ├──────────────────────┤
 │ HTTPS ingress        │
 └──────────────────────┘

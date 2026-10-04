@@ -183,19 +183,7 @@ make policies-smoke
 rollout ready
         │
         ▼
-digest identity
-        │
-        ▼
-replica spread
-        │
-        ▼
-TLS CA matches caBundle
-        │
-        ▼
 failurePolicy: Fail
-        │
-        ▼
-namespace scope
         │
         ▼
 real server dry-runs
@@ -207,7 +195,6 @@ Admission behavior is tested through the real Kubernetes API:
 CPU + memory       ──► accepted
 CPU missing        ──► rejected
 memory missing     ──► rejected
-bad init container ──► rejected
 ~~~
 
 ## 8. Commands

@@ -298,16 +298,10 @@ make observability-smoke
 workloads ready
         │
         ▼
-PVCs bound
-        │
-        ▼
 alert rule loaded
         │
         ▼
-DNS + TLS endpoints
-        │
-        ▼
-Elasticsearch health
+Grafana + Prometheus over HTTPS
         │
         ▼
 kubernetes-* index exists

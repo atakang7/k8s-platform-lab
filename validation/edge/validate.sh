@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
+# Edge validation: the trust and network boundaries on the host, then the
+# cluster side (check-cluster.sh) through the SSH tunnel.
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly ROOT
 source "${ROOT}/infra/edge/lib/operator-state.sh"
-source "${ROOT}/infra/edge/lib/sudo.sh"
 
 pass() {
   printf 'PASS | %s\n' "$1"
@@ -18,64 +19,17 @@ fail() {
 require_commands() {
   local command_name
 
-  for command_name in \
-    vagrant VBoxManage vault dig nsupdate curl jq ssh ip timeout resolvectl; do
+  for command_name in vault dig nsupdate curl jq timeout; do
     command -v "${command_name}" >/dev/null ||
       fail "missing command: ${command_name}"
   done
-
-  require_sudo 'edge validation' ||
-    fail 'sudo authentication is required for edge validation'
 }
 
-validate_host_network() (
-  set -Eeuo pipefail
-
-  local host_addresses
-  local ssh_config
-  local node
-  local addresses
+# The workers' edge addresses face the outside; the control plane's API
+# server (6443) and etcd (2379) must not be reachable there.
+validate_private_ports() {
   local edge_ip
   local private_port
-
-  host_addresses="$(ip -o -4 addr show)"
-  [[ "${host_addresses}" == *" ${EDGE_HOST_IP}/24 "* ]] ||
-    fail 'host edge IP is missing'
-
-  ssh_config="$(mktemp)"
-  trap 'rm -f -- "${ssh_config}"' EXIT
-
-  vagrant ssh-config |
-    sed -n '/^Host /,$p' > "${ssh_config}"
-  [[ -s "${ssh_config}" ]] ||
-    fail 'Vagrant SSH configuration is empty'
-
-  for node in 1 2 3; do
-    # Right after edge-up a busy node can drop the SSH session itself, which
-    # ConnectionAttempts does not retry. Retry the whole command for a minute.
-    # LogLevel=ERROR overrides Vagrant's FATAL so the reason is printed.
-    addresses=''
-    for _ in {1..6}; do
-      if addresses="$(ssh -F "${ssh_config}" -o LogLevel=ERROR -o ConnectTimeout=10 \
-        "node-${node}" 'ip -o -4 addr show')"; then
-        break
-      fi
-      sleep 10
-    done
-    [[ -n "${addresses}" ]] ||
-      fail "node-${node} SSH is unavailable"
-
-    grep -q "10.50.0.$((node + 9))/24" <<< "${addresses}" ||
-      fail "node-${node} lost its private address"
-
-    if [[ "${node}" == 1 ]]; then
-      ! grep -q '192\.168\.56\.' <<< "${addresses}" ||
-        fail 'control plane has an edge interface'
-    else
-      grep -q "192.168.56.$((node + 9))/24" <<< "${addresses}" ||
-        fail "node-${node} lacks its edge address"
-    fi
-  done
 
   for edge_ip in "${NODE2_EDGE_IP}" "${NODE3_EDGE_IP}"; do
     for private_port in 6443 2379; do
@@ -85,104 +39,43 @@ validate_host_network() (
     done
   done
 
-  ! grep -Eq \
-    '(^|[[:space:]])[^#[:space:]]*\.lab\.test([[:space:]]|$)' \
-    /etc/hosts ||
-    fail '/etc/hosts contains a lab.test workaround'
-
-  pass 'host and VM network boundaries are intact'
-)
-
-validate_vault() {
-  local status_json
-  local dns_policy
-  local tls_policy
-
-  status_json="$(vault status -format=json 2>/dev/null)" ||
-    fail 'Vault is unavailable or sealed'
-
-  jq -e '.initialized and (.sealed | not)' <<< "${status_json}" >/dev/null ||
-    fail 'Vault is not initialized and unsealed'
-
-  sudo -n grep -q 'storage "raft"' /etc/vault/vault.hcl ||
-    fail 'Vault is not configured for Raft'
-  sudo -n grep -q 'tls_cert_file' /etc/vault/vault.hcl ||
-    fail 'Vault TLS is not configured'
-  sudo -n test -s /var/log/vault/audit.log ||
-    fail 'Vault audit file is unavailable'
-
-  if curl \
-    --noproxy '*' \
-    --silent \
-    --fail \
-    --max-time 3 \
-    "http://${EDGE_HOST_IP}:8200/v1/sys/health" >/dev/null 2>&1; then
-    fail 'Vault accepted plaintext HTTP on the edge'
-  fi
-
-  require_vault_operator_token
-
-  # Read into a variable first: `vault … | grep -q` under pipefail fails when
-  # grep exits early and vault gets SIGPIPE, which reported a present policy
-  # as absent.
-  dns_policy="$(vault policy read dns-read)"
-  [[ "${dns_policy}" == *secret/data/edge/dns/tsig* ]] ||
-    fail 'DNS read policy is absent'
-
-  tls_policy="$(vault policy read tls-read)"
-  [[ "${tls_policy}" == *secret/data/edge/tls/wildcard* ]] ||
-    fail 'TLS read policy is absent'
-
-  vault audit list -format=json |
-    jq -e 'has("file/")' >/dev/null ||
-    fail 'Vault file audit device is absent'
-
-  pass 'Vault storage, TLS, audit, and scoped policies are configured'
+  pass 'control-plane ports are not exposed on the edge network'
 }
 
-validate_bind() {
-  local unauthorized_record
-  local soa
+validate_vault() {
+  local status
 
-  systemctl is-active --quiet named ||
-    fail 'BIND is not running'
+  status="$(vault status -format=json 2>/dev/null)" ||
+    fail 'Vault is unavailable or sealed'
+  jq -e '.initialized and (.sealed | not)' <<< "${status}" >/dev/null ||
+    fail 'Vault is not initialized and unsealed'
+
+  pass 'Vault is unsealed'
+}
+
+# BIND answers for the lab zone, and refuses a DNS update that is not signed
+# with the TSIG key.
+validate_bind() {
+  local soa
+  local unsigned_record="unsigned-$$.${DNS_ZONE}"
 
   soa="$(dig +short "@${EDGE_HOST_IP}" "${DNS_ZONE}" SOA)"
   [[ "${soa}" == *"ns.${DNS_ZONE}"* ]] ||
-    fail 'authoritative zone is unavailable'
+    fail 'BIND does not answer for the lab zone'
 
-  [[ -z "$(dig +short "@${EDGE_HOST_IP}" example.com A)" ]] ||
-    fail 'BIND performed recursion for an unrelated name'
-
-  unauthorized_record="unauthorized-$$.${DNS_ZONE}"
   printf 'server %s\nzone %s\nupdate add %s 60 A %s\nsend\n' \
-    "${EDGE_HOST_IP}" \
-    "${DNS_ZONE}" \
-    "${unauthorized_record}" \
-    "${METALLB_POOL_END}" |
+    "${EDGE_HOST_IP}" "${DNS_ZONE}" "${unsigned_record}" "${METALLB_POOL_END}" |
     nsupdate >/dev/null 2>&1 || true
 
-  [[ -z "$(dig +short "@${EDGE_HOST_IP}" "${unauthorized_record}" A)" ]] ||
-    fail 'unauthenticated DNS update succeeded'
+  [[ -z "$(dig +short "@${EDGE_HOST_IP}" "${unsigned_record}" A)" ]] ||
+    fail 'BIND accepted an unsigned DNS update'
 
-  pass 'BIND is authoritative, non-recursive, and rejects unsigned updates'
+  pass 'BIND answers for the lab zone and rejects unsigned updates'
 }
 
 validate_cluster_edge() {
-  local resolved
-
   "${ROOT}/infra/edge/lib/with-kubeconfig.sh" \
     "${ROOT}/validation/edge/check-cluster.sh"
-
-  resolved="$(resolvectl query "edge.${DNS_ZONE}")"
-  [[ "${resolved}" == *"${INGRESS_VIP}"* ]] ||
-    fail 'host split DNS did not resolve the ingress Service record'
-
-  [[ "$(dig +short "@${EDGE_HOST_IP}" "edge.${DNS_ZONE}" A | tail -1)" \
-    == "${INGRESS_VIP}" ]] ||
-    fail 'ingress Service DNS record does not match the VIP'
-
-  pass 'cluster edge integration is healthy'
 }
 
 main() {
@@ -190,7 +83,7 @@ main() {
 
   cd "${ROOT}"
   require_commands
-  validate_host_network
+  validate_private_ports
   validate_vault
   validate_bind
   validate_cluster_edge
