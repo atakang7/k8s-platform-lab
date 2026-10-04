@@ -51,9 +51,18 @@ validate_host_network() (
     fail 'Vagrant SSH configuration is empty'
 
   for node in 1 2 3; do
-    # A busy node can take seconds to accept SSH; retry instead of failing.
-    addresses="$(ssh -F "${ssh_config}" -o ConnectTimeout=10 -o ConnectionAttempts=6 \
-      "node-${node}" 'ip -o -4 addr show')" ||
+    # Right after edge-up a busy node can drop the SSH session itself, which
+    # ConnectionAttempts does not retry. Retry the whole command for a minute.
+    # LogLevel=ERROR overrides Vagrant's FATAL so the reason is printed.
+    addresses=''
+    for _ in {1..6}; do
+      if addresses="$(ssh -F "${ssh_config}" -o LogLevel=ERROR -o ConnectTimeout=10 \
+        "node-${node}" 'ip -o -4 addr show')"; then
+        break
+      fi
+      sleep 10
+    done
+    [[ -n "${addresses}" ]] ||
       fail "node-${node} SSH is unavailable"
 
     grep -q "10.50.0.$((node + 9))/24" <<< "${addresses}" ||
