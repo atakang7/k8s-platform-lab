@@ -68,7 +68,7 @@ Each folder has its own detailed guide.
           │ WORKER             │    │ WORKER             │
           │ 10.50.0.11         │    │ 10.50.0.12         │
           │ edge .11           │    │ edge .12           │
-          │ 2 CPU · 3 GiB      │    │ 2 CPU · 4 GiB      │
+          │ 2 CPU · 4 GiB      │    │ 2 CPU · 4 GiB      │
           │ app · Prom · ES    │    │ app · Jenkins      │
           └─────────┬──────────┘    └─────────┬──────────┘
                     │                         │
@@ -393,7 +393,7 @@ wording, and the short answers: **[REQUIREMENTS.md](REQUIREMENTS.md)**.
 
 The operator host is **Ubuntu x86_64** with CPU virtualization enabled.
 If the host is itself a VM, it needs nested virtualization.
-Plan for 9 GiB of free RAM, because the three cluster VMs use that much.
+Plan for 10 GiB of free RAM, because the three cluster VMs use that much.
 
 Install everything with one command:
 

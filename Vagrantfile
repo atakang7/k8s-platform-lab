@@ -76,9 +76,9 @@ end
 check_edge_network! if (ARGV & %w[up reload]).any?
 
 control_plane_memory = integer_env("MASTER_MEMORY", 2048)
-# node-2 runs ingress, MetalLB, Prometheus and Fluent Bit. At 2 GiB it ran
-# out of memory and dropped SSH.
-node_2_memory = integer_env("NODE_2_MEMORY", 3072)
+# node-2 runs ingress, MetalLB, Prometheus and Fluent Bit. At 2-3 GiB it ran
+# out of memory and dropped SSH during edge validation.
+node_2_memory = integer_env("NODE_2_MEMORY", 4096)
 node_3_memory = integer_env("WORKER_MEMORY", 4096)
 
 control_plane_cpus = integer_env("MASTER_CPUS", 2)
