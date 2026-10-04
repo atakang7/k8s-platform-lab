@@ -50,6 +50,19 @@ make test-vm
 make test-vm-ssh   # log in to the VM
 ~~~
 
+## Browser
+
+Opens Jenkins and Grafana with a real padlock:
+
+~~~bash
+make test-vm-browser
+~~~
+
+It uses its own Firefox profile, which trusts only the lab CA and reaches the
+VM through an SSH SOCKS proxy that resolves names in the VM. Nothing else on
+the host changes. Close Firefox to close the proxy. It needs `libnss3-tools`
+for `certutil`.
+
 ## Snapshot
 
 Save the VM once the runbook passes, and return to it before a demo. The
