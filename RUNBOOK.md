@@ -357,3 +357,4 @@ make e2e-validate
 - Validation: [validation/README.md](validation/README.md)
 - Whole runbook in a fresh VM: [test/README.md](test/README.md)
 - Bugs found by those runs: [docs/bugs.md](docs/bugs.md)
+- Known weaknesses: [docs/weaknesses.md](docs/weaknesses.md)
