@@ -19,6 +19,7 @@
   serial: 1
   roles:
     - workers
+    - edge_firewall
 
 - name: Install cluster networking and storage
   hosts: control_plane

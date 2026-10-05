@@ -25,21 +25,21 @@ require_commands() {
   done
 }
 
-# The workers' edge addresses face the outside; the control plane's API
-# server (6443) and etcd (2379) must not be reachable there.
+# The workers' edge addresses face the outside. Only the ingress IP may
+# answer there; the nodes' own ports must be closed (roles/edge_firewall).
 validate_private_ports() {
   local edge_ip
   local private_port
 
   for edge_ip in "${NODE2_EDGE_IP}" "${NODE3_EDGE_IP}"; do
-    for private_port in 6443 2379; do
+    for private_port in 22 2379 6443 9100 10250; do
       if timeout 2 bash -c ": </dev/tcp/${edge_ip}/${private_port}" 2>/dev/null; then
-        fail "private control-plane port ${private_port} is exposed on ${edge_ip}"
+        fail "port ${private_port} is open on worker edge address ${edge_ip}"
       fi
     done
   done
 
-  pass 'control-plane ports are not exposed on the edge network'
+  pass 'worker edge addresses expose no node ports'
 }
 
 validate_vault() {

@@ -26,3 +26,8 @@ node_ips:
   node-1: "10.50.0.10"
   node-2: "10.50.0.11"
   node-3: "10.50.0.12"
+
+# Worker addresses on the edge network; must match the Vagrantfile.
+edge_ips:
+  node-2: "192.168.56.11"
+  node-3: "192.168.56.12"

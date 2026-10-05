@@ -55,6 +55,6 @@ Open bugs are in [bugs.md](bugs.md).
 - Accepted: `state/dev.yaml` already holds the release, so fresh runs rebuild and redeploy it but never record a new one.
 - Production: a test run that bumps the version and follows it from build to deploy.
 
-**14. Workers are reachable on more than the ingress, with a shared SSH key**
-- Accepted: on the edge network the workers expose SSH (22), node-exporter (9100, no login), kubelet (10250, login required) and kube-proxy health. SSH uses Vagrant's shared key (`insert_key = false`), which every Vagrant install has. Safe only because the edge network is host-only.
-- Production: a unique key per node, SSH only from a bastion, and a host firewall that allows only 80/443 to the ingress IP on the edge interface.
+**14. Workers use Vagrant's shared SSH key**
+- Accepted: SSH accepts Vagrant's shared key (`insert_key = false`), which every Vagrant install has. The edge firewall (`roles/edge_firewall`) closes SSH and every other node port on the edge network, so SSH is reachable only through Vagrant's port forward on the operator machine.
+- Production: a unique key per node, and SSH only from a bastion.

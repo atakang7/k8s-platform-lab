@@ -257,6 +257,7 @@ finished successfully.
 | `roles/kubernetes/` | Kubernetes packages/services |
 | `roles/control_plane/` | kubeadm initialization |
 | `roles/workers/` | worker join |
+| `roles/edge_firewall/` | closes the workers' own ports on the edge network |
 | `roles/calico/` | Pod networking |
 | `roles/storage/` | local-path provisioner |
 | `validate.yml` | cluster outcome validation |
