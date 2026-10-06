@@ -79,7 +79,10 @@ roll_back_release() {
 }
 
 test_release() {
-  helm test "${RELEASE}" --namespace "${NAMESPACE}" --timeout 5m --logs && return
+  # Test only a fully rolled-out release; a rollout that never finishes is
+  # rolled back like a failed test.
+  kubectl --namespace "${NAMESPACE}" rollout status "deployment/${RELEASE}" --timeout 5m &&
+    helm test "${RELEASE}" --namespace "${NAMESPACE}" --timeout 5m --logs && return
 
   printf 'FAIL | %s %s failed its tests in %s; rolling back\n' \
     "${RELEASE}" "${APP_VERSION}" "${ENVIRONMENT}" >&2
@@ -118,6 +121,9 @@ run_canary() {
     --set ingress.canaryWeight="${CANARY_WEIGHT}" \
     --wait \
     --timeout 5m
+  # helm --wait returned while the canary's JVM was still starting, and its
+  # smoke test found no ready Pod. Wait for the rollout itself before testing.
+  kubectl --namespace "${NAMESPACE}" rollout status "deployment/${CANARY_RELEASE}" --timeout 5m
   helm test "${CANARY_RELEASE}" --namespace "${NAMESPACE}" --timeout 5m --logs
 
   for minute in $(seq 1 "${CANARY_MINUTES}"); do
