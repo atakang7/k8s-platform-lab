@@ -13,10 +13,12 @@ pipeline {
         stage('Shell') {
             steps {
                 container('ci-tools') {
+                    // SC1071: skip non-shell files in bin/ folders, such as the
+                    // Python helpers in platform/bin, instead of failing on them.
                     sh '''
                       find delivery infra platform policies validation -type f \
                         \\( -name '*.sh' -o -path '*/bin/*' \\) \
-                        -exec shellcheck --external-sources --source-path=SCRIPTDIR {} +
+                        -exec shellcheck --external-sources --source-path=SCRIPTDIR --exclude=SC1071 {} +
                     '''
                 }
             }
