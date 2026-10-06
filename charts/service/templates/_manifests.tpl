@@ -13,6 +13,10 @@
 ---
 {{ include "service.ingress" $ctx }}
 {{- end }}
+{{- if $values.autoscaling.enabled }}
+---
+{{ include "service.hpa" $ctx }}
+{{- end }}
 {{- if $values.metrics.enabled }}
 ---
 {{ include "service.servicemonitor" $ctx }}
@@ -64,7 +68,9 @@ metadata:
   labels:
     {{- include "service.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "service.selectorLabels" . | nindent 6 }}
@@ -167,6 +173,31 @@ spec:
   selector:
     matchLabels:
       {{- include "service.selectorLabels" . | nindent 6 }}
+{{- end }}
+
+{{- /* Needs metrics-server: the HPA reads pod CPU from the Metrics API. */}}
+{{- define "service.hpa" -}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Release.Name }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilization }}
 {{- end }}
 
 {{- define "service.ingress" -}}

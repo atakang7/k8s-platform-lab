@@ -5,6 +5,11 @@ image:
   digest: ""       # set by delivery for every release
   pullPolicy: IfNotPresent
 replicas: 1
+autoscaling:        # when enabled, an HPA owns the replica count and `replicas` is ignored
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilization: 70   # percent of the CPU request
 containerPort: 8080
 probes: {}         # startup / readiness / liveness, as Kubernetes probe specs (port: http)
 resources: {}

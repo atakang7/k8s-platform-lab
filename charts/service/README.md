@@ -99,6 +99,11 @@ topology spread
 worker placement
 ~~~
 
+With `autoscaling.enabled`, a HorizontalPodAutoscaler owns the replica count
+(between `minReplicas` and `maxReplicas`, at `targetCPUUtilization`% of the
+CPU request) and the Deployment leaves `replicas` unset. It needs
+metrics-server, which `make observability-up` installs.
+
 Topology spread is enabled by default.
 
 Applications can add stricter affinity when their runtime needs it.
