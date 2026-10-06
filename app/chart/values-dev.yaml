@@ -16,7 +16,3 @@ ingress:
 # One replica: a budget would leave no Pod evictable and block every drain.
 podDisruptionBudget:
   enabled: false
-# TEST D6 (reverted in 1.2.19): a smoke test that must fail, to prove the
-# deploy job rolls a release back when its Helm test fails.
-smokeTest:
-  path: /this-path-does-not-exist
