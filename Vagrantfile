@@ -94,7 +94,7 @@ puts <<~PLAN
 PLAN
 
 Vagrant.configure("2") do |config|
-  config.ssh.insert_key = false
+  config.ssh.insert_key = true
   config.vm.synced_folder ".", "/vagrant", disabled: true
   config.vm.box = IMAGE_NAME
   config.vm.box_version = IMAGE_VERSION
