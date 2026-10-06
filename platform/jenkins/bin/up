@@ -139,11 +139,16 @@ install_jenkins() {
   helm repo add jenkins https://charts.jenkins.io --force-update >/dev/null
   helm repo update jenkins >/dev/null
 
+  # Jenkins merges the JCasC files into one configuration; security.yaml and
+  # agents.yaml both add keys under jenkins:.
   helm upgrade --install jenkins jenkins/jenkins \
     --namespace "${JENKINS_NAMESPACE}" \
     --version "${JENKINS_CHART_VERSION}" \
     --values "${JENKINS_DIRECTORY}/values.yaml" \
-    --set-file controller.JCasC.configScripts.platform="${JENKINS_DIRECTORY}/jcasc/jenkins.yaml" \
+    --set-file controller.JCasC.configScripts.security="${JENKINS_DIRECTORY}/jcasc/security.yaml" \
+    --set-file controller.JCasC.configScripts.agents="${JENKINS_DIRECTORY}/jcasc/agents.yaml" \
+    --set-file controller.JCasC.configScripts.credentials="${JENKINS_DIRECTORY}/jcasc/credentials.yaml" \
+    --set-file controller.JCasC.configScripts.jobs="${JENKINS_DIRECTORY}/jcasc/jobs.yaml" \
     --wait \
     --rollback-on-failure \
     --timeout 10m \

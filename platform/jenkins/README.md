@@ -277,7 +277,10 @@ new work cannot continue on an old template.
 | Concern | File |
 |---|---|
 | controller, plugins, persistence, ingress | `values.yaml` |
-| jobs, JCasC, agent templates | `jcasc/jenkins.yaml` |
+| login | `jcasc/security.yaml` |
+| agent templates | `jcasc/agents.yaml` |
+| credentials | `jcasc/credentials.yaml` |
+| jobs, pipeline library | `jcasc/jobs.yaml` |
 | CI Kubernetes access | `resources/agent-rbac.yaml` |
 | environment deploy identities | `../environment/namespace.yaml` |
 | Vault-to-Jenkins Secrets | `resources/*.yaml` |

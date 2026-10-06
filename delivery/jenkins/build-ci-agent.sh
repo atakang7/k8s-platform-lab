@@ -9,7 +9,7 @@ readonly ROOT
 readonly REPOSITORY="${CI_AGENT_REPOSITORY:-docker.io/atakangul/lab-ci-agent}"
 readonly DOCKERFILE=delivery/jenkins/ci-agent.Dockerfile
 readonly BUILD_CONTEXT=delivery/jenkins
-readonly JCASC=platform/jenkins/jcasc/jenkins.yaml
+readonly JCASC=platform/jenkins/jcasc/agents.yaml
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
