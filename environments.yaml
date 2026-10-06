@@ -14,6 +14,9 @@ metrics: http://observability-kube-prometh-prometheus.observability.svc:9090/pro
 environments:
   - name: dev
     namespace: apps-dev
+    # TEST D7 (removed right after): a canary in dev, to exercise the prod
+    # canary path on this cluster.
+    canary: {weight: 50, minutes: 3, maxErrorRate: 0.05}
   - name: stage
     namespace: apps-stage
   - name: prod
