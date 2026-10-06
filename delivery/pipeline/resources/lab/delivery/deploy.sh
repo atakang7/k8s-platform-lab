@@ -94,13 +94,15 @@ test_release() {
 # while it has had no traffic. ingress-nginx counts canary requests under the
 # stable Ingress, labelled canary="<namespace>-<canary Service>-<port>"; the
 # scrape target lives in ingress-nginx, so the app namespace arrives as
-# exported_namespace.
+# exported_namespace. With no 5xx answers at all there is no 5xx series, so
+# "or vector(0)" counts them as zero; without it a healthy canary with traffic
+# read as "no traffic yet" and was never judged.
 canary_error_rate() {
   local selector="exported_namespace=\"${NAMESPACE}\",canary=~\"${NAMESPACE}-${CANARY_RELEASE}-.+\""
   local requests="nginx_ingress_controller_requests"
 
   curl --fail --silent --show-error --get "${METRICS_URL}/api/v1/query" \
-    --data-urlencode "query=sum(increase(${requests}{${selector},status=~\"5..\"}[${1}m])) / sum(increase(${requests}{${selector}}[${1}m]))" |
+    --data-urlencode "query=(sum(increase(${requests}{${selector},status=~\"5..\"}[${1}m])) or vector(0)) / sum(increase(${requests}{${selector}}[${1}m]))" |
     jq -r '.data.result[0].value[1] // empty'
 }
 
