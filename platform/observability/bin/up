@@ -56,7 +56,8 @@ prepare_namespace() {
 
   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update >/dev/null
   helm repo add fluent https://fluent.github.io/helm-charts --force-update >/dev/null
-  helm repo update prometheus-community fluent >/dev/null
+  helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update >/dev/null
+  helm repo update prometheus-community fluent metrics-server >/dev/null
 }
 
 install_prometheus_stack() {
@@ -118,6 +119,21 @@ install_fluent_bit() {
     --hide-notes
 }
 
+# The Metrics API for HPAs and `kubectl top`. Lives in kube-system, as usual.
+install_metrics_server() {
+  phase "installing metrics-server ${METRICS_SERVER_CHART_VERSION}"
+
+  helm upgrade --install metrics-server metrics-server/metrics-server \
+    --namespace kube-system \
+    --version "${METRICS_SERVER_CHART_VERSION}" \
+    --values "${OBSERVABILITY_DIRECTORY}/metrics-server/values.yaml" \
+    --wait \
+    --rollback-on-failure \
+    --timeout 5m \
+    --history-max 5 \
+    --hide-notes
+}
+
 install_ingress() {
   phase 'installing the observability ingress'
 
@@ -161,6 +177,7 @@ main() {
       install_dashboards
       wait_for_elasticsearch
       install_fluent_bit
+      install_metrics_server
       install_ingress
       wait_for_dns
       pass 'observability is installed; run make observability-smoke'

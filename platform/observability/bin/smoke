@@ -69,6 +69,20 @@ check_endpoints() {
     "https://${HOST}/prometheus/-/ready" >/dev/null
 }
 
+# The first numbers arrive about a minute after metrics-server starts.
+check_metrics_api() {
+  phase 'checking that the Metrics API serves pod CPU and memory'
+
+  for _ in {1..12}; do
+    if kubectl top pods -n observability >/dev/null 2>&1; then
+      return
+    fi
+    sleep 10
+  done
+
+  fail 'the Metrics API does not answer; check metrics-server in kube-system'
+}
+
 check_log_delivery() {
   local indices
 
@@ -97,6 +111,7 @@ main() {
       wait_for_workloads
       check_alert_rules
       check_endpoints
+      check_metrics_api
       check_log_delivery
       pass 'observability workloads, alert rules, endpoints and log delivery are healthy'
       ;;
