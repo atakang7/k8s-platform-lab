@@ -140,7 +140,8 @@ install_jenkins() {
   helm repo update jenkins >/dev/null
 
   # Jenkins merges the JCasC files into one configuration; security.yaml and
-  # agents.yaml both add keys under jenkins:.
+  # agents.yaml both add keys under jenkins:. platformFiles are the files that
+  # JCasC reads (values.yaml).
   helm upgrade --install jenkins jenkins/jenkins \
     --namespace "${JENKINS_NAMESPACE}" \
     --version "${JENKINS_CHART_VERSION}" \
@@ -149,6 +150,10 @@ install_jenkins() {
     --set-file controller.JCasC.configScripts.agents="${JENKINS_DIRECTORY}/jcasc/agents.yaml" \
     --set-file controller.JCasC.configScripts.credentials="${JENKINS_DIRECTORY}/jcasc/credentials.yaml" \
     --set-file controller.JCasC.configScripts.jobs="${JENKINS_DIRECTORY}/jcasc/jobs.yaml" \
+    --set-file platformFiles.ci-runner="${JENKINS_DIRECTORY}/pods/ci-runner.yaml" \
+    --set-file platformFiles.ci-light="${JENKINS_DIRECTORY}/pods/ci-light.yaml" \
+    --set-file platformFiles.cd-runner="${JENKINS_DIRECTORY}/pods/cd-runner.yaml" \
+    --set-file platformFiles.jobs="${JENKINS_DIRECTORY}/jobs.groovy" \
     --wait \
     --rollback-on-failure \
     --timeout 10m \

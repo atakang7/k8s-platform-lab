@@ -279,8 +279,10 @@ new work cannot continue on an old template.
 | controller, plugins, persistence, ingress | `values.yaml` |
 | login | `jcasc/security.yaml` |
 | agent templates | `jcasc/agents.yaml` |
+| agent pod specs | `pods/*.yaml` |
 | credentials | `jcasc/credentials.yaml` |
-| jobs, pipeline library | `jcasc/jobs.yaml` |
+| jobs | `jobs.groovy` |
+| pipeline library | `jcasc/jobs.yaml` |
 | CI Kubernetes access | `resources/agent-rbac.yaml` |
 | environment deploy identities | `../environment/namespace.yaml` |
 | Vault-to-Jenkins Secrets | `resources/*.yaml` |

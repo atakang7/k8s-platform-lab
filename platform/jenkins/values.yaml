@@ -123,6 +123,10 @@ controller:
         secretKeyRef:
           name: cosign-signing
           key: password
+  # JCasC reads the platform files at start (jcasc/agents.yaml, jcasc/jobs.yaml);
+  # a changed file changes this checksum, which restarts the controller.
+  podAnnotations:
+    checksum/platform-files: '{{ toJson .Values.platformFiles | sha256sum }}'
   resources:
     requests:
       cpu: 100m
@@ -156,3 +160,26 @@ persistence:
   enabled: true
   storageClass: local-path
   size: 8Gi
+  volumes:
+    - name: platform-files
+      configMap:
+        name: jenkins-platform-files
+  mounts:
+    - name: platform-files
+      mountPath: /var/jenkins_platform
+      readOnly: true
+
+# Agent pod specs and the job script. bin/up fills each key with --set-file
+# from pods/ and jobs.groovy; JCasC reads them under /var/jenkins_platform.
+platformFiles: {}
+
+extraObjects:
+  platform-files: |
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: jenkins-platform-files
+    data:
+      {{- range $name, $content := .Values.platformFiles }}
+      {{ $name }}: {{ toJson $content }}
+      {{- end }}

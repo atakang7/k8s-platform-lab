@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    component: jenkins-agent
+    workload: lab-ci-light
+spec:
+  # Dry-run only: see jenkins-ci-dry-run-only in platform/jenkins/resources/agent-rbac.yaml.
+  serviceAccountName: jenkins-ci
+  enableServiceLinks: false
+  restartPolicy: Never
+  containers:
+    - name: jnlp
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          memory: 512Mi
+    - name: ci-tools
+      image: docker.io/atakangul/lab-ci-agent@sha256:da753bea05c1d34e390a847ee44d562fd2cc2db6e4abd8d395d73111fa819e72
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c", "sleep infinity"]
+      tty: true
+      # The Jenkins agent's user: both write the shared workspace, and
+      # no delivery step needs root. HOME is the writable workspace.
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+      env:
+        - name: HOME
+          value: /home/jenkins/agent
+      # Lint and dry-runs only: no image is built or scanned here.
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
+    # chart-testing for base chart pull requests (delivery/Jenkinsfile.platform).
+    - name: chart-testing
+      image: quay.io/helmpack/chart-testing:v3.14.0@sha256:425ff3058dfc192fffb94e471e732b9bc995c375df963eba417ff01aea594e83
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c", "sleep infinity"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi

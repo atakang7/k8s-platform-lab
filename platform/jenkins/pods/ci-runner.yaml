@@ -1,0 +1,112 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    component: jenkins-agent
+    workload: lab-ci-runner
+spec:
+  # Dry-run only: see jenkins-ci-dry-run-only in platform/jenkins/resources/agent-rbac.yaml.
+  serviceAccountName: jenkins-ci
+  enableServiceLinks: false
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: node-3
+  volumes:
+    - name: trivy-cache
+      hostPath:
+        path: /var/lib/lab-ci/trivy
+        type: DirectoryOrCreate
+    - name: buildkit-state
+      hostPath:
+        path: /var/lib/lab-ci/buildkit-rootless
+        type: DirectoryOrCreate
+  initContainers:
+    # hostPaths are created root-owned; BuildKit and ci-tools run as uid 1000.
+    # BuildKit keeps its own state private, so only the Trivy cache,
+    # written earlier as root, is chowned recursively - and only while
+    # its root is not uid 1000's yet: Trivy then writes 0700 directories
+    # that root with only CHOWN cannot enter, and chown -R would fail.
+    - name: cache-owner
+      image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
+      command: ["sh", "-c", "chown 1000:1000 /state && { [ \"$(stat -c %u /trivy)\" = 1000 ] || chown -R 1000:1000 /trivy; }"]
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+          add: ["CHOWN"]
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: buildkit-state
+          mountPath: /state
+        - name: trivy-cache
+          mountPath: /trivy
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 32Mi
+  containers:
+    - name: ci-tools
+      image: docker.io/atakangul/lab-ci-agent@sha256:da753bea05c1d34e390a847ee44d562fd2cc2db6e4abd8d395d73111fa819e72
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c", "sleep infinity"]
+      tty: true
+      # The Jenkins agent's user: both write the shared workspace, and
+      # no delivery step needs root. HOME is the writable workspace.
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+      env:
+        - name: HOME
+          value: /home/jenkins/agent
+        - name: TRIVY_CACHE_DIR
+          value: /var/cache/trivy
+      volumeMounts:
+        - name: trivy-cache
+          mountPath: /var/cache/trivy
+      resources:
+        requests:
+          cpu: 150m
+          memory: 384Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
+    # chart-testing for base chart pull requests (delivery/Jenkinsfile.platform).
+    - name: chart-testing
+      image: quay.io/helmpack/chart-testing:v3.14.0@sha256:425ff3058dfc192fffb94e471e732b9bc995c375df963eba417ff01aea594e83
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c", "sleep infinity"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+    - name: buildkit
+      # Rootless: no privileged mode. buildctl finds the socket via the image's BUILDKIT_HOST.
+      image: moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef
+      imagePullPolicy: IfNotPresent
+      args: ["--oci-worker-no-process-sandbox"]
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: Unconfined
+        appArmorProfile:
+          type: Unconfined
+      volumeMounts:
+        - name: buildkit-state
+          mountPath: /home/user/.local/share/buildkit
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 1Gi
