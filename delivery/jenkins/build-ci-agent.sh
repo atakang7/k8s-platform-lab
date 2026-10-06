@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds and publishes the Jenkins CI/CD agent image, resolves the registry
-# digest, and pins that digest in JCasC. Commit the JCasC change and run
+# digest, and pins that digest in the agent pod specs. Commit that change and run
 # `make jenkins-up` afterwards.
 set -Eeuo pipefail
 
@@ -9,7 +9,7 @@ readonly ROOT
 readonly REPOSITORY="${CI_AGENT_REPOSITORY:-docker.io/atakangul/lab-ci-agent}"
 readonly DOCKERFILE=delivery/jenkins/ci-agent.Dockerfile
 readonly BUILD_CONTEXT=delivery/jenkins
-readonly JCASC=platform/jenkins/jcasc/jenkins.yaml
+readonly AGENT_PODS=(platform/jenkins/pods/*.yaml)
 
 fail() {
   printf 'FAIL | %s\n' "$1" >&2
@@ -19,7 +19,7 @@ fail() {
 verify_source_is_committed() {
   # The build is traceable to Git only when the Dockerfile being built matches
   # HEAD. External package repositories can still change between rebuilds; the
-  # registry digest pinned into JCasC remains the runtime source of truth.
+  # registry digest pinned into the agent pod specs remains the runtime source of truth.
   git diff --quiet HEAD -- "${DOCKERFILE}" ||
     fail "${DOCKERFILE} has uncommitted changes; commit it before building"
 }
@@ -64,15 +64,18 @@ resolve_registry_digest() {
   printf '%s\n' "${digest}"
 }
 
-pin_digest_in_jcasc() {
+pin_digest_in_agent_pods() {
   local digest="$1"
+  local pod
 
-  sed -i -E \
-    "s#(image: )${REPOSITORY}@sha256:[0-9a-f]{64}#\\1${REPOSITORY}@${digest}#" \
-    "${JCASC}"
+  for pod in "${AGENT_PODS[@]}"; do
+    sed -i -E \
+      "s#(image: )${REPOSITORY}@sha256:[0-9a-f]{64}#\\1${REPOSITORY}@${digest}#" \
+      "${pod}"
 
-  grep -qF "${REPOSITORY}@${digest}" "${JCASC}" ||
-    fail "${JCASC} was not updated"
+    grep -qF "${REPOSITORY}@${digest}" "${pod}" ||
+      fail "${pod} was not updated"
+  done
 }
 
 main() {
@@ -89,9 +92,9 @@ main() {
   build_image "${tag}"
   push_image "${tag}"
   digest="$(resolve_registry_digest "${tag}")"
-  pin_digest_in_jcasc "${digest}"
+  pin_digest_in_agent_pods "${digest}"
 
-  printf 'PASS | %s@%s pinned in %s\n' "${REPOSITORY}" "${digest}" "${JCASC}"
+  printf 'PASS | %s@%s pinned in %s\n' "${REPOSITORY}" "${digest}" platform/jenkins/pods
 }
 
 main "$@"

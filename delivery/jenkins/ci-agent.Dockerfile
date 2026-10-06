@@ -1,5 +1,5 @@
 # Build only through delivery/jenkins/build-ci-agent.sh: it refuses uncommitted
-# changes and pins the resulting digest in JCasC, so the running image always
+# changes and pins the resulting digest in the agent pod specs, so the running image always
 # corresponds to this file in Git.
 # Plain Ubuntu: Maven and a JDK are not needed; the application builds and
 # tests inside its own Dockerfile.

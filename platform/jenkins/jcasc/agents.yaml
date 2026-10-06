@@ -1,0 +1,45 @@
+jenkins:
+  clouds:
+    - kubernetes:
+        name: kubernetes
+        namespace: jenkins
+        serverUrl: https://kubernetes.default.svc.cluster.local
+        jenkinsUrl: http://jenkins.jenkins.svc.cluster.local:8080
+        webSocket: true
+        # This edge cluster is memory-constrained: never allow Jenkins agent pods
+        # to accumulate faster than the workers can safely host them.
+        containerCapStr: "3"
+        templates:
+          - name: ci-runner
+            label: lab-ci-runner
+            namespace: jenkins
+            idleMinutes: 10
+            instanceCap: 1
+            nodeUsageMode: EXCLUSIVE
+            showRawYaml: false
+            slaveConnectTimeout: 120
+            yamlMergeStrategy: override
+            yaml: "${readFile:/var/jenkins_platform/ci-runner}"
+          # Jobs that build nothing (platform lint, deploy verification) run here, so
+          # they do not queue behind an image build on the one ci-runner, whose
+          # BuildKit and Trivy caches pin it to node-3.
+          - name: ci-light
+            label: lab-ci-light
+            namespace: jenkins
+            idleMinutes: 10
+            instanceCap: 1
+            nodeUsageMode: EXCLUSIVE
+            showRawYaml: false
+            slaveConnectTimeout: 120
+            yamlMergeStrategy: override
+            yaml: "${readFile:/var/jenkins_platform/ci-light}"
+          - name: cd-runner
+            label: lab-cd-runner
+            namespace: jenkins
+            idleMinutes: 10
+            instanceCap: 1
+            nodeUsageMode: EXCLUSIVE
+            showRawYaml: false
+            slaveConnectTimeout: 120
+            yamlMergeStrategy: override
+            yaml: "${readFile:/var/jenkins_platform/cd-runner}"

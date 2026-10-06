@@ -118,7 +118,7 @@ build-ci-agent.sh
         │
         ▼
 platform/jenkins/
-jcasc/jenkins.yaml
+pods/*.yaml
         │
         ▼
 Kubernetes agent template

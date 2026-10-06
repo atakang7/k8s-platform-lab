@@ -442,7 +442,8 @@ optimizations.
 | deployment | `delivery/pipeline/vars/deployPipeline.groovy` |
 | shared helpers | `delivery/pipeline/vars/delivery.groovy` |
 | build / scan / deploy scripts | `delivery/pipeline/resources/` |
-| Jenkins agents/jobs | `platform/jenkins/jcasc/jenkins.yaml` |
+| Jenkins agents | `platform/jenkins/pods/*.yaml` |
+| Jenkins jobs | `platform/jenkins/jobs.groovy` |
 
 Implementation detail continues in
 **[delivery/README.md](delivery/README.md)**.
