@@ -243,7 +243,22 @@ private void openPromotion(String environment, String name, Map release) {
                       201) echo "PASS | opened $(jq -r .html_url .promote/response.json)" ;;
                       422) jq -e '.errors[]?.message | select(test("already exists"))' .promote/response.json >/dev/null ||
                              { echo "FAIL | GitHub refused the pull request: $(cat .promote/response.json)" >&2; exit 1; }
-                           echo "PASS | refreshed the open pull request for $BRANCH" ;;
+                           # The branch now proposes a newer release: retitle the open
+                           # pull request so reviewers approve what it really deploys.
+                           # ${repository%%/*} is the repository owner.
+                           number="$(curl --silent --show-error --fail \
+                               --header "Authorization: Bearer $GITHUB_TOKEN" \
+                               --header 'Accept: application/vnd.github+json' \
+                               "https://api.github.com/repos/$repository/pulls?state=open&head=${repository%%/*}:$BRANCH" |
+                             jq -er '.[0].number')"
+                           jq -n --arg title "$TITLE" --arg body "$BODY" '{title: $title, body: $body}' |
+                             curl --silent --show-error --fail --output /dev/null \
+                               --request PATCH \
+                               --header "Authorization: Bearer $GITHUB_TOKEN" \
+                               --header 'Accept: application/vnd.github+json' \
+                               --data @- \
+                               "https://api.github.com/repos/$repository/pulls/$number"
+                           echo "PASS | refreshed pull request #$number for $BRANCH" ;;
                       *) echo "FAIL | GitHub returned $status: $(cat .promote/response.json)" >&2; exit 1 ;;
                     esac
                   fi
