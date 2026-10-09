@@ -61,7 +61,9 @@ open_firefox() {
 
   firefox -no-remote -profile "${PROFILE}" \
     https://jenkins.lab.test \
-    https://observability.lab.test/grafana/
+    https://observability.lab.test/grafana/ \
+    https://observability.lab.test/elasticsearch/ \
+    https://app-dev.lab.test/api/foos/
 }
 
 main() {
