@@ -71,47 +71,34 @@ Warm jobs keep one reusable Pod from each execution class available.
 ## 3. Job map
 
 ~~~text
-sample-java-app
+GitHub poll (every minute)
       │
-      ▼
-service CI
+      ├── sample-java-app ──────────► lab-ci-runner
+      │   main + PR, service CI
       │
-      ▼
-lab-ci-runner
+      ├── resource-requests-webhook ► lab-ci-runner
+      │   main + PR, service CI
+      │
+      ├── platform ─────────────────► lab-ci-light
+      │   main + PR, platform validation
+      │
+      └── deploy ───────────────────► cd-runner
+          main + PR, state verification / deploy
 
 
-resource-requests-webhook
+cron (every minute)
       │
-      ▼
-service CI
-      │
-      ▼
-lab-ci-runner
-
-
-platform
-      │
-      ▼
-platform validation
-      │
-      ▼
-lab-ci-light
-
-
-deploy
-      │
-      ├── verify state
-      │      │
-      │      ▼
-      │  light runner
-      │
-      └── deploy
-             │
-             ▼
-        cd-runner
+      ├── warm-ci-runner ───────────► lab-ci-runner
+      ├── warm-ci-light ────────────► lab-ci-light
+      └── warm-cd-runner-dev ───────► cd-runner (jenkins-deploy-dev)
 ~~~
 
-JCasC creates these multibranch delivery jobs from Git.
+Four multibranch jobs watch main and pull requests via GitHub polling.
+Three cron jobs keep one agent Pod of each class warm so the first real
+build does not wait for provisioning.
+
+A commit can start all four multibranch builds, but each pipeline's
+own conditions decide which stages actually execute.
 
 ## 4. CI identity
 
