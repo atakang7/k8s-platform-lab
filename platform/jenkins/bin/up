@@ -99,7 +99,7 @@ prepare_namespace() {
 }
 
 install_vault_login() {
-  phase 'installing the Jenkins Vault login'
+  phase 'installing the Jenkins Vault login'  
 
   install_approle_secret_id "${JENKINS_NAMESPACE}" jenkins-vso approle-id
   kubectl apply -f "${JENKINS_DIRECTORY}/resources/vault-connection.yaml" >/dev/null
@@ -172,51 +172,6 @@ remove_old_agents() {
     --wait=true >/dev/null
 }
 
-start_warm_up_jobs() {
-  phase 'starting the warm-up jobs so the first real build gets a ready agent'
-
-  local admin_user
-  local admin_password
-  local cookies
-  local crumb_json
-  local crumb_field
-  local crumb
-  local job
-
-  admin_user="$(kubectl -n "${JENKINS_NAMESPACE}" get secret jenkins-admin \
-    -o go-template='{{ index .data "jenkins-admin-user" | base64decode }}')"
-  admin_password="$(kubectl -n "${JENKINS_NAMESPACE}" get secret jenkins-admin \
-    -o go-template='{{ index .data "jenkins-admin-password" | base64decode }}')"
-  cookies="$(mktemp)"
-
-  kubectl -n "${JENKINS_NAMESPACE}" port-forward service/jenkins 18080:8080 >/dev/null 2>&1 &
-  PORT_FORWARD_PID=$!
-  trap 'kill "${PORT_FORWARD_PID}" 2>/dev/null || true' EXIT
-
-  for _ in {1..30}; do
-    if curl -fsS -u "${admin_user}:${admin_password}" http://127.0.0.1:18080/login >/dev/null 2>&1; then
-      break
-    fi
-    sleep 1
-  done
-
-  # Jenkins rejects POSTs without a CSRF crumb from the same session.
-  crumb_json="$(curl -fsS -u "${admin_user}:${admin_password}" \
-    -c "${cookies}" -b "${cookies}" \
-    http://127.0.0.1:18080/crumbIssuer/api/json)"
-  crumb_field="$(jq -r .crumbRequestField <<< "${crumb_json}")"
-  crumb="$(jq -r .crumb <<< "${crumb_json}")"
-
-  for job in warm-ci-runner warm-ci-light warm-cd-runner-dev; do
-    curl -fsS -X POST -u "${admin_user}:${admin_password}" \
-      -c "${cookies}" -b "${cookies}" \
-      -H "${crumb_field}: ${crumb}" \
-      "http://127.0.0.1:18080/job/${job}/build" >/dev/null
-  done
-
-  rm -f "${cookies}"
-}
-
 main() {
   case "${1:-}" in
     '')
@@ -235,7 +190,6 @@ main() {
       check_agent_permissions
       install_jenkins
       remove_old_agents
-      start_warm_up_jobs
       pass 'Jenkins is installed'
       ;;
     *)
