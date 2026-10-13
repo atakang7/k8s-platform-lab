@@ -1,4 +1,5 @@
 .vagrant/
+.dirac-cache/
 app/target/
 
 *.log
