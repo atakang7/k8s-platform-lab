@@ -50,6 +50,13 @@ make test-vm
 make test-vm-ssh   # log in to the VM
 ~~~
 
+Start an existing VM without rerunning the runbook. This also starts its
+network if inactive, and resumes the VM if paused:
+
+~~~bash
+make test-vm-start
+~~~
+
 ## Browser
 
 Opens Jenkins and Grafana with a real padlock:

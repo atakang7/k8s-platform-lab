@@ -42,11 +42,15 @@ download_image() {
 
 create_network() {
   step "creating the network"
-  if virsh net-info lab-test >/dev/null 2>&1; then
-    return
+  local network_names
+  network_names="$(virsh net-list --all --name)"
+  if ! grep -Fxq lab-test <<<"${network_names}"; then
+    virsh net-define "${ROOT}/test/vm/network.xml"
   fi
-  virsh net-define "${ROOT}/test/vm/network.xml"
-  virsh net-start lab-test
+  network_names="$(virsh net-list --inactive --name)"
+  if grep -Fxq lab-test <<<"${network_names}"; then
+    virsh net-start lab-test
+  fi
 }
 
 create_vm() {
@@ -71,10 +75,12 @@ create_vm() {
 # Covers a VM that was shut down, or paused by a full host disk.
 start_vm() {
   step "starting the VM"
-  if [[ "$(virsh domstate lab-test)" == "shut off" ]]; then
+  local vm_state
+  vm_state="$(virsh domstate lab-test)"
+  if [[ "${vm_state}" == "shut off" ]]; then
     virsh start lab-test
   fi
-  if [[ "$(virsh domstate lab-test)" == "paused" ]]; then
+  if [[ "${vm_state}" == "paused" ]]; then
     virsh resume lab-test
   fi
 }
@@ -113,6 +119,12 @@ run_runbook() {
 }
 
 main() {
+  if [[ "${1:-}" == "--start-only" ]]; then
+    create_network
+    start_vm
+    return
+  fi
+
   download_image
   create_network
   create_vm

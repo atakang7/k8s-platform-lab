@@ -2,7 +2,7 @@
 # jinja2 in ~/.local breaks its templating (environmentfilter was removed).
 export PYTHONNOUSERSITE := 1
 
-.PHONY: prerequisites cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up environment-up observability-up observability-smoke endpoints credentials policies-up policies-smoke vault-init vault-unseal e2e-validate test-vm test-vm-ssh test-vm-browser test-vm-snapshot test-vm-restore test-vm-snapshot-delete test-vm-destroy destroy
+.PHONY: prerequisites cluster-up cluster-validate container-validate validate edge-up edge-smoke edge-validate edge-down jenkins-up environment-up observability-up observability-smoke endpoints credentials policies-up policies-smoke vault-init vault-unseal e2e-validate test-vm test-vm-start test-vm-ssh test-vm-browser test-vm-snapshot test-vm-restore test-vm-snapshot-delete test-vm-destroy destroy
 
 prerequisites:
 	./infra/bin/prerequisites
@@ -66,6 +66,9 @@ e2e-validate:
 
 test-vm:
 	./test/bin/up
+
+test-vm-start:
+	./test/bin/up --start-only
 
 test-vm-ssh:
 	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR ubuntu@192.168.150.10
