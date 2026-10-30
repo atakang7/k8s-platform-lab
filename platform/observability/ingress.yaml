@@ -1,0 +1,56 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: observability
+  namespace: observability
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: observability.lab.test
+spec:
+  ingressClassName: nginx
+  tls:
+    # ingress-nginx uses its VSO-managed wildcard default certificate.
+    - hosts: [observability.lab.test]
+  rules:
+    - host: observability.lab.test
+      http:
+        paths:
+          - path: /grafana
+            pathType: Prefix
+            backend:
+              service:
+                name: observability-grafana
+                port:
+                  number: 80
+          - path: /prometheus
+            pathType: Prefix
+            backend:
+              service:
+                name: observability-kube-prometh-prometheus
+                port:
+                  number: 9090
+
+---     
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: elasticsearch
+  namespace: observability
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [observability.lab.test]
+  rules:
+    - host: observability.lab.test
+      http:
+        paths:
+          - path: /elasticsearch(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: logs-es-http
+                port:
+                  number: 9200

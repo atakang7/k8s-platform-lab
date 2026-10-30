@@ -1,0 +1,6 @@
+{{ with secret "secret/data/edge/dns/tsig" }}
+key "{{ .Data.data.key_name }}" {
+  algorithm hmac-sha256;
+  secret "{{ .Data.data.secret }}";
+};
+{{ end }}

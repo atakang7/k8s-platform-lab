@@ -1,0 +1,118 @@
+# Values for the platform base chart (charts/service). image.digest is set by
+# delivery for every release.
+image:
+  repository: docker.io/atakangul/sample-java-app
+
+replicas: 4
+containerPort: 9001
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 4
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+probes:
+  startup:
+    httpGet: {path: /actuator/health/liveness, port: http}
+    failureThreshold: 60
+    periodSeconds: 2
+  readiness:
+    httpGet: {path: /actuator/health/readiness, port: http}
+    periodSeconds: 2
+  liveness:
+    httpGet: {path: /actuator/health/liveness, port: http}
+    periodSeconds: 10
+
+resources:
+  requests: {cpu: 250m, memory: 256Mi}
+  limits: {cpu: 500m, memory: 512Mi}
+
+podSecurityContext:
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+nodeAffinity:
+  requiredDuringSchedulingIgnoredDuringExecution:
+    nodeSelectorTerms:
+      - matchExpressions:
+          - key: node-role.kubernetes.io/control-plane
+            operator: DoesNotExist
+
+ingress:
+  enabled: true
+  host: app.lab.test
+
+metrics:
+  enabled: true
+  path: /actuator/prometheus
+
+smokeTest:
+  path: /api/foos?val=smoke   # val is required; without it the app answers 400
+
+configMaps:
+  fluent-bit:
+    fluent-bit.conf: |
+      [SERVICE]
+          Flush        1
+          Log_Level    info
+          Daemon       off
+
+      [INPUT]
+          Name         tail
+          Path         /var/log/app/*.log
+          Tag          app.logs
+          Read_from_Head True
+          DB           /var/log/app/fluent-bit.db
+          Mem_Buf_Limit 5MB
+
+      [OUTPUT]
+          Name         es
+          Match        *
+          Host         logs-es-http.observability.svc.cluster.local
+          Port         9200
+          Index        app-logs
+          Suppress_Type_Name On
+
+volumes:
+  - name: app-logs
+    emptyDir: {}
+  - name: fluent-bit-config
+    configMap:
+      name: "{{ .Release.Name }}-fluent-bit"
+
+volumeMounts:
+  - name: app-logs
+    mountPath: /var/log/app
+
+sidecars:
+  - name: fluent-bit
+    image: fluent/fluent-bit@sha256:d792375ca8e53be72fc25716c28f291f32c6fc6f4f31d12d0d14bc78cefe9226
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+    resources:
+      requests: {cpu: 50m, memory: 32Mi}
+      limits: {cpu: 100m, memory: 128Mi}
+    volumeMounts:
+      - name: app-logs
+        mountPath: /var/log/app
+      - name: fluent-bit-config
+        mountPath: /fluent-bit/etc/

@@ -1,0 +1,31 @@
+provider:
+  name: rfc2136
+sources:
+  - service
+  - ingress
+policy: sync
+registry: txt
+txtOwnerId: lab-stage3
+txtPrefix: _external-dns.
+domainFilters:
+  - lab.test
+managedRecordTypes:
+  - A
+  - CNAME
+extraArgs:
+  - --rfc2136-host=192.168.56.1
+  - --rfc2136-port=53
+  - --rfc2136-zone=lab.test
+  - --rfc2136-tsig-secret-alg=hmac-sha256
+  - --rfc2136-tsig-axfr
+env:
+  - name: EXTERNAL_DNS_RFC2136_TSIG_SECRET
+    valueFrom:
+      secretKeyRef:
+        name: rfc2136-tsig
+        key: secret
+  - name: EXTERNAL_DNS_RFC2136_TSIG_KEYNAME
+    valueFrom:
+      secretKeyRef:
+        name: rfc2136-tsig
+        key: key_name

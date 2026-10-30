@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# RUNBOOK.md §1 first bring-up, in order. Keep it in step with RUNBOOK.md.
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly ROOT
+
+# ssh brings the host's locale (e.g. tr_TR); the VM lacks it and Ansible
+# refuses to start.
+export LC_ALL=C.UTF-8
+
+# shellcheck source=../../infra/edge/config.env
+source "${ROOT}/infra/edge/config.env"
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+pass() {
+  printf 'PASS | %s\n' "$1"
+}
+
+bring_up_cluster() {
+  # make prerequisites, called directly: it installs make.
+  ./infra/bin/prerequisites
+  make cluster-up
+  make cluster-validate
+}
+
+bring_up_edge() {
+  make edge-up
+  make edge-validate
+}
+
+# RUNBOOK.md §4.
+load_credentials_into_vault() {
+  phase 'loading .env into Vault'
+
+  set -a
+  source "${ROOT}/.env"
+  set +a
+  export VAULT_ADDR=https://127.0.0.1:8200
+  VAULT_TOKEN="$(jq -r .root_token "${VAULT_INIT_OUTPUT}")"
+  export VAULT_TOKEN
+
+  vault kv put secret/ci/github username="${GITHUB_USERNAME}" token="${GITHUB_TOKEN}" >/dev/null
+  vault kv put secret/ci/dockerhub username="${DOCKERHUB_USERNAME}" token="${DOCKERHUB_TOKEN}" >/dev/null
+  vault kv put secret/ci/cosign private_key="${COSIGN_PRIVATE_KEY}" password="${COSIGN_PASSWORD}" >/dev/null
+  vault kv put secret/runtime/dockerhub username="${RUNTIME_DOCKERHUB_USERNAME}" token="${RUNTIME_DOCKERHUB_TOKEN}" >/dev/null
+
+  unset VAULT_TOKEN
+}
+
+bring_up_platform() {
+  make jenkins-up
+  make environment-up
+  make observability-up
+  make observability-smoke
+}
+
+# RUNBOOK.md §7.
+wait_for_application() {
+  phase 'waiting for Jenkins to deploy sample-java-app'
+
+  "${ROOT}/infra/edge/lib/with-kubeconfig.sh" \
+    kubectl -n apps-dev wait --for=create deployment/sample-java-app --timeout=30m
+  "${ROOT}/infra/edge/lib/with-kubeconfig.sh" \
+    kubectl -n apps-dev rollout status deployment/sample-java-app --timeout=10m
+}
+
+bring_up_policies() {
+  make policies-up
+  make policies-smoke
+}
+
+main() {
+  [[ "$#" -eq 0 ]] || fail 'test runbook does not accept arguments'
+  cd "${ROOT}"
+
+  bring_up_cluster
+  bring_up_edge
+  load_credentials_into_vault
+  bring_up_platform
+  wait_for_application
+  bring_up_policies
+  make e2e-validate
+
+  pass 'the full runbook passed'
+}
+
+main "$@"

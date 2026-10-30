@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Opens Firefox on the test VM's services with a real padlock: a separate
+# profile that trusts only the lab CA, reaching the VM through an SSH SOCKS
+# proxy. Nothing on this host changes outside that profile.
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly ROOT
+# Snap Firefox cannot read hidden folders, so the profile lives in its own.
+readonly PROFILE="${HOME}/snap/firefox/common/lab-test"
+readonly VM=ubuntu@192.168.150.10
+readonly SSH=(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+check_tools() {
+  command -v firefox >/dev/null || fail 'firefox is missing'
+  command -v certutil >/dev/null || fail 'certutil is missing; sudo apt-get install -y libnss3-tools'
+}
+
+create_profile() {
+  phase "preparing the Firefox profile in ${PROFILE}"
+
+  mkdir -p "${PROFILE}"
+  if [[ ! -f "${PROFILE}/cert9.db" ]]; then
+    certutil -N --empty-password -d "sql:${PROFILE}"
+  fi
+  cp "${ROOT}/test/browser/user.js" "${PROFILE}/user.js"
+}
+
+# Every rebuild of the test VM makes a new lab CA, so replace it each time.
+trust_lab_ca() {
+  phase 'trusting the lab CA in this profile only'
+
+  "${SSH[@]}" "${VM}" cat /usr/local/share/ca-certificates/lab.crt > "${PROFILE}/lab-ca.crt"
+  if certutil -L -d "sql:${PROFILE}" -n k8s-lab >/dev/null 2>&1; then
+    certutil -D -d "sql:${PROFILE}" -n k8s-lab
+  fi
+  certutil -A -d "sql:${PROFILE}" -n k8s-lab -t 'C,,' -i "${PROFILE}/lab-ca.crt"
+}
+
+open_proxy() {
+  phase 'opening the SOCKS proxy on 127.0.0.1:1080'
+
+  "${SSH[@]}" -N -D 127.0.0.1:1080 -o ExitOnForwardFailure=yes "${VM}" &
+  PROXY_PID=$!
+  trap 'kill "${PROXY_PID}" 2>/dev/null' EXIT
+  sleep 2
+  kill -0 "${PROXY_PID}" 2>/dev/null || fail 'the proxy did not start; is port 1080 in use?'
+}
+
+open_firefox() {
+  phase 'opening Firefox; close it to stop the proxy'
+
+  firefox -no-remote -profile "${PROFILE}" \
+    https://jenkins.lab.test \
+    https://observability.lab.test/grafana/ \
+    https://observability.lab.test/elasticsearch/ \
+    https://app-dev.lab.test/api/foos/
+}
+
+main() {
+  [[ "$#" -eq 0 ]] || fail 'test browser does not accept arguments'
+
+  check_tools
+  create_profile
+  trust_lab_ca
+  open_proxy
+  open_firefox
+}
+
+main "$@"

@@ -1,0 +1,21 @@
+ui = false
+disable_mlock = true
+api_addr = "https://{{ edge_host_ip }}:8200"
+cluster_addr = "https://127.0.0.1:8201"
+
+storage "raft" {
+  path = "/var/lib/vault"
+  node_id = "edge-host"
+}
+
+listener "tcp" {
+  address = "127.0.0.1:8200"
+  tls_cert_file = "/etc/vault/tls/server.crt"
+  tls_key_file = "/etc/vault/tls/server.key"
+}
+
+listener "tcp" {
+  address = "{{ edge_host_ip }}:8200"
+  tls_cert_file = "/etc/vault/tls/server.crt"
+  tls_key_file = "/etc/vault/tls/server.key"
+}

@@ -1,0 +1,33 @@
+---
+kubernetes_version: "1.34.1"
+kubernetes_package_version: "1.34.1-1.1"
+kubernetes_repository_minor: "1.34"
+containerd_package_version: "1.7.24-0ubuntu1~20.04.2"
+
+# Cluster/runtime utility images are immutable for reproducible bootstrap and
+# validation. Keep human-readable versions in comments when updating digests.
+pause_image: "registry.k8s.io/pause@sha256:278fb9dbcca9518083ad1e11276933a2e96f23de604a3a08cc3c80002767d24c"  # 3.10.1
+validation_busybox_image: "busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"  # 1.36.1
+
+pod_cidr: "10.60.0.0/16"
+service_cidr: "10.70.0.0/16"
+vm_cidr: "10.50.0.0/24"
+control_plane_endpoint: "10.50.0.10:6443"
+
+# Human-facing release versions stay beside the immutable Git revisions used
+# for downloads. A moved upstream tag therefore cannot change a rebuild.
+calico_version: "3.32.2"
+calico_source_revision: "db255c554b929afd73552fd3ac81d691107a1607"
+
+local_path_provisioner_version: "0.0.36"
+local_path_provisioner_source_revision: "5d4bfc84b32cd9c5f56ed3aba921b1a3924ea2f0"
+
+node_ips:
+  node-1: "10.50.0.10"
+  node-2: "10.50.0.11"
+  node-3: "10.50.0.12"
+
+# Worker addresses on the edge network; must match the Vagrantfile.
+edge_ips:
+  node-2: "192.168.56.11"
+  node-3: "192.168.56.12"

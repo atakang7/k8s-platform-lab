@@ -1,0 +1,24 @@
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultConnection
+metadata:
+  name: edge
+  namespace: jenkins
+spec:
+  address: https://192.168.56.1:8200
+  caCertSecretRef: vault-ca
+  skipTLSVerify: false
+---
+# Jenkins logs in to Vault with AppRole. The role ID is pinned to jenkins-vso
+# by platform/jenkins/bin/up; the secret ID comes from the approle-id Secret.
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: jenkins
+  namespace: jenkins
+spec:
+  vaultConnectionRef: edge
+  method: appRole
+  mount: approle
+  appRole:
+    roleId: jenkins-vso
+    secretRef: approle-id

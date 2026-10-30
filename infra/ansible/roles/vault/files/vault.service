@@ -1,0 +1,19 @@
+[Unit]
+Description=Lab HashiCorp Vault
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=vault
+Group=vault
+ExecStart=/usr/local/bin/vault server -config=/etc/vault/vault.hcl
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/vault /var/log/vault
+
+[Install]
+WantedBy=multi-user.target

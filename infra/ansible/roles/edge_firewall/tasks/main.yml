@@ -1,0 +1,18 @@
+---
+- name: Install nftables
+  ansible.builtin.apt:
+    name: nftables
+    state: present
+
+- name: Write the edge firewall rules
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    mode: "0644"
+  register: edge_firewall_rules
+
+- name: Apply the edge firewall now and at every boot
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: true
+    state: "{{ 'restarted' if edge_firewall_rules.changed else 'started' }}"

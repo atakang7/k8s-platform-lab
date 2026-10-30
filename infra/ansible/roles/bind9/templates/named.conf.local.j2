@@ -1,0 +1,7 @@
+zone "lab.test" {
+  type primary;
+  file "/var/lib/bind/lab.test.zone";
+  update-policy {
+    grant external-dns-stage3 zonesub A CNAME TXT;
+  };
+};

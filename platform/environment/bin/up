@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# Prepares the application environment this cluster runs (clusterEnvironment
+# in environments.yaml): its namespace, deploy identities and image-pull access.
+#
+# Runs in two halves:
+#   1. On the host: prepare Vault (registry credential check, AppRole).
+#   2. With --cluster, through the SSH tunnel: prepare the namespace.
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly ROOT
+readonly ENVIRONMENT_DIRECTORY="${ROOT}/platform/environment"
+
+# shellcheck source=../../../infra/edge/lib/operator-state.sh
+source "${ROOT}/infra/edge/lib/operator-state.sh"
+# shellcheck source=../../../infra/edge/lib/vault-approle.sh
+source "${ROOT}/infra/edge/lib/vault-approle.sh"
+
+# Set by read_environment in the cluster half.
+ENVIRONMENT_NAME=''
+NAMESPACE=''
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+pass() {
+  printf 'PASS | %s\n' "$1"
+}
+
+# ---- Host half ----
+
+check_registry_credential() {
+  phase 'checking that the runtime registry credential is in Vault'
+
+  if ! vault kv get secret/runtime/dockerhub >/dev/null 2>&1; then
+    fail 'secret/runtime/dockerhub is missing in Vault; run the vault kv put commands at the top of .env'
+  fi
+}
+
+configure_registry_identity() {
+  phase 'giving the environment a Vault identity that can read only the registry credential'
+
+  vault policy write registry-pull-read "${ENVIRONMENT_DIRECTORY}/registry-pull-read.hcl" >/dev/null
+
+  vault write auth/approle/role/registry-pull-vso \
+    token_policies=registry-pull-read \
+    token_ttl=1h \
+    token_max_ttl=4h \
+    secret_id_ttl=0 \
+    secret_id_num_uses=0 \
+    secret_id_bound_cidrs="${CLUSTER_VAULT_CLIENTS}" \
+    token_bound_cidrs="${CLUSTER_VAULT_CLIENTS}" >/dev/null
+
+  # A fixed role ID keeps namespace.yaml free of a rendered role ID. It is a
+  # name, not a secret; the secret ID is the password.
+  vault write auth/approle/role/registry-pull-vso/role-id role_id=registry-pull-vso >/dev/null
+}
+
+# ---- Cluster half ----
+
+read_environment() {
+  local environment
+
+  environment="$("${ROOT}/platform/bin/cluster-environment")"
+  ENVIRONMENT_NAME="${environment% *}"
+  NAMESPACE="${environment#* }"
+
+  phase "preparing environment ${ENVIRONMENT_NAME} in namespace ${NAMESPACE}"
+}
+
+# One cluster runs one environment. Switching clusterEnvironment on a cluster
+# that already runs another is refused rather than cleaned up, so a mistaken
+# switch can never remove a running environment.
+require_single_environment() {
+  local others
+
+  others="$(kubectl get namespaces \
+    --selector "delivery.lab.test/environment,delivery.lab.test/environment!=${ENVIRONMENT_NAME}" \
+    --output name)"
+
+  if [[ -n "${others}" ]]; then
+    fail "this cluster already runs another environment (${others}); remove it before preparing ${ENVIRONMENT_NAME}"
+  fi
+}
+
+apply_environment_manifest() {
+  local manifest
+
+  # namespace.yaml has two plain placeholders: __NAMESPACE__ and __ENVIRONMENT__.
+  manifest="$(sed \
+    -e "s/__NAMESPACE__/${NAMESPACE}/g" \
+    -e "s/__ENVIRONMENT__/${ENVIRONMENT_NAME}/g" \
+    "${ENVIRONMENT_DIRECTORY}/namespace.yaml")"
+  kubectl apply -f - <<< "${manifest}" >/dev/null
+
+  kubectl -n "${NAMESPACE}" delete secret vault-ca --ignore-not-found >/dev/null
+  kubectl -n "${NAMESPACE}" create secret generic vault-ca \
+    --from-file=ca.crt=/usr/local/share/ca-certificates/lab.crt >/dev/null
+}
+
+install_registry_login() {
+  install_approle_secret_id "${NAMESPACE}" registry-pull-vso registry-pull-approle
+}
+
+# The deploy identity releases into this namespace only, and cannot read Secrets.
+check_deploy_access() {
+  local identity="system:serviceaccount:jenkins:jenkins-deploy-${ENVIRONMENT_NAME}"
+  local in_namespace
+  local everywhere
+  local secrets
+
+  phase "checking what jenkins-deploy-${ENVIRONMENT_NAME} may do"
+
+  in_namespace="$(kubectl auth can-i create deployments --namespace "${NAMESPACE}" --as="${identity}" || true)"
+  everywhere="$(kubectl auth can-i create deployments --all-namespaces --as="${identity}" || true)"
+  secrets="$(kubectl auth can-i get secrets --namespace "${NAMESPACE}" --as="${identity}" || true)"
+
+  if [[ "${in_namespace}" != yes ]]; then
+    fail "jenkins-deploy-${ENVIRONMENT_NAME} cannot deploy to ${NAMESPACE}"
+  fi
+  if [[ "${everywhere}" != no ]]; then
+    fail "jenkins-deploy-${ENVIRONMENT_NAME} can deploy outside ${NAMESPACE}"
+  fi
+  if [[ "${secrets}" != no ]]; then
+    fail "jenkins-deploy-${ENVIRONMENT_NAME} can read Secrets"
+  fi
+}
+
+# CI may only dry-run against the cluster; a real write must be denied by the
+# jenkins-ci-dry-run-only admission policy.
+check_ci_is_dry_run_only() {
+  local denial
+
+  phase 'checking that CI can only dry-run'
+
+  if denial="$(kubectl -n "${NAMESPACE}" create configmap delivery-probe \
+    --from-literal=probe=1 \
+    --as=system:serviceaccount:jenkins:jenkins-ci 2>&1)"; then
+    kubectl -n "${NAMESPACE}" delete configmap delivery-probe >/dev/null
+    fail 'jenkins-ci can write to the cluster'
+  fi
+
+  if [[ "${denial}" != *jenkins-ci-dry-run-only* ]]; then
+    fail "unexpected CI denial: ${denial}"
+  fi
+}
+
+wait_for_registry_secret() {
+  phase 'waiting for the image-pull Secret from Vault'
+
+  kubectl -n "${NAMESPACE}" wait --for=condition=Ready --timeout=2m \
+    vaultstaticsecret/registry-pull >/dev/null
+}
+
+main() {
+  case "${1:-}" in
+    '')
+      [[ "$#" -eq 0 ]] || fail 'environment up does not accept arguments'
+      require_vault_operator_token
+      check_registry_credential
+      configure_registry_identity
+      exec "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+      ;;
+    --cluster)
+      [[ "$#" -eq 1 ]] || fail 'environment up --cluster does not accept extra arguments'
+      read_environment
+      require_single_environment
+      apply_environment_manifest
+      install_registry_login
+      check_deploy_access
+      check_ci_is_dry_run_only
+      wait_for_registry_secret
+      pass "environment ${ENVIRONMENT_NAME} (${NAMESPACE}) is ready"
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+}
+
+main "$@"

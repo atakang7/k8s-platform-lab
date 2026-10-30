@@ -1,0 +1,6 @@
+apiVersion: v2
+name: resource-requests-webhook
+description: A custom ValidatingAdmissionWebhook to enforce CPU and memory requests on Deployments.
+type: application
+version: 0.2.3
+appVersion: "1.1.0"

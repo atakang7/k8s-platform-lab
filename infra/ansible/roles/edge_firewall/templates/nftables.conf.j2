@@ -1,0 +1,23 @@
+#!/usr/sbin/nft -f
+# Edge firewall: nothing reaches this node's own edge IP except replies to
+# connections it opened. Traffic for the ingress IP is forwarded to pods and
+# never hits this input chain.
+
+# Replace our rules on every load instead of adding a second copy:
+# create the table if missing, then delete it, then define it fresh below.
+table inet edge_firewall
+delete table inet edge_firewall
+
+table inet edge_firewall {
+  # "input" sees only packets addressed to this node itself.
+  # Anything not matched below is allowed (policy accept).
+  chain input {
+    type filter hook input priority 0; policy accept;
+
+    # Replies to connections this node opened (Vault, DNS): allow.
+    ip daddr {{ edge_ips[inventory_hostname] }} ct state established,related accept
+
+    # Anything else to this node's edge IP (SSH, metrics, kubelet): drop.
+    ip daddr {{ edge_ips[inventory_hostname] }} drop
+  }
+}

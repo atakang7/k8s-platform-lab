@@ -1,0 +1,27 @@
+# Delivery environments, in promotion order. What runs in each one is its
+# state/<name>.yaml: a commit to that file is a deploy. main's CI records every
+# new release (app version + image digest) in the first environment; a release
+# enters any later environment by pull request, and only after it has been in
+# the previous one.
+# The one environment this cluster runs. `make environment-up` prepares only
+# it, the deploy job releases only it, and `make policies-up` installs its
+# policy digests. The other environments keep their place in promotion order
+# and their state in Git; each runs on its own cluster.
+clusterEnvironment: dev
+chartRegistry: oci://registry-1.docker.io/atakangul
+# Prometheus the deploy job judges canaries with (platform/observability).
+metrics: http://observability-kube-prometh-prometheus.observability.svc:9090/prometheus
+environments:
+  - name: dev
+    namespace: apps-dev
+  - name: stage
+    namespace: apps-stage
+  - name: prod
+    namespace: apps-prod
+    # Each release first runs as a one-replica canary behind `weight`% of the
+    # traffic for `minutes`; a 5xx rate above maxErrorRate removes it.
+    canary: {weight: 10, minutes: 5, maxErrorRate: 0.01}
+# Services the deploy job releases. Every other state entry is built by
+# delivery and installed by the operator (`make policies-up`).
+releases:
+  - sample-java-app

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly ROOT
+source "${ROOT}/infra/edge/config.env"
+
+main() {
+  cd "${ROOT}"
+
+  "${ROOT}/infra/edge/lib/with-kubeconfig.sh" \
+    "${ROOT}/infra/edge/lib/kubernetes.sh" down
+
+  sudo -n \
+    ANSIBLE_CONFIG="${ROOT}/infra/ansible/ansible.cfg" \
+    ansible-playbook \
+      -i localhost, \
+      -c local \
+      "${ROOT}/infra/ansible/playbooks/edge-host.yml" \
+      --tags resolver \
+      -e "edge_host_ip=${EDGE_HOST_IP}" \
+      -e "dns_zone=${DNS_ZONE}" \
+      -e resolver_state=down
+
+  sudo -n systemctl stop vault-agent named vault
+  printf 'PASS | edge services stopped; Vault and DNS state retained\n'
+}
+
+main "$@"

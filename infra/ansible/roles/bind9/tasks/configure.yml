@@ -1,0 +1,58 @@
+---
+- name: Require Vault Agent TSIG delivery
+  ansible.builtin.stat:
+    path: /run/lab-bind/tsig.key
+  register: tsig_file
+
+- name: Fail before writing an unusable BIND configuration
+  ansible.builtin.assert:
+    that: tsig_file.stat.exists
+    fail_msg: "Vault Agent has not delivered /run/lab-bind/tsig.key"
+
+- name: Install BIND options
+  ansible.builtin.template:
+    src: "named.conf.options.j2"
+    dest: /etc/bind/named.conf.options
+    owner: root
+    group: bind
+    mode: '0640'
+  notify: restart bind
+
+- name: Install BIND zone declaration
+  ansible.builtin.template:
+    src: "named.conf.local.j2"
+    dest: /etc/bind/named.conf.local
+    owner: root
+    group: bind
+    mode: '0640'
+  notify: restart bind
+
+- name: Seed zone only if absent
+  ansible.builtin.copy:
+    src: "lab.test.zone"
+    dest: /var/lib/bind/lab.test.zone
+    owner: bind
+    group: bind
+    mode: '0640'
+    force: false
+  notify: restart bind
+
+- name: Validate BIND configuration
+  ansible.builtin.command: named-checkconf /etc/bind/named.conf
+  changed_when: false
+
+- name: Unmask BIND after its restricted configuration validates
+  ansible.builtin.systemd:
+    name: named
+    masked: false
+
+- name: Clear an earlier BIND start-limit failure
+  ansible.builtin.command: systemctl reset-failed named.service
+  changed_when: false
+  failed_when: false
+
+- name: Start authoritative BIND
+  ansible.builtin.systemd:
+    name: named
+    enabled: true
+    state: started

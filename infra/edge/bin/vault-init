@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly ROOT
+source "${ROOT}/infra/edge/config.env"
+export VAULT_ADDR=https://127.0.0.1:8200
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+resolve_operator_state() {
+  [[ "${VAULT_INIT_OUTPUT}" = /* ]] ||
+    fail 'Vault init output must be an absolute path'
+
+  VAULT_INIT_OUTPUT="$(realpath -m -- "${VAULT_INIT_OUTPUT}")"
+
+  case "${VAULT_INIT_OUTPUT}" in
+    "${ROOT}"/*)
+      fail 'Vault operator state cannot be stored inside the repository'
+      ;;
+    /var/lib/vault/*|/etc/vault/*|/etc/lab-ca/*)
+      fail 'Vault operator state cannot be stored beside Vault or the local CA'
+      ;;
+  esac
+}
+
+vault_init_status() {
+  local status=0
+  vault operator init -status >/dev/null 2>&1 || status=$?
+  printf '%s\n' "${status}"
+}
+
+initialize_vault() {
+  umask 077
+  install -d -m 0700 "$(dirname -- "${VAULT_INIT_OUTPUT}")"
+
+  if [[ -e "${VAULT_INIT_OUTPUT}" ]]; then
+    rm -f -- "${VAULT_INIT_OUTPUT}"
+    printf 'PASS | removed stale Vault operator state\n'
+  fi
+
+  if ! vault operator init \
+    -key-shares=1 \
+    -key-threshold=1 \
+    -format=json > "${VAULT_INIT_OUTPUT}"; then
+    rm -f -- "${VAULT_INIT_OUTPUT}"
+    fail 'Vault initialization failed; partial operator state removed'
+  fi
+
+  chmod 0600 "${VAULT_INIT_OUTPUT}"
+  printf 'PASS | Vault initialized; operator state: %s\n' "${VAULT_INIT_OUTPUT}"
+}
+
+main() {
+  local status
+
+  resolve_operator_state
+  status="$(vault_init_status)"
+
+  case "${status}" in
+    0)
+      [[ -s "${VAULT_INIT_OUTPUT}" ]] ||
+        fail "Vault is initialized but ${VAULT_INIT_OUTPUT} is missing"
+      printf 'PASS | Vault is already initialized\n'
+      ;;
+    2)
+      initialize_vault
+      ;;
+    *)
+      fail 'cannot determine Vault initialization state'
+      ;;
+  esac
+}
+
+main "$@"

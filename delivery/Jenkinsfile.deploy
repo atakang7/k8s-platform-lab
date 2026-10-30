@@ -1,0 +1,4 @@
+// Deploy job: releases every environment to its state/<name>.yaml.
+@Library('lab-delivery') _
+
+deployPipeline()

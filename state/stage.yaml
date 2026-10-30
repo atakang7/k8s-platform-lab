@@ -1,0 +1,6 @@
+environment: stage
+services:
+  sample-java-app: null
+  resource-requests-webhook:
+    version: 0.2.2
+    image: sha256:cc0ca462eca3c5f1d4e345add693d7051bff4b57aa26d15cbfbf12a54f7b4258

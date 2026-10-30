@@ -1,0 +1,83 @@
+// Repository-level validation and base-chart publication. Platform and infra
+// are reconciled by the operator (`make`), never applied by Jenkins.
+@Library('lab-delivery') _
+
+pipeline {
+    agent { label 'lab-ci-light' }
+    options {
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timeout(time: 20, unit: 'MINUTES')
+    }
+    stages {
+        stage('Shell') {
+            steps {
+                container('ci-tools') {
+                    // SC1071: skip non-shell files in bin/ folders, such as the
+                    // Python helpers in platform/bin, instead of failing on them.
+                    sh '''
+                      find delivery infra platform policies validation -type f \
+                        \\( -name '*.sh' -o -path '*/bin/*' \\) \
+                        -exec shellcheck --external-sources --source-path=SCRIPTDIR --exclude=SC1071 {} +
+                    '''
+                }
+            }
+        }
+
+        stage('Chart lint') {
+            when {
+                allOf {
+                    changeRequest()
+                    anyOf {
+                        changeset 'charts/**'
+                        // A new multibranch job has no changelog yet. Validate the
+                        // repository once instead of silently skipping chart checks.
+                        expression { currentBuild.previousBuild == null }
+                    }
+                }
+            }
+            steps {
+                container('chart-testing') {
+                    sh '''
+                      git config --global --add safe.directory "$PWD"
+                      ct lint \
+                        --target-branch "$CHANGE_TARGET" \
+                        --chart-dirs charts \
+                        --check-version-increment
+                    '''
+                }
+            }
+        }
+
+        stage('Chart publish') {
+            when {
+                // Every main build: publish-chart.sh skips versions already in the
+                // registry, so this is idempotent, and a version whose publish failed
+                // (or a fresh, empty registry) is caught up by the next build.
+                branch 'main'
+            }
+            steps {
+                script {
+                    env.CHART_REF = delivery.environments().chartRegistry
+                    delivery.installScripts()
+                }
+                container('ci-tools') {
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'dockerhub-creds',
+                            usernameVariable: 'REGISTRY_USERNAME',
+                            passwordVariable: 'REGISTRY_PASSWORD'
+                        )
+                    ]) {
+                        sh '''
+                          for chart_file in charts/*/Chart.yaml; do
+                            [ -f "$chart_file" ] || continue
+                            CHART_DIR="${chart_file%/Chart.yaml}" .delivery/publish-chart.sh
+                          done
+                        '''
+                    }
+                }
+            }
+        }
+    }
+}

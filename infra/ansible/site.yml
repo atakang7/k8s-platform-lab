@@ -1,0 +1,32 @@
+---
+- name: Prepare every Kubernetes node
+  hosts: k8s_cluster
+  become: true
+  roles:
+    - common
+    - containerd
+    - kubernetes
+
+- name: Initialize the control plane
+  hosts: control_plane
+  become: true
+  roles:
+    - control_plane
+
+- name: Join worker nodes
+  hosts: workers
+  become: true
+  serial: 1
+  roles:
+    - workers
+    - edge_firewall
+
+- name: Install cluster networking and storage
+  hosts: control_plane
+  become: true
+  roles:
+    - calico
+    - storage
+
+- import_playbook: validate.yml
+

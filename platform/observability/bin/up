@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# Installs observability: kube-prometheus-stack (Prometheus, Alertmanager,
+# Grafana), Elasticsearch, Fluent Bit, the Grafana dashboards and the ingress.
+# Runs through the SSH tunnel to the cluster (with-kubeconfig.sh).
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly ROOT
+readonly OBSERVABILITY_DIRECTORY="${ROOT}/platform/observability"
+# Prometheus on node-2 and Grafana beside Jenkins on node-3 need this much room.
+readonly MINIMUM_WORKER_MEMORY_KI=1450000
+
+# shellcheck source=../versions.env
+source "${OBSERVABILITY_DIRECTORY}/versions.env"
+# shellcheck source=../../../infra/edge/config.env
+source "${ROOT}/infra/edge/config.env"
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+pass() {
+  printf 'PASS | %s\n' "$1"
+}
+
+check_worker_memory() {
+  local node
+  local memory
+
+  phase 'checking that both workers are Ready and have enough memory'
+
+  for node in node-2 node-3; do
+    kubectl wait --for=condition=Ready "node/${node}" --timeout=5s >/dev/null
+    memory="$(kubectl get node "${node}" -o jsonpath='{.status.allocatable.memory}')"
+
+    if [[ "${memory}" != *Ki ]]; then
+      fail "${node} reports allocatable memory in an unexpected unit: ${memory}"
+    fi
+    if (( ${memory%Ki} < MINIMUM_WORKER_MEMORY_KI )); then
+      fail "${node} needs at least ${MINIMUM_WORKER_MEMORY_KI}Ki allocatable memory; has ${memory}"
+    fi
+  done
+}
+
+prepare_namespace() {
+  phase 'creating the observability namespace and adding the Helm repositories'
+
+  if ! kubectl get namespace observability >/dev/null 2>&1; then
+    kubectl create namespace observability >/dev/null
+  fi
+
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update >/dev/null
+  helm repo add fluent https://fluent.github.io/helm-charts --force-update >/dev/null
+  helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update >/dev/null
+  helm repo update prometheus-community fluent metrics-server >/dev/null
+}
+
+install_prometheus_stack() {
+  phase "installing kube-prometheus-stack ${KUBE_PROMETHEUS_STACK_CHART_VERSION} (up to 10 minutes)"
+
+  helm upgrade --install observability prometheus-community/kube-prometheus-stack \
+    --namespace observability \
+    --version "${KUBE_PROMETHEUS_STACK_CHART_VERSION}" \
+    --values "${OBSERVABILITY_DIRECTORY}/kube-prometheus-stack/values.yaml" \
+    --wait \
+    --rollback-on-failure \
+    --timeout 10m \
+    --history-max 5 \
+    --hide-notes
+
+  kubectl -n observability rollout status \
+    statefulset/alertmanager-observability-kube-prometh-alertmanager --timeout=3m
+}
+
+install_elasticsearch_and_alerts() {
+  phase 'installing Elasticsearch and the alert rules'
+
+  kubectl apply -f "${OBSERVABILITY_DIRECTORY}/elasticsearch/resources.yaml"
+  kubectl apply -f "${OBSERVABILITY_DIRECTORY}/alerts/pod-restarts.yaml"
+}
+
+# Grafana's dashboard sidecar loads every ConfigMap labelled grafana_dashboard=1.
+install_dashboards() {
+  phase 'installing the Grafana dashboards'
+
+  kubectl -n observability delete configmap lab-cluster-dashboard --ignore-not-found >/dev/null
+  kubectl -n observability create configmap lab-cluster-dashboard \
+    --from-file=cluster.json="${OBSERVABILITY_DIRECTORY}/dashboards/cluster.json" >/dev/null
+  kubectl -n observability label configmap lab-cluster-dashboard grafana_dashboard=1 >/dev/null
+
+  kubectl -n observability delete configmap lab-logs-dashboard --ignore-not-found >/dev/null
+  kubectl -n observability create configmap lab-logs-dashboard \
+    --from-file=logs.json="${OBSERVABILITY_DIRECTORY}/dashboards/logs.json" >/dev/null
+  kubectl -n observability label configmap lab-logs-dashboard grafana_dashboard=1 >/dev/null
+}
+
+wait_for_elasticsearch() {
+  phase 'waiting for Elasticsearch (up to 8 minutes)'
+
+  kubectl -n observability rollout status statefulset/logs-es --timeout=8m
+}
+
+install_fluent_bit() {
+  phase "installing Fluent Bit ${FLUENT_BIT_CHART_VERSION}"
+
+  helm upgrade --install fluent-bit fluent/fluent-bit \
+    --namespace observability \
+    --version "${FLUENT_BIT_CHART_VERSION}" \
+    --values "${OBSERVABILITY_DIRECTORY}/fluent-bit/values.yaml" \
+    --wait \
+    --rollback-on-failure \
+    --timeout 5m \
+    --history-max 5 \
+    --hide-notes
+}
+
+# The Metrics API for HPAs and `kubectl top`. Lives in kube-system, as usual.
+install_metrics_server() {
+  phase "installing metrics-server ${METRICS_SERVER_CHART_VERSION}"
+
+  helm upgrade --install metrics-server metrics-server/metrics-server \
+    --namespace kube-system \
+    --version "${METRICS_SERVER_CHART_VERSION}" \
+    --values "${OBSERVABILITY_DIRECTORY}/metrics-server/values.yaml" \
+    --wait \
+    --rollback-on-failure \
+    --timeout 5m \
+    --history-max 5 \
+    --hide-notes
+}
+
+install_ingress() {
+  phase 'installing the observability ingress'
+
+  kubectl apply -f "${OBSERVABILITY_DIRECTORY}/ingress.yaml"
+}
+
+# ExternalDNS publishes the ingress record only after ingress-nginx sets the
+# Ingress address. Waiting here means observability-smoke never runs before
+# its own endpoint exists.
+wait_for_dns() {
+  local host="observability.${DNS_ZONE}"
+  local answer
+  local address
+
+  phase "waiting for ${host} to resolve (up to 3 minutes)"
+
+  for _ in {1..90}; do
+    answer="$(getent ahostsv4 "${host}" || true)"
+    address="${answer%% *}"
+    if [[ "${address}" == "${INGRESS_VIP}" ]]; then
+      return
+    fi
+    sleep 2
+  done
+
+  fail "${host} did not resolve to ${INGRESS_VIP}"
+}
+
+main() {
+  case "${1:-}" in
+    '')
+      [[ "$#" -eq 0 ]] || fail 'observability up does not accept arguments'
+      exec "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+      ;;
+    --cluster)
+      [[ "$#" -eq 1 ]] || fail 'observability up --cluster does not accept extra arguments'
+      check_worker_memory
+      prepare_namespace
+      install_prometheus_stack
+      install_elasticsearch_and_alerts
+      install_dashboards
+      wait_for_elasticsearch
+      install_fluent_bit
+      install_metrics_server
+      install_ingress
+      wait_for_dns
+      pass 'observability is installed; run make observability-smoke'
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+}
+
+main "$@"

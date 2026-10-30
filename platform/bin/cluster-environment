@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Prints the environment this cluster runs, as "<name> <namespace>".
+
+It is the entry in environments.yaml named by clusterEnvironment.
+"""
+import pathlib
+import re
+import sys
+
+import yaml
+
+DNS_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+
+path = pathlib.Path(__file__).resolve().parents[2] / "environments.yaml"
+config = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+wanted = config["clusterEnvironment"]
+matches = [e for e in config["environments"] if e["name"] == wanted]
+if len(matches) != 1:
+    sys.exit(f"{path}: clusterEnvironment {wanted!r} must name exactly one environment")
+
+name = matches[0]["name"]
+namespace = matches[0]["namespace"]
+for value in (name, namespace):
+    if not DNS_LABEL.match(value):
+        sys.exit(f"{path}: {value!r} is not a DNS label")
+
+print(name, namespace)

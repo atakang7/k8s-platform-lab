@@ -1,0 +1,24 @@
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultConnection
+metadata:
+  name: edge
+  namespace: ingress-nginx
+spec:
+  address: https://192.168.56.1:8200
+  caCertSecretRef: vault-ca
+  skipTLSVerify: false
+---
+# Logs in with AppRole: pinned role ID tls-vso (infra/edge/lib/vault.sh), secret ID
+# from the approle-id Secret (infra/edge/lib/bootstrap-vso-auth.sh).
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: tls
+  namespace: ingress-nginx
+spec:
+  vaultConnectionRef: edge
+  method: appRole
+  mount: approle
+  appRole:
+    roleId: tls-vso
+    secretRef: approle-id

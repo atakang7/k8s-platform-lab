@@ -1,0 +1,38 @@
+# lab-ci-runner identity. Delivery environments bind it to their deployer
+# Role so CI can server-side dry-run releases, which Kubernetes authorizes like
+# real writes; jenkins-ci-dry-run-only below rejects every request from it
+# that is not a dry-run, so CI can validate environments but never change them.
+# CD identities are per environment: platform/environment creates
+# jenkins-deploy-<environment>.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-ci
+  namespace: jenkins
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: jenkins-ci-dry-run-only
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["*/*"]
+  matchConditions:
+    - name: jenkins-ci-requests-only
+      expression: request.userInfo.username == 'system:serviceaccount:jenkins:jenkins-ci'
+  validations:
+    - expression: request.dryRun == true
+      message: jenkins-ci may only send dry-run requests
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: jenkins-ci-dry-run-only
+spec:
+  policyName: jenkins-ci-dry-run-only
+  validationActions: [Deny]

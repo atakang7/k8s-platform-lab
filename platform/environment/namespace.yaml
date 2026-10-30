@@ -1,0 +1,135 @@
+# The application namespace of this cluster's delivery environment
+# (clusterEnvironment in environments.yaml).
+# platform/environment/bin/up renders __NAMESPACE__ and __ENVIRONMENT__.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: __NAMESPACE__
+  labels:
+    delivery.lab.test/environment: __ENVIRONMENT__
+    # The deploy identity creates Pods (releases, Helm tests); the restricted
+    # Pod Security standard keeps any Pod here from being privileged, reaching
+    # the host, or running as root. The base chart's defaults satisfy it.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+# Deploy identity of this environment. The deploy job releases this
+# environment from an agent Pod running as this ServiceAccount
+# (delivery/pipeline/vars/deployPipeline.groovy), so the Pod deploying one
+# environment cannot touch another. No credential for it is stored in Jenkins.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-deploy-__ENVIRONMENT__
+  namespace: jenkins
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deployer
+  namespace: __NAMESPACE__
+# What the base chart creates, plus the ConfigMaps holding Helm release
+# history (HELM_DRIVER=configmap) and the smoke-test Pods `helm test` runs
+# (Helm applies them server-side, which is a patch). No Secrets.
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["servicemonitors"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deployer
+  namespace: __NAMESPACE__
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-deploy-__ENVIRONMENT__
+    namespace: jenkins
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: deployer
+---
+# CI server-side dry-runs releases, which needs the deployer's verbs; the
+# jenkins-ci-dry-run-only admission policy rejects its real writes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-ci-dry-run
+  namespace: __NAMESPACE__
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-ci
+    namespace: jenkins
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: deployer
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultConnection
+metadata:
+  name: edge
+  namespace: __NAMESPACE__
+spec:
+  address: https://192.168.56.1:8200
+  caCertSecretRef: vault-ca
+  skipTLSVerify: false
+---
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultAuth
+metadata:
+  name: registry-pull
+  namespace: __NAMESPACE__
+spec:
+  vaultConnectionRef: edge
+  method: appRole
+  mount: approle
+  appRole:
+    roleId: registry-pull-vso   # pinned by platform/environment/bin/up
+    secretRef: registry-pull-approle
+---
+# Image pull Secret the base chart references by default.
+apiVersion: secrets.hashicorp.com/v1beta1
+kind: VaultStaticSecret
+metadata:
+  name: registry-pull
+  namespace: __NAMESPACE__
+spec:
+  vaultAuthRef: registry-pull
+  mount: secret
+  type: kv-v2
+  path: runtime/dockerhub
+  refreshAfter: 1m
+  destination:
+    create: true
+    name: registry-pull
+    type: kubernetes.io/dockerconfigjson
+    transformation:
+      excludeRaw: true
+      templates:
+        .dockerconfigjson:
+          text: |
+            {{- $auth := printf "%s:%s" (get .Secrets "username") (get .Secrets "token") | b64enc -}}
+            {{- printf "{\"auths\":{\"https://index.docker.io/v1/\":{\"auth\":%q}}}" $auth -}}

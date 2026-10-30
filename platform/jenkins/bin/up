@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# Installs or updates Jenkins.
+#
+# Runs in two halves:
+#   1. On the host: prepare Vault (credentials, admin login, AppRole).
+#   2. With --cluster, through the SSH tunnel: install Jenkins.
+# The cluster API is only reachable through that tunnel, so the host half opens
+# it with with-kubeconfig.sh and runs this script again with --cluster.
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly ROOT
+readonly JENKINS_DIRECTORY="${ROOT}/platform/jenkins"
+readonly JENKINS_NAMESPACE=jenkins
+
+# shellcheck source=../versions.env
+source "${JENKINS_DIRECTORY}/versions.env"
+# shellcheck source=../../../infra/edge/lib/operator-state.sh
+source "${ROOT}/infra/edge/lib/operator-state.sh"
+# shellcheck source=../../../infra/edge/lib/vault-approle.sh
+source "${ROOT}/infra/edge/lib/vault-approle.sh"
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+pass() {
+  printf 'PASS | %s\n' "$1"
+}
+
+# ---- Host half ----
+
+check_ci_credentials() {
+  phase 'checking that the CI credentials are in Vault'
+
+  # They come from .env; the commands that load them are at the top of that file.
+  if ! vault kv get secret/ci/github >/dev/null 2>&1; then
+    fail 'secret/ci/github is missing in Vault; run the vault kv put commands at the top of .env'
+  fi
+  if ! vault kv get secret/ci/dockerhub >/dev/null 2>&1; then
+    fail 'secret/ci/dockerhub is missing in Vault; run the vault kv put commands at the top of .env'
+  fi
+  if ! vault kv get secret/ci/cosign >/dev/null 2>&1; then
+    fail 'secret/ci/cosign is missing in Vault; run the vault kv put commands at the top of .env'
+  fi
+}
+
+create_admin_login() {
+  phase 'creating the Jenkins admin login in Vault (first run only)'
+
+  local password
+
+  if vault kv get secret/jenkins/admin >/dev/null 2>&1; then
+    return
+  fi
+
+  password="$(openssl rand -hex 24)"
+  vault kv put secret/jenkins/admin \
+    jenkins-admin-user=admin \
+    jenkins-admin-password="${password}" >/dev/null
+}
+
+configure_vault_identity() {
+  phase 'giving Jenkins a Vault identity that can read only its secrets'
+
+  vault policy write jenkins-read "${JENKINS_DIRECTORY}/resources/admin-read.hcl" >/dev/null
+
+  vault write auth/approle/role/jenkins-vso \
+    token_policies=jenkins-read \
+    token_ttl=1h \
+    token_max_ttl=4h \
+    secret_id_ttl=0 \
+    secret_id_num_uses=0 \
+    secret_id_bound_cidrs="${CLUSTER_VAULT_CLIENTS}" \
+    token_bound_cidrs="${CLUSTER_VAULT_CLIENTS}" >/dev/null
+
+  # A fixed role ID keeps resources/vault-connection.yaml static. It is a name,
+  # not a secret; the secret ID is the password.
+  vault write auth/approle/role/jenkins-vso/role-id role_id=jenkins-vso >/dev/null
+}
+
+# ---- Cluster half ----
+
+prepare_namespace() {
+  phase 'creating the jenkins namespace with the Vault CA certificate'
+
+  if ! kubectl get namespace "${JENKINS_NAMESPACE}" >/dev/null 2>&1; then
+    kubectl create namespace "${JENKINS_NAMESPACE}" >/dev/null
+  fi
+
+  kubectl -n "${JENKINS_NAMESPACE}" delete secret vault-ca --ignore-not-found >/dev/null
+  kubectl -n "${JENKINS_NAMESPACE}" create secret generic vault-ca \
+    --from-file=ca.crt=/usr/local/share/ca-certificates/lab.crt >/dev/null
+}
+
+install_vault_login() {
+  phase 'installing the Jenkins Vault login'  
+
+  install_approle_secret_id "${JENKINS_NAMESPACE}" jenkins-vso approle-id
+  kubectl apply -f "${JENKINS_DIRECTORY}/resources/vault-connection.yaml" >/dev/null
+}
+
+sync_secrets() {
+  phase 'syncing the Jenkins secrets from Vault'
+
+  kubectl apply -f "${JENKINS_DIRECTORY}/resources/admin-secret.yaml" >/dev/null
+  kubectl apply -f "${JENKINS_DIRECTORY}/resources/ci-secrets.yaml" >/dev/null
+
+  kubectl -n "${JENKINS_NAMESPACE}" wait --for=condition=Ready --timeout=2m \
+    vaultstaticsecret/jenkins-admin \
+    vaultstaticsecret/github-creds \
+    vaultstaticsecret/dockerhub-creds \
+    vaultstaticsecret/cosign-signing >/dev/null
+}
+
+check_agent_permissions() {
+  phase 'checking that CI agents cannot deploy across the cluster'
+
+  local answer
+
+  kubectl apply -f "${JENKINS_DIRECTORY}/resources/agent-rbac.yaml" >/dev/null
+
+  answer="$(kubectl auth can-i create deployments --all-namespaces \
+    --as="system:serviceaccount:${JENKINS_NAMESPACE}:jenkins-ci" || true)"
+
+  if [[ "${answer}" != no ]]; then
+    fail 'jenkins-ci has cluster-wide deployment rights'
+  fi
+}
+
+install_jenkins() {
+  phase "installing Jenkins chart ${JENKINS_CHART_VERSION} with Helm"
+
+  helm repo add jenkins https://charts.jenkins.io --force-update >/dev/null
+  helm repo update jenkins >/dev/null
+
+  # Jenkins merges the JCasC files into one configuration; security.yaml and
+  # agents.yaml both add keys under jenkins:. platformFiles are the files that
+  # JCasC reads (values.yaml).
+  helm upgrade --install jenkins jenkins/jenkins \
+    --namespace "${JENKINS_NAMESPACE}" \
+    --version "${JENKINS_CHART_VERSION}" \
+    --values "${JENKINS_DIRECTORY}/values.yaml" \
+    --set-file controller.JCasC.configScripts.security="${JENKINS_DIRECTORY}/jcasc/security.yaml" \
+    --set-file controller.JCasC.configScripts.agents="${JENKINS_DIRECTORY}/jcasc/agents.yaml" \
+    --set-file controller.JCasC.configScripts.credentials="${JENKINS_DIRECTORY}/jcasc/credentials.yaml" \
+    --set-file controller.JCasC.configScripts.jobs="${JENKINS_DIRECTORY}/jcasc/jobs.yaml" \
+    --set-file platformFiles.ci-runner="${JENKINS_DIRECTORY}/pods/ci-runner.yaml" \
+    --set-file platformFiles.ci-light="${JENKINS_DIRECTORY}/pods/ci-light.yaml" \
+    --set-file platformFiles.cd-runner="${JENKINS_DIRECTORY}/pods/cd-runner.yaml" \
+    --set-file platformFiles.jobs="${JENKINS_DIRECTORY}/jobs.groovy" \
+    --wait \
+    --rollback-on-failure \
+    --timeout 10m \
+    --history-max 5 \
+    --hide-notes
+}
+
+remove_old_agents() {
+  phase 'removing old agent pods'
+
+  # Idle agents are reused as they are. After a change (new tools image, new
+  # identity) the next build would still run on an old pod, so remove them.
+  kubectl -n "${JENKINS_NAMESPACE}" delete pods \
+    --selector component=jenkins-agent \
+    --ignore-not-found \
+    --wait=true >/dev/null
+}
+
+main() {
+  case "${1:-}" in
+    '')
+      [[ "$#" -eq 0 ]] || fail 'jenkins up does not accept arguments'
+      require_vault_operator_token
+      check_ci_credentials
+      create_admin_login
+      configure_vault_identity
+      exec "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+      ;;
+    --cluster)
+      [[ "$#" -eq 1 ]] || fail 'jenkins up --cluster does not accept extra arguments'
+      prepare_namespace
+      install_vault_login
+      sync_secrets
+      check_agent_permissions
+      install_jenkins
+      remove_old_agents
+      pass 'Jenkins is installed'
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,8 @@
+# Promotion gate. A merge to state/stage.yaml or state/prod.yaml is a deploy to
+# that environment, and environments.yaml sets the promotion order, so each
+# needs owner review. Enforced only while main's branch protection requires
+# code-owner review. state/dev.yaml has no owner: service CI records dev releases
+# itself (delivery.recordRelease).
+/state/stage.yaml   @atakang7
+/state/prod.yaml    @atakang7
+/environments.yaml  @atakang7

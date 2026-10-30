@@ -1,0 +1,10 @@
+apiVersion: v2
+name: service
+description: Base chart for a stateless HTTP service. Apps inherit it as a dependency.
+# Library chart: renders nothing on its own. An app chart calls
+# {{ include "service.manifests" . }} with its own values.
+type: library
+# Released versions are immutable; any change needs a version bump.
+version: 1.3.1
+maintainers:
+  - name: atakang7

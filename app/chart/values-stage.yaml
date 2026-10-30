@@ -1,0 +1,12 @@
+# stage: one replica; this file is applied only when this cluster runs stage.
+replicas: 1
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+ingress:
+  host: app-stage.lab.test
+# One replica: a budget would leave no Pod evictable and block every drain.
+podDisruptionBudget:
+  enabled: false

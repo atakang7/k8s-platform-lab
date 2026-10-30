@@ -1,0 +1,38 @@
+---
+- name: Install containerd
+  ansible.builtin.apt:
+    name: "containerd={{ containerd_package_version }}"
+    state: present
+    update_cache: true
+
+- name: Create containerd configuration directory
+  ansible.builtin.file:
+    path: /etc/containerd
+    state: directory
+    mode: "0755"
+
+- name: Configure containerd for Kubernetes
+  ansible.builtin.copy:
+    dest: /etc/containerd/config.toml
+    mode: "0644"
+    content: |
+      version = 2
+
+      [plugins."io.containerd.grpc.v1.cri"]
+        sandbox_image = "{{ pause_image }}"
+
+        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+          runtime_type = "io.containerd.runc.v2"
+
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+            SystemdCgroup = true
+  notify: Restart containerd
+
+- name: Apply containerd configuration before continuing
+  ansible.builtin.meta: flush_handlers
+
+- name: Keep containerd enabled and running
+  ansible.builtin.service:
+    name: containerd
+    enabled: true
+    state: started

@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Installs the resource-requests admission webhook at the image digest this
+# cluster's environment records in state/<environment>.yaml.
+# Runs through the SSH tunnel to the cluster (with-kubeconfig.sh).
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly ROOT
+readonly WEBHOOK_CHART="${ROOT}/policies/resource-requests-webhook/helm/resource-requests-webhook"
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+pass() {
+  printf 'PASS | %s\n' "$1"
+}
+
+install_resource_requests_webhook() {
+  local digest
+
+  digest="$("${ROOT}/platform/bin/state-image" resource-requests-webhook)"
+  if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    fail "this cluster's environment has no resource-requests-webhook release yet; its CI on main records one in the first environment"
+  fi
+
+  phase "installing resource-requests-webhook at ${digest}"
+
+  helm upgrade --install resource-requests-webhook "${WEBHOOK_CHART}" \
+    --namespace policy-system \
+    --create-namespace \
+    --set-string "image.digest=${digest}" \
+    --wait \
+    --rollback-on-failure \
+    --timeout 5m \
+    --history-max 5 \
+    --hide-notes
+}
+
+main() {
+  case "${1:-}" in
+    '')
+      [[ "$#" -eq 0 ]] || fail 'policies up does not accept arguments'
+      exec "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+      ;;
+    --cluster)
+      [[ "$#" -eq 1 ]] || fail 'policies up --cluster does not accept extra arguments'
+      install_resource_requests_webhook
+      pass 'resource-requests-webhook is installed'
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+}
+
+main "$@"

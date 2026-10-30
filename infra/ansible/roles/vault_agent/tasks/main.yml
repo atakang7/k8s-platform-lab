@@ -1,0 +1,44 @@
+---
+- name: Create Vault Agent configuration directory
+  ansible.builtin.file:
+    path: /etc/vault-agent
+    state: directory
+    owner: root
+    group: bind
+    mode: "0750"
+
+- name: Give Vault Agent the public CA certificate
+  ansible.builtin.copy:
+    src: "{{ ca_directory }}/rootCA.pem"
+    dest: /etc/vault-agent/ca.crt
+    remote_src: true
+    owner: root
+    group: bind
+    mode: "0640"
+
+- name: Write Vault Agent configuration
+  ansible.builtin.template:
+    src: "agent.hcl.j2"
+    dest: /etc/vault-agent/agent.hcl
+    owner: root
+    group: bind
+    mode: '0640'
+  notify: restart vault agent if running
+
+- name: Write Vault Agent template
+  ansible.builtin.copy:
+    src: "tsig.ctmpl"
+    dest: /etc/vault-agent/tsig.ctmpl
+    owner: root
+    group: bind
+    mode: '0640'
+  notify: restart vault agent if running
+
+- name: Write Vault Agent service
+  ansible.builtin.copy:
+    src: "vault-agent.service"
+    dest: /etc/systemd/system/vault-agent.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart vault agent if running

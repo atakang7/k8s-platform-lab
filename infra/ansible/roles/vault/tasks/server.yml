@@ -1,0 +1,48 @@
+---
+- name: Read installed Vault version
+  ansible.builtin.command: /usr/local/bin/vault version
+  register: installed_vault
+  changed_when: false
+  failed_when: false
+
+- name: Download pinned Vault archive
+  ansible.builtin.get_url:
+    url: "https://releases.hashicorp.com/vault/{{ vault_version }}/vault_{{ vault_version }}_linux_amd64.zip"
+    dest: "/var/tmp/vault_{{ vault_version }}_linux_amd64.zip"
+    checksum: "sha256:{{ vault_sha256 }}"
+    mode: '0644'
+  when: "('Vault v' + vault_version) not in (installed_vault.stdout | default(''))"
+
+- name: Install pinned Vault binary
+  ansible.builtin.unarchive:
+    src: "/var/tmp/vault_{{ vault_version }}_linux_amd64.zip"
+    dest: /usr/local/bin
+    remote_src: true
+    mode: '0755'
+  when: "('Vault v' + vault_version) not in (installed_vault.stdout | default(''))"
+  notify: restart vault
+
+- name: Write Vault configuration
+  ansible.builtin.template:
+    src: "vault.hcl.j2"
+    dest: /etc/vault/vault.hcl
+    owner: root
+    group: vault
+    mode: '0640'
+  notify: restart vault
+
+- name: Write Vault service
+  ansible.builtin.copy:
+    src: "vault.service"
+    dest: /etc/systemd/system/vault.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart vault
+
+- name: Start Vault
+  ansible.builtin.systemd:
+    name: vault
+    daemon_reload: true
+    enabled: true
+    state: started

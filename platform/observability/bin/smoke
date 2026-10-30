@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# Checks that observability works: workloads ready, alert rules loaded,
+# endpoints answering over trusted HTTPS, and logs reaching Elasticsearch. Runs through the SSH tunnel to the cluster (with-kubeconfig.sh).
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly ROOT
+
+# shellcheck source=../../../infra/edge/config.env
+source "${ROOT}/infra/edge/config.env"
+
+readonly HOST="observability.${DNS_ZONE}"
+readonly ELASTICSEARCH='/api/v1/namespaces/observability/services/http:logs-es-http:9200/proxy'
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+pass() {
+  printf 'PASS | %s\n' "$1"
+}
+
+# On any failure, show what the namespace looks like before exiting.
+show_namespace_state() {
+  local status=$?
+
+  printf 'FAIL | observability smoke failed (exit %s); current state:\n' "${status}" >&2
+  kubectl -n observability get pods -o wide >&2 || true
+  kubectl -n observability get events --sort-by=.lastTimestamp >&2 || true
+  exit "${status}"
+}
+
+wait_for_workloads() {
+  phase 'waiting for the observability workloads (up to 90 seconds each)'
+
+  kubectl -n observability rollout status deployment/observability-grafana --timeout=90s
+  kubectl -n observability rollout status deployment/observability-kube-prometh-operator --timeout=90s
+  kubectl -n observability rollout status statefulset/logs-es --timeout=90s
+  kubectl -n observability rollout status daemonset/fluent-bit --timeout=90s
+  kubectl -n observability rollout status statefulset/prometheus-observability-kube-prometh-prometheus --timeout=90s
+  kubectl -n observability rollout status statefulset/alertmanager-observability-kube-prometh-alertmanager --timeout=90s
+}
+
+check_alert_rules() {
+  local rules
+  local groups
+
+  phase 'checking that Prometheus loaded the alert rules'
+
+  rules="$(curl --noproxy '*' --silent --show-error --fail --max-time 10 \
+    "https://${HOST}/prometheus/api/v1/rules")"
+  groups="$(jq -r '.data.groups[].name' <<< "${rules}")"
+  if [[ "${groups}" != *lab.pod-health* ]]; then
+    fail 'Prometheus has not loaded the lab.pod-health alert rules'
+  fi
+}
+
+check_endpoints() {
+  phase 'checking Grafana and Prometheus over HTTPS'
+
+  curl --noproxy '*' --silent --show-error --fail --max-time 10 \
+    "https://${HOST}/grafana/api/health" >/dev/null
+  curl --noproxy '*' --silent --show-error --fail --max-time 10 \
+    "https://${HOST}/prometheus/-/ready" >/dev/null
+}
+
+# The first numbers arrive about a minute after metrics-server starts.
+check_metrics_api() {
+  phase 'checking that the Metrics API serves pod CPU and memory'
+
+  for _ in {1..12}; do
+    if kubectl top pods -n observability >/dev/null 2>&1; then
+      return
+    fi
+    sleep 10
+  done
+
+  fail 'the Metrics API does not answer; check metrics-server in kube-system'
+}
+
+check_log_delivery() {
+  local indices
+
+  phase 'checking that Fluent Bit writes logs to Elasticsearch'
+
+  for _ in {1..6}; do
+    indices="$(kubectl get --raw "${ELASTICSEARCH}/_cat/indices/kubernetes-*?h=index" 2>/dev/null || true)"
+    if [[ -n "${indices}" ]]; then
+      return
+    fi
+    sleep 5
+  done
+
+  fail 'Fluent Bit has not written a kubernetes-* index'
+}
+
+main() {
+  case "${1:-}" in
+    '')
+      [[ "$#" -eq 0 ]] || fail 'observability smoke does not accept arguments'
+      exec "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+      ;;
+    --cluster)
+      [[ "$#" -eq 1 ]] || fail 'observability smoke --cluster does not accept extra arguments'
+      trap show_namespace_state ERR
+      wait_for_workloads
+      check_alert_rules
+      check_endpoints
+      check_metrics_api
+      check_log_delivery
+      pass 'observability workloads, alert rules, endpoints and log delivery are healthy'
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+}
+
+main "$@"

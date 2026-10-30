@@ -1,0 +1,77 @@
+---
+- name: Download the pinned local-path provisioner manifest
+  ansible.builtin.get_url:
+    url: "https://raw.githubusercontent.com/rancher/local-path-provisioner/{{ local_path_provisioner_source_revision }}/deploy/local-path-storage.yaml"
+    dest: "/etc/kubernetes/local-path-v{{ local_path_provisioner_version }}.upstream.yaml"
+    mode: "0644"
+  register: storage_upstream
+
+- name: Record local-path rendering inputs
+  ansible.builtin.copy:
+    dest: /etc/kubernetes/local-path.settings
+    mode: "0644"
+    content: |
+      version={{ local_path_provisioner_version }}
+      source_revision={{ local_path_provisioner_source_revision }}
+      default=true
+  register: storage_settings
+
+- name: Check for a rendered local-path manifest
+  ansible.builtin.stat:
+    path: /etc/kubernetes/local-path-storage.yaml
+  register: storage_manifest
+
+- name: Start from the pinned upstream local-path manifest
+  ansible.builtin.copy:
+    src: "/etc/kubernetes/local-path-v{{ local_path_provisioner_version }}.upstream.yaml"
+    dest: /etc/kubernetes/local-path-storage.yaml
+    remote_src: true
+    mode: "0644"
+  when: storage_upstream.changed or storage_settings.changed or not storage_manifest.stat.exists
+
+- name: Make local-path the default StorageClass
+  ansible.builtin.replace:
+    path: /etc/kubernetes/local-path-storage.yaml
+    regexp: '(?m)^metadata:\n  name: local-path\nprovisioner: rancher.io/local-path$'
+    replace: |-
+      metadata:
+        name: local-path
+        annotations:
+          storageclass.kubernetes.io/is-default-class: "true"
+      provisioner: rancher.io/local-path
+  when: storage_upstream.changed or storage_settings.changed or not storage_manifest.stat.exists
+
+- name: Assert rendered default StorageClass annotation
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -Fq
+      - 'storageclass.kubernetes.io/is-default-class: "true"'
+      - /etc/kubernetes/local-path-storage.yaml
+  changed_when: false
+
+- name: Apply local-path storage
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - apply
+      - -f
+      - /etc/kubernetes/local-path-storage.yaml
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  register: storage_apply
+  changed_when: "'created' in storage_apply.stdout or 'configured' in storage_apply.stdout"
+
+- name: Wait for the local-path provisioner
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - -n
+      - local-path-storage
+      - rollout
+      - status
+      - deployment/local-path-provisioner
+      - --timeout=300s
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+  changed_when: false

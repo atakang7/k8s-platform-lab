@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly ROOT
+source "${ROOT}/infra/edge/config.env"
+export VAULT_ADDR=https://127.0.0.1:8200
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+read_status() {
+  local status=0
+  local output
+
+  output="$(vault status -format=json 2>/dev/null)" || status=$?
+  [[ "${status}" == 0 || "${status}" == 2 ]] ||
+    fail 'cannot read Vault state'
+
+  printf '%s\n' "${output}"
+}
+
+main() {
+  local status_json unseal_key
+
+  status_json="$(read_status)"
+
+  if ! jq -e '.sealed' <<< "${status_json}" >/dev/null; then
+    printf 'PASS | Vault is already unsealed\n'
+    return
+  fi
+
+  [[ -s "${VAULT_INIT_OUTPUT}" ]] ||
+    fail "${VAULT_INIT_OUTPUT} is missing; Vault cannot be unsealed"
+
+  unseal_key="$(jq -er '.unseal_keys_b64[0]' "${VAULT_INIT_OUTPUT}")"
+  vault operator unseal -format=json "${unseal_key}" >/dev/null
+  unset unseal_key
+
+  vault status >/dev/null ||
+    fail 'Vault remained sealed after unseal'
+
+  printf 'PASS | Vault unsealed\n'
+}
+
+main "$@"

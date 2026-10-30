@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# Creates the lab-test KVM VM, copies the repository in, and runs
+# test/bin/runbook there.
+set -Eeuo pipefail
+
+# Red on any failure, so the end of a long run is easy to spot.
+trap 'printf "\n\033[1;31mFAIL | test-vm stopped\033[0m\n" >&2' ERR
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly ROOT
+readonly IMAGE_NAME=ubuntu-24.04-server-cloudimg-amd64.img
+readonly IMAGE="/var/lib/libvirt/images/${IMAGE_NAME}"
+readonly CACHE="${HOME}/.cache/lab-test"
+# Fixed by test/vm/network.xml.
+readonly VM=ubuntu@192.168.150.10
+readonly SSH=(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+
+export LIBVIRT_DEFAULT_URI=qemu:///system
+
+# Bold cyan step headings, so they stand out from the tools' output.
+step() {
+  printf '\n\033[1;36m==> %s\033[0m\n' "$1"
+}
+
+# Each step does only what is missing, so make test-vm is safe to rerun.
+
+# The VM's disk reads from this image, so an existing one is never replaced.
+# It goes into libvirt's default pool through virsh, so no sudo is needed.
+download_image() {
+  step "downloading the Ubuntu image"
+  if virsh vol-info --pool default "${IMAGE_NAME}" >/dev/null 2>&1; then
+    return
+  fi
+  mkdir -p "${CACHE}"
+  curl -fL -o "${CACHE}/${IMAGE_NAME}.part" "https://cloud-images.ubuntu.com/releases/24.04/release/${IMAGE_NAME}"
+  mv "${CACHE}/${IMAGE_NAME}.part" "${CACHE}/${IMAGE_NAME}"
+  virsh vol-create-as default "${IMAGE_NAME}" 1G --format qcow2
+  virsh vol-upload --pool default "${IMAGE_NAME}" "${CACHE}/${IMAGE_NAME}"
+  virsh pool-refresh default
+  rm "${CACHE}/${IMAGE_NAME}"
+}
+
+create_network() {
+  step "creating the network"
+  local network_names
+  network_names="$(virsh net-list --all --name)"
+  if ! grep -Fxq lab-test <<<"${network_names}"; then
+    virsh net-define "${ROOT}/test/vm/network.xml"
+  fi
+  network_names="$(virsh net-list --inactive --name)"
+  if grep -Fxq lab-test <<<"${network_names}"; then
+    virsh net-start lab-test
+  fi
+}
+
+create_vm() {
+  step "creating the VM"
+  if virsh dominfo lab-test >/dev/null 2>&1; then
+    return
+  fi
+  # host-passthrough lets VirtualBox run inside the VM.
+  virt-install \
+    --name lab-test \
+    --memory 13312 \
+    --vcpus 8 \
+    --cpu host-passthrough \
+    --osinfo ubuntu24.04 \
+    --import \
+    --disk size=70,backing_store="${IMAGE}" \
+    --network network=lab-test,mac=52:54:00:15:00:10 \
+    --cloud-init clouduser-ssh-key="${HOME}/.ssh/id_ed25519.pub" \
+    --noautoconsole
+}
+
+# Covers a VM that was shut down, or paused by a full host disk.
+start_vm() {
+  step "starting the VM"
+  local vm_state
+  vm_state="$(virsh domstate lab-test)"
+  if [[ "${vm_state}" == "shut off" ]]; then
+    virsh start lab-test
+  fi
+  if [[ "${vm_state}" == "paused" ]]; then
+    virsh resume lab-test
+  fi
+}
+
+wait_for_ssh() {
+  step "waiting for SSH on ${VM}"
+  until "${SSH[@]}" "${VM}" true; do
+    sleep 5
+  done
+}
+
+# virt-install deletes its cloud-init CD after the first boot and removes it
+# from the saved config, but the running VM keeps it. A snapshot taken with it
+# still attached cannot be restored, so take it out of the running VM.
+eject_cloud_init() {
+  step "ejecting the cloud-init CD"
+  if [[ "$(virsh domblklist lab-test)" == *cloudinit.iso* ]]; then
+    virsh change-media lab-test sda --eject --live
+  fi
+}
+
+copy_repository() {
+  step "copying the repository"
+  # .vagrant describes this host's cluster, not the VM's.
+  rsync -a --exclude .vagrant --exclude app/target --exclude .dirac-cache \
+    -e "${SSH[*]}" "${ROOT}/" "${VM}:k8s-platform-lab/"
+}
+
+# Every step reconciles, so a second run continues where the first failed.
+run_runbook() {
+  step "running the runbook"
+  if ! "${SSH[@]}" "${VM}" ./k8s-platform-lab/test/bin/runbook; then
+    step "the runbook failed; running it once more"
+    "${SSH[@]}" "${VM}" ./k8s-platform-lab/test/bin/runbook
+  fi
+}
+
+main() {
+  if [[ "${1:-}" == "--start-only" ]]; then
+    create_network
+    start_vm
+    return
+  fi
+
+  download_image
+  create_network
+  create_vm
+  start_vm
+  wait_for_ssh
+  eject_cloud_init
+  copy_repository
+  run_runbook
+
+  printf '\n\033[1;32mPASS | the runbook passed in %s\033[0m\n' "${VM}"
+}
+
+main "$@"

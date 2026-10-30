@@ -1,0 +1,75 @@
+{{- $environmentLabel := required "admission.environmentLabel is required" .Values.admission.environmentLabel -}}
+{{- $systemNamespaces := list "kube-node-lease" "kube-public" "kube-system" -}}
+{{- $excludedNamespaces := uniq (concat $systemNamespaces .Values.admission.additionalExcludedNamespaces (list .Release.Namespace)) -}}
+{{- $secretName := printf "%s-tls" (include "resource-requests-webhook.fullname" .) -}}
+{{- $secret := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $caCert := "" -}}
+{{- $tlsCert := "" -}}
+{{- $tlsKey := "" -}}
+
+{{/*
+The release owns its serving CA and certificate. On first install Helm creates
+both. On later upgrades lookup reuses the existing Secret so the webhook
+caBundle stays stable. Deleting the Secret intentionally rotates the serving
+identity on the next reconciliation.
+*/}}
+{{- if and $secret $secret.data -}}
+  {{- $caCert = required (printf "existing Secret %s is missing ca.crt" $secretName) (index $secret.data "ca.crt") -}}
+  {{- $tlsCert = required (printf "existing Secret %s is missing tls.crt" $secretName) (index $secret.data "tls.crt") -}}
+  {{- $tlsKey = required (printf "existing Secret %s is missing tls.key" $secretName) (index $secret.data "tls.key") -}}
+{{- else -}}
+  {{- $altNames := list
+      (printf "%s.%s" (include "resource-requests-webhook.fullname" .) .Release.Namespace)
+      (printf "%s.%s.svc" (include "resource-requests-webhook.fullname" .) .Release.Namespace)
+      (printf "%s.%s.svc.cluster.local" (include "resource-requests-webhook.fullname" .) .Release.Namespace)
+  -}}
+  {{- $ca := genCA "resource-requests-webhook-ca" 3650 -}}
+  {{- $cert := genSignedCert (include "resource-requests-webhook.fullname" .) nil $altNames 3650 $ca -}}
+  {{- $caCert = $ca.Cert | b64enc -}}
+  {{- $tlsCert = $cert.Cert | b64enc -}}
+  {{- $tlsKey = $cert.Key | b64enc -}}
+{{- end -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "resource-requests-webhook.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  ca.crt: {{ $caCert }}
+  tls.crt: {{ $tlsCert }}
+  tls.key: {{ $tlsKey }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "resource-requests-webhook.fullname" . }}
+  labels:
+    {{- include "resource-requests-webhook.labels" . | nindent 4 }}
+webhooks:
+  - name: validate-resource-requests.lab.test
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    timeoutSeconds: 5
+    clientConfig:
+      service:
+        name: {{ include "resource-requests-webhook.fullname" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /validate
+      caBundle: {{ $caCert }}
+    rules:
+      - operations: ["CREATE", "UPDATE"]
+        apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        resources: ["deployments"]
+    namespaceSelector:
+      matchExpressions:
+        - key: {{ $environmentLabel | quote }}
+          operator: Exists
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            {{- toYaml $excludedNamespaces | nindent 12 }}

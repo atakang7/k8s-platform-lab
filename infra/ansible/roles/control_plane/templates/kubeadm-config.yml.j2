@@ -1,0 +1,36 @@
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: "{{ node_ips[inventory_hostname] }}"
+  bindPort: 6443
+nodeRegistration:
+  kubeletExtraArgs:
+    - name: node-ip
+      value: "{{ node_ips[inventory_hostname] }}"
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+kubernetesVersion: "v{{ kubernetes_version }}"
+controlPlaneEndpoint: "{{ control_plane_endpoint }}"
+networking:
+  podSubnet: "{{ pod_cidr }}"
+  serviceSubnet: "{{ service_cidr }}"
+apiServer:
+  certSANs:
+    - "{{ node_ips[inventory_hostname] }}"
+    - node-1
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: systemd
+# The workers have 2-4 GiB and no swap. Without a reserve, Pods may take the
+# memory kubelet and containerd need, and the node stalls (PLEG unhealthy,
+# NotReady) instead of evicting a Pod.
+systemReserved:
+  memory: 100Mi
+kubeReserved:
+  memory: 100Mi
+evictionHard:
+  memory.available: 200Mi
+  nodefs.available: 10%
+  imagefs.available: 15%

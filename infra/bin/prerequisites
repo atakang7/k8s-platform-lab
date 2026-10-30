@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Installs the tools this repository needs on an Ubuntu x86_64 host.
+# Safe to run more than once.
+# Vault and BIND9 are not installed here. `make edge-up` installs them.
+set -Eeuo pipefail
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+pass() {
+  printf 'PASS | %s\n' "$1"
+}
+
+check_virtualization() {
+  phase 'checking that the CPU supports virtualization'
+
+  if ! grep -qE 'vmx|svm' /proc/cpuinfo; then
+    fail 'CPU virtualization is off; enable VT-x/AMD-V in the BIOS, or nested virtualization if this host is a VM'
+  fi
+}
+
+add_apt_repositories() {
+  phase 'adding the Vagrant, kubectl and Helm apt repositories'
+
+  local codename
+
+  sudo apt-get update
+  sudo apt-get install -y ca-certificates curl lsb-release
+  sudo mkdir -p /etc/apt/keyrings
+  codename="$(lsb_release -cs)"
+
+  # Vagrant
+  sudo curl -fsSL -o /etc/apt/keyrings/hashicorp.asc https://apt.releases.hashicorp.com/gpg
+  echo "deb [signed-by=/etc/apt/keyrings/hashicorp.asc] https://apt.releases.hashicorp.com ${codename} main" |
+    sudo tee /etc/apt/sources.list.d/hashicorp.list >/dev/null
+
+  # kubectl. Keep v1.34 equal to kubernetes_version in infra/ansible/group_vars/all.yml.
+  sudo curl -fsSL -o /etc/apt/keyrings/kubernetes.asc https://pkgs.k8s.io/core:/stable:/v1.34/deb/Release.key
+  echo "deb [signed-by=/etc/apt/keyrings/kubernetes.asc] https://pkgs.k8s.io/core:/stable:/v1.34/deb/ /" |
+    sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
+
+  # Helm
+  sudo curl -fsSL -o /etc/apt/keyrings/helm.asc https://packages.buildkite.com/helm-linux/helm-debian/gpgkey
+  echo "deb [signed-by=/etc/apt/keyrings/helm.asc] https://packages.buildkite.com/helm-linux/helm-debian/any/ any main" |
+    sudo tee /etc/apt/sources.list.d/helm.list >/dev/null
+}
+
+install_packages() {
+  phase 'installing packages'
+
+  local kernel
+  kernel="$(uname -r)"
+
+  sudo apt-get update
+
+  # VirtualBox builds its kernel modules against the running kernel's headers.
+  sudo apt-get install -y virtualbox "linux-headers-${kernel}"
+  sudo apt-get install -y vagrant
+
+  # The full ansible package, not ansible-core: the roles need its
+  # ansible.posix and community.general collections.
+  sudo apt-get install -y ansible
+
+  sudo apt-get install -y kubectl helm
+  sudo apt-get install -y docker.io
+
+  # bind9-dnsutils provides dig and nsupdate.
+  sudo apt-get install -y bind9-dnsutils jq python3-yaml git make openssh-client iproute2
+}
+
+disable_vbox_dhcp() {
+  phase "turning off VirtualBox's default DHCP server on vboxnet0"
+
+  # It hands out 192.168.56.101-254, which overlaps the MetalLB pool.
+  # The Vagrantfile refuses to start until it is off.
+  local dhcp_servers
+
+  # Saved first: `VBoxManage … | grep -q` under pipefail fails when grep exits
+  # early, which would silently skip this step.
+  dhcp_servers="$(VBoxManage list dhcpservers)"
+  if [[ "${dhcp_servers}" == *HostInterfaceNetworking-vboxnet0* ]]; then
+    VBoxManage dhcpserver modify --netname HostInterfaceNetworking-vboxnet0 --disable
+  fi
+}
+
+add_docker_group() {
+  phase "adding ${USER} to the docker group"
+
+  # Only `make container-validate` uses Docker on the host. The bring-up does
+  # not, so it can continue in this session; the group applies at next login.
+  sudo usermod -aG docker "${USER}"
+}
+
+main() {
+  [[ "$#" -eq 0 ]] || fail 'prerequisites does not accept arguments'
+
+  check_virtualization
+  add_apt_repositories
+  install_packages
+  disable_vbox_dhcp
+  add_docker_group
+
+  pass 'host prerequisites are installed'
+}
+
+main "$@"

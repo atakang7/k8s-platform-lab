@@ -1,0 +1,11 @@
+include "/run/lab-bind/tsig.key";
+
+options {
+  directory "/var/cache/bind";
+  listen-on port 53 { 127.0.0.1; {{ edge_host_ip }}; };
+  listen-on-v6 { none; };
+  recursion no;
+  allow-query { 127.0.0.1; {{ edge_network_cidr }}; };
+  allow-transfer { key external-dns-stage3; };
+  dnssec-validation no;
+};

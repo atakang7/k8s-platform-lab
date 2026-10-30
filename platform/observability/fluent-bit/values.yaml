@@ -1,0 +1,66 @@
+testFramework:
+  enabled: false
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+resources:
+  requests: {cpu: 10m, memory: 24Mi}
+  limits: {cpu: 100m, memory: 64Mi}
+daemonSetVolumes:
+  - name: varlog
+    hostPath:
+      path: /var/log
+  - name: buffers
+    hostPath:
+      path: /var/lib/lab-fluent-bit
+      type: DirectoryOrCreate
+daemonSetVolumeMounts:
+  - name: varlog
+    mountPath: /var/log
+    readOnly: true
+  - name: buffers
+    mountPath: /buffers
+config:
+  service: |
+    [SERVICE]
+        Daemon Off
+        Flush 2
+        Log_Level info
+        Parsers_File /fluent-bit/etc/parsers.conf
+        HTTP_Server On
+        HTTP_Listen 0.0.0.0
+        HTTP_Port 2020
+        Health_Check On
+        storage.path /buffers/storage
+        storage.sync normal
+        storage.backlog.mem_limit 10M
+  inputs: |
+    [INPUT]
+        Name tail
+        Path /var/log/containers/*.log
+        multiline.parser docker, cri
+        Tag kube.*
+        Mem_Buf_Limit 5MB
+        Skip_Long_Lines On
+        Read_from_Head Off
+        DB /buffers/tail.db
+        storage.type filesystem
+  filters: |
+    [FILTER]
+        Name kubernetes
+        Match kube.*
+        Merge_Log On
+        Keep_Log Off
+  outputs: |
+    [OUTPUT]
+        Name es
+        Match kube.*
+        Host logs-es-http.observability.svc.cluster.local
+        Port 9200
+        Logstash_Format On
+        Logstash_Prefix kubernetes
+        Suppress_Type_Name On
+        Replace_Dots On
+        Retry_Limit 10
+        storage.total_limit_size 256M

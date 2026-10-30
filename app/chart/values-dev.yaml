@@ -1,0 +1,18 @@
+# dev: one to four replicas, scaled on CPU; this file is applied only when
+# this cluster runs dev.
+replicas: 1
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilization: 70
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+ingress:
+  host: app-dev.lab.test
+# One replica: a budget would leave no Pod evictable and block every drain.
+podDisruptionBudget:
+  enabled: false

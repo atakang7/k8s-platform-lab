@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Checks that the resource-requests admission webhook runs, fails closed, and
+# rejects Deployments without CPU and memory requests in every application
+# environment namespace. Admission is tested with server-side
+# dry-runs of the manifests in policies/resource-requests-webhook/smoke/.
+# Runs through the SSH tunnel to the cluster (with-kubeconfig.sh).
+set -Eeuo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly ROOT
+readonly SMOKE_MANIFESTS="${ROOT}/policies/resource-requests-webhook/smoke"
+readonly DENIAL='must specify non-zero CPU and memory requests'
+
+fail() {
+  printf 'FAIL | %s\n' "$1" >&2
+  exit 1
+}
+
+phase() {
+  printf 'WAIT | %s\n' "$1"
+}
+
+pass() {
+  printf 'PASS | %s\n' "$1"
+}
+
+check_webhook_running() {
+  phase 'checking that the webhook is running'
+
+  kubectl -n policy-system rollout status deployment/resource-requests-webhook --timeout=90s >/dev/null
+}
+
+# Fail closed: if the webhook is down, Deployments are blocked, not let through.
+check_fail_closed() {
+  local failure_policy
+
+  failure_policy="$(kubectl get validatingwebhookconfiguration resource-requests-webhook \
+    -o jsonpath='{.webhooks[0].failurePolicy}')"
+  if [[ "${failure_policy}" != Fail ]]; then
+    fail "webhook failurePolicy is ${failure_policy}, not Fail"
+  fi
+}
+
+# Server-side dry-runs go through the real API server and webhook, but save nothing.
+check_admission() {
+  local namespaces
+  local namespace
+  local output
+
+  namespaces="$(kubectl get namespaces --selector delivery.lab.test/environment -o jsonpath='{.items[*].metadata.name}')"
+  if [[ -z "${namespaces}" ]]; then
+    fail 'no namespace carries the delivery.lab.test/environment label'
+  fi
+
+  for namespace in ${namespaces}; do
+    phase "checking admission decisions in ${namespace}"
+
+    if ! output="$(kubectl -n "${namespace}" apply --dry-run=server -f "${SMOKE_MANIFESTS}/allowed.yaml" 2>&1)"; then
+      fail "a Deployment with CPU and memory requests was rejected in ${namespace}: ${output}"
+    fi
+
+    if output="$(kubectl -n "${namespace}" apply --dry-run=server -f "${SMOKE_MANIFESTS}/missing-cpu.yaml" 2>&1)"; then
+      fail "a Deployment without a CPU request was admitted in ${namespace}"
+    fi
+    if [[ "${output}" != *"${DENIAL}"* ]]; then
+      fail "unexpected denial for a missing CPU request in ${namespace}: ${output}"
+    fi
+
+    if output="$(kubectl -n "${namespace}" apply --dry-run=server -f "${SMOKE_MANIFESTS}/missing-memory.yaml" 2>&1)"; then
+      fail "a Deployment without a memory request was admitted in ${namespace}"
+    fi
+    if [[ "${output}" != *"${DENIAL}"* ]]; then
+      fail "unexpected denial for a missing memory request in ${namespace}: ${output}"
+    fi
+  done
+}
+
+main() {
+  case "${1:-}" in
+    '')
+      [[ "$#" -eq 0 ]] || fail 'policies smoke does not accept arguments'
+      exec "${ROOT}/infra/edge/lib/with-kubeconfig.sh" "$0" --cluster
+      ;;
+    --cluster)
+      [[ "$#" -eq 1 ]] || fail 'policies smoke --cluster does not accept extra arguments'
+      check_webhook_running
+      check_fail_closed
+      check_admission
+      pass 'resource-requests-webhook enforces CPU and memory requests in every environment'
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+}
+
+main "$@"

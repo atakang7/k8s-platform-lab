@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    component: jenkins-agent
+    workload: lab-cd-runner
+spec:
+  # No identity of its own: the deploy job runs each environment
+  # from a Pod inheriting this template with that environment's
+  # jenkins-deploy-<name> ServiceAccount (deployPipeline.groovy).
+  enableServiceLinks: false
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: node-3
+  containers:
+    - name: ci-tools
+      image: docker.io/atakangul/lab-ci-agent@sha256:da753bea05c1d34e390a847ee44d562fd2cc2db6e4abd8d395d73111fa819e72
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c", "sleep infinity"]
+      tty: true
+      # The Jenkins agent's user: both write the shared workspace, and
+      # no delivery step needs root. HOME is the writable workspace.
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+      env:
+        - name: HOME
+          value: /home/jenkins/agent
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: "1"
+          memory: 768Mi

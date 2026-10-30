@@ -1,0 +1,31 @@
+---
+- name: Install Vault archive tooling
+  ansible.builtin.apt:
+    name: unzip
+    state: present
+
+- name: Create Vault service group
+  ansible.builtin.group:
+    name: vault
+    system: true
+
+- name: Create service accounts
+  ansible.builtin.user:
+    name: vault
+    group: vault
+    system: true
+    home: /var/lib/vault
+    shell: /usr/sbin/nologin
+
+- name: Create Vault directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: vault
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/vault/tls, owner: root, mode: "0750" }
+    - { path: /var/lib/vault, owner: vault, mode: "0700" }
+    - { path: /var/log/vault, owner: vault, mode: "0700" }
+

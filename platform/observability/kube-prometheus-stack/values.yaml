@@ -1,0 +1,129 @@
+defaultRules:
+  create: false
+
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+prometheusOperator:
+  resources:
+    requests: {cpu: 50m, memory: 100Mi}
+    limits: {cpu: 300m, memory: 256Mi}
+  nodeSelector:
+    kubernetes.io/hostname: node-3
+
+prometheus:
+  prometheusSpec:
+    serviceMonitorNamespaceSelector: {}
+    serviceMonitorSelector:
+      matchLabels:
+        release: observability
+    replicas: 1
+    retention: 1d
+    retentionSize: 1500MB
+    externalUrl: https://observability.lab.test/prometheus
+    routePrefix: /prometheus
+    resources:
+      requests: {cpu: 75m, memory: 160Mi}
+      limits: {cpu: 400m, memory: 384Mi}
+    nodeSelector:
+      kubernetes.io/hostname: node-2
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 2Gi
+
+  # ingress-nginx is installed before this stack exists, so its scrape config
+  # lives here. Delivery reads its per-Ingress request metrics to judge canaries.
+  additionalServiceMonitors:
+    - name: ingress-nginx
+      additionalLabels:
+        release: observability
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+          app.kubernetes.io/component: controller
+      namespaceSelector:
+        matchNames: [ingress-nginx]
+      endpoints:
+        - port: metrics
+          interval: 15s
+
+alertmanager:
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: lab-alerts
+      group_by: [alertname, namespace]
+    receivers:
+      - name: lab-alerts
+      # kube-prometheus-stack's default Watchdog sub-route targets this sink.
+      - name: "null"
+  alertmanagerSpec:
+    replicas: 1
+    resources:
+      requests: {cpu: 20m, memory: 48Mi}
+      limits: {cpu: 100m, memory: 128Mi}
+    nodeSelector:
+      kubernetes.io/hostname: node-3
+
+grafana:
+  defaultDashboardsEnabled: false
+  grafana.ini:
+    server:
+      root_url: https://observability.lab.test/grafana/
+      serve_from_sub_path: true
+  additionalDataSources:
+    - name: Elasticsearch
+      type: elasticsearch
+      uid: elasticsearch
+      access: proxy
+      url: http://logs-es-http.observability.svc.cluster.local:9200
+      database: '[kubernetes-]YYYY.MM.DD'
+      jsonData:
+        interval: Daily
+        timeField: '@timestamp'
+        logMessageField: 'log'
+        logLevelField: 'stream'
+    - name: Application Logs
+      type: elasticsearch
+      uid: application-logs
+      access: proxy
+      url: http://logs-es-http.observability.svc.cluster.local:9200
+      database: app-logs
+      jsonData:
+        timeField: '@timestamp'
+        logMessageField: log
+  resources:
+    requests: {cpu: 50m, memory: 96Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  nodeSelector:
+    kubernetes.io/hostname: node-3
+  sidecar:
+    resources:
+      requests: {cpu: 10m, memory: 32Mi}
+      limits: {cpu: 100m, memory: 96Mi}
+    dashboards:
+      searchNamespace: observability
+
+kube-state-metrics:
+  nodeSelector:
+    kubernetes.io/hostname: node-3
+  resources:
+    requests: {cpu: 20m, memory: 48Mi}
+    limits: {cpu: 150m, memory: 128Mi}
+
+prometheus-node-exporter:
+  resources:
+    requests: {cpu: 10m, memory: 24Mi}
+    limits: {cpu: 100m, memory: 64Mi}

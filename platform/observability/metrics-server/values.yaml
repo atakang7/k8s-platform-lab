@@ -1,0 +1,11 @@
+# metrics-server serves current pod/node CPU and memory as the Metrics API
+# (metrics.k8s.io): what an HPA and `kubectl top` read.
+args:
+  # kubeadm's kubelet serving certificates are self-signed, so metrics-server
+  # cannot verify them. Lab trade-off; production signs kubelet certs.
+  - --kubelet-insecure-tls
+  # Reach kubelets on the private node IP, not the NAT or edge address.
+  - --kubelet-preferred-address-types=InternalIP
+resources:
+  requests: {cpu: 50m, memory: 64Mi}
+  limits: {cpu: 200m, memory: 128Mi}

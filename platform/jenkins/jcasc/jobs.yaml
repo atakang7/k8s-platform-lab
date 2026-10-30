@@ -1,0 +1,21 @@
+jobs:
+  - file: /var/jenkins_platform/jobs
+
+unclassified:
+  # The platform delivery library (delivery/pipeline). Services cannot choose
+  # another version: the platform decides what runs in every pipeline.
+  globalLibraries:
+    libraries:
+      - name: lab-delivery
+        defaultVersion: main
+        implicit: false
+        allowVersionOverride: false
+        retriever:
+          modernSCM:
+            libraryPath: delivery/pipeline/
+            scm:
+              git:
+                remote: https://github.com/atakang7/k8s-platform-lab.git
+                credentialsId: github-creds
+  location:
+    url: https://jenkins.lab.test/

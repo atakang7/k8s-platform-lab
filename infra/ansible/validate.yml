@@ -1,0 +1,88 @@
+---
+# Proves the cluster works: three Ready nodes, Calico running, pods on
+# different workers can talk to each other, and a volume can be provisioned.
+- name: Validate Kubernetes outcomes
+  hosts: control_plane
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    validation_manifest: /etc/kubernetes/stage1-validation.yml
+    expected_node_names:
+      - node/node-1
+      - node/node-2
+      - node/node-3
+  environment:
+    KUBECONFIG: "{{ kubeconfig }}"
+  tasks:
+    - name: Read Kubernetes node inventory
+      ansible.builtin.command:
+        argv: [kubectl, get, nodes, -o, name]
+      register: node_inventory
+      changed_when: false
+
+    - name: Verify the exact node inventory
+      ansible.builtin.assert:
+        that:
+          - node_inventory.stdout_lines | sort == expected_node_names
+        success_msg: "PASS | Kubernetes contains exactly node-1, node-2, and node-3"
+        fail_msg: "FAIL | Kubernetes node inventory differs from the declared three-node topology"
+
+    - name: Wait until every node is Ready
+      ansible.builtin.command:
+        argv: [kubectl, wait, --for=condition=Ready, node, --all, --timeout=60s]
+      changed_when: false
+
+    - name: Wait until Calico runs on every node
+      ansible.builtin.command:
+        argv: [kubectl, -n, kube-system, rollout, status, daemonset/calico-node, --timeout=60s]
+      changed_when: false
+
+    - name: Write the temporary validation workload manifest
+      ansible.builtin.template:
+        src: cluster-validation.yml.j2
+        dest: "{{ validation_manifest }}"
+        mode: "0600"
+
+    - name: Validate Pod networking and dynamic storage
+      block:
+        - name: Apply temporary validation workloads
+          ansible.builtin.command:
+            argv: [kubectl, apply, -f, "{{ validation_manifest }}"]
+          changed_when: true
+
+        - name: Wait for the two network test Pods, one per worker
+          ansible.builtin.command:
+            argv: [kubectl, -n, stage1-validation, rollout, status, deployment/network-check, --timeout=180s]
+          changed_when: false
+
+        # One pod calls the other by its pod IP, across nodes.
+        - name: Test Pod-to-Pod traffic
+          ansible.builtin.shell: |
+            set -Eeuo pipefail
+            caller="$(kubectl -n stage1-validation get pods -l app=network-check -o jsonpath='{.items[0].metadata.name}')"
+            target_ip="$(kubectl -n stage1-validation get pods -l app=network-check -o jsonpath='{.items[1].status.podIP}')"
+            answer="$(kubectl -n stage1-validation exec "${caller}" -- wget -qO- "http://${target_ip}:8080/health")"
+            [[ "${answer}" == healthy ]]
+          args:
+            executable: /bin/bash
+          changed_when: false
+
+        # The Pod cannot start until local-path has provisioned its volume.
+        - name: Wait for the storage test Pod
+          ansible.builtin.command:
+            argv: [kubectl, -n, stage1-validation, wait, --for=condition=Ready, pod/storage-check, --timeout=180s]
+          changed_when: false
+
+        - name: Report the outcome
+          ansible.builtin.debug:
+            msg: "PASS | Pod networking works across workers and a volume was provisioned"
+      always:
+        - name: Remove temporary validation workloads
+          ansible.builtin.command:
+            argv: [kubectl, delete, namespace, stage1-validation, --ignore-not-found, --wait=true]
+          changed_when: false
+
+    - name: Report Stage 1 outcome
+      ansible.builtin.debug:
+        msg: "PASS | cluster foundation validation complete"

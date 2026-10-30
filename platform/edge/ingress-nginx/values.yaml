@@ -1,0 +1,27 @@
+controller:
+  replicaCount: 2
+  nodeSelector:
+    edge.lab.test/worker: "true"
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+          app.kubernetes.io/instance: ingress-nginx
+          app.kubernetes.io/component: controller
+  extraArgs:
+    default-ssl-certificate: ingress-nginx/lab-wildcard
+  # Request metrics per Ingress. Prometheus scrapes them (additionalServiceMonitors
+  # in platform/observability) and delivery judges prod canaries by their 5xx
+  # rate (delivery/README.md, Release flow step 6).
+  metrics:
+    enabled: true
+  service:
+    type: LoadBalancer
+    allocateLoadBalancerNodePorts: false
+    annotations:
+      metallb.io/address-pool: edge
+      metallb.io/loadBalancerIPs: 192.168.56.200
+      external-dns.alpha.kubernetes.io/hostname: edge.lab.test

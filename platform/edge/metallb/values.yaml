@@ -1,0 +1,7 @@
+speaker:
+  nodeSelector:
+    edge.lab.test/worker: "true"
+  frr:
+    enabled: false
+frrk8s:
+  enabled: false

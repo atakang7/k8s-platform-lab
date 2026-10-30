@@ -1,0 +1,99 @@
+---
+- name: Install local CA tooling
+  ansible.builtin.apt:
+    name: mkcert
+    state: present
+
+- name: Create protected CA directory
+  ansible.builtin.file:
+    path: "{{ ca_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Check CA creation
+  ansible.builtin.stat:
+    path: "{{ ca_directory }}/rootCA-key.pem"
+  register: ca_key
+
+- name: Create local CA once
+  ansible.builtin.command: mkcert -install
+  environment:
+    CAROOT: "{{ ca_directory }}"
+  when: not ca_key.stat.exists
+  no_log: true
+
+- name: Protect CA key
+  ansible.builtin.file:
+    path: "{{ ca_directory }}/rootCA-key.pem"
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Trust local CA in the host system store
+  ansible.builtin.copy:
+    src: "{{ ca_directory }}/rootCA.pem"
+    dest: /usr/local/share/ca-certificates/lab.crt
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
+  notify: update host trust
+  tags: tls-trust
+
+- name: Prepare a temporary CAROOT for the user
+  ansible.builtin.file:
+    path: /tmp/lab-ca-user
+    state: directory
+    mode: '0755'
+  tags: tls-trust
+
+- name: Copy CA certificate for the user trust store
+  ansible.builtin.copy:
+    src: /usr/local/share/ca-certificates/lab.crt
+    dest: /tmp/lab-ca-user/rootCA.pem
+    remote_src: true
+    mode: '0644'
+  tags: tls-trust
+
+- name: Trust local CA in the user's browser store
+  ansible.builtin.command: mkcert -install
+  environment:
+    CAROOT: /tmp/lab-ca-user
+  become: true
+  become_user: "{{ lookup('env', 'SUDO_USER') }}"
+  changed_when: false
+  when: lookup('env', 'SUDO_USER') | length > 0
+  tags: tls-trust
+
+- name: Create Vault server certificate once
+  ansible.builtin.command:
+    argv: [mkcert, -cert-file, /etc/vault/tls/server.crt, -key-file, /etc/vault/tls/server.key, 127.0.0.1, "{{ edge_host_ip }}"]
+    creates: /etc/vault/tls/server.key
+  environment:
+    CAROOT: "{{ ca_directory }}"
+  no_log: true
+
+- name: Create wildcard certificate once
+  ansible.builtin.command:
+    argv: [mkcert, -cert-file, /etc/lab-ca/wildcard.crt, -key-file, /etc/lab-ca/wildcard.key, '*.{{ dns_zone }}']
+    creates: /etc/lab-ca/wildcard.key
+  environment:
+    CAROOT: "{{ ca_directory }}"
+  no_log: true
+
+- name: Protect private certificates
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: root
+    group: vault
+    mode: '0640'
+  loop: [/etc/vault/tls/server.crt, /etc/vault/tls/server.key]
+
+- name: Protect wildcard private key
+  ansible.builtin.file:
+    path: /etc/lab-ca/wildcard.key
+    owner: root
+    group: root
+    mode: '0600'

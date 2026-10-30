@@ -1,0 +1,46 @@
+---
+- name: Prepare the host edge and Vault
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  vars:
+    vault_version: "{{ lookup('env', 'VAULT_VERSION') }}"
+    vault_sha256: "{{ lookup('env', 'VAULT_SHA256') }}"
+    ca_directory: /etc/lab-ca
+  pre_tasks:
+    - name: Require the host-only edge interface and supported host
+      ansible.builtin.assert:
+        that:
+          - edge_host_ip in ansible_all_ipv4_addresses
+          - ansible_architecture == 'x86_64'
+          - ansible_distribution == 'Ubuntu'
+        fail_msg: "Edge bootstrap requires Ubuntu x86_64 and host edge IP {{ edge_host_ip }}; resolve the Vagrant network preflight before edge-up"
+      tags: [host]
+  roles:
+    - { role: bind9, tags: [host] }
+    - { role: vault, tags: [host] }
+    - { role: local_ca, tags: [host] }
+    - { role: vault_agent, tags: [host] }
+  tasks:
+    - name: Start the Vault server after the local CA is ready
+      ansible.builtin.import_role:
+        name: vault
+        tasks_from: server
+      tags: [host]
+
+- name: Configure DNS after Vault Agent delivers TSIG
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Configure authoritative BIND
+      ansible.builtin.import_role:
+        name: bind9
+        tasks_from: configure
+      tags: [dns]
+    - name: Configure scoped host resolution
+      ansible.builtin.import_role:
+        name: resolver
+      tags: [dns, resolver]

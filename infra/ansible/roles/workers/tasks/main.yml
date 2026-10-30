@@ -1,0 +1,16 @@
+---
+- name: Check whether this worker has joined
+  ansible.builtin.stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: worker_kubeconfig
+
+- name: Create a short-lived join command for an unjoined worker
+  ansible.builtin.command: kubeadm token create --ttl 2h --print-join-command
+  delegate_to: "{{ groups['control_plane'][0] }}"
+  register: worker_join_command
+  when: not worker_kubeconfig.stat.exists
+
+- name: Join the worker to the cluster
+  ansible.builtin.command: "{{ worker_join_command.stdout }} --node-name {{ inventory_hostname }}"
+  when: not worker_kubeconfig.stat.exists
+
