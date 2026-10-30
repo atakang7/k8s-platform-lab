@@ -1,10 +1,7 @@
-# Lab Kubernetes Platform
+# Kubernetes Platform Lab
 
 A production-style Kubernetes lab where the host, VMs, edge, delivery,
 observability, and policy layers are all managed from this repository.
-
-> **Reviewing the requirements?** Start with **[REQUIREMENTS.md](REQUIREMENTS.md)**: every
-> requirement, where it lives, and the short answers on one page.
 
 ## Repository map
 
@@ -30,7 +27,7 @@ Each folder has its own detailed guide.
 5. [Secrets and trust path](#5-secrets-and-trust-path)
 6. [Observability path](#6-observability-path)
 7. [Operator path](#7-operator-path)
-8. [Case requirement notes](#8-case-requirement-notes)
+8. [Design decisions](#8-design-decisions)
 
 [Host requirements](#host-requirements)
 
@@ -112,7 +109,7 @@ MetalLB pool      192.168.56.200 - 192.168.56.220
                           ▼
                  ┌──────────────────┐
                  │ BIND9 on host    │
-                 │ lab.test  │
+                 │ lab.test         │
                  └──────────────────┘
 
 
@@ -346,8 +343,9 @@ app.log    │                       ▼
 
 ![Prometheus pod-restart alert rule](docs/images/prometheus-pod-restart-alert.png)
 
-Prometheus and Elasticsearch use local-path persistence. Elasticsearch
-stays cluster-internal; Grafana and Prometheus are exposed through ingress.
+Prometheus and Elasticsearch use local-path persistence. Grafana,
+Prometheus and Elasticsearch share the `observability` hostname;
+Elasticsearch has no authentication, so it is lab-only.
 
 **Source:** [observability](platform/observability/README.md)
 
@@ -384,10 +382,70 @@ make e2e-validate
 Use **[RUNBOOK.md](RUNBOOK.md)** for credentials, exact commands,
 validation, recovery, rollback, stop, and teardown.
 
-## 8. Case requirement notes
+## 8. Design decisions
 
-Requirement-by-requirement map, the deliberate differences from the requirements
-wording, and the short answers: **[REQUIREMENTS.md](REQUIREMENTS.md)**.
+- **Helm releases apps; Ansible builds the cluster.** Helm already waits
+  for readiness, runs tests, keeps history and rolls back. Wrapping it in
+  Ansible would add a layer and nothing else.
+- **One LoadBalancer.** Every hostname, Jenkins included, shares one
+  MetalLB address and one wildcard certificate behind ingress-nginx.
+- **Dev runs 1 pod.** Prod is 4 pods spread over both workers. Set
+  `replicas: 4` in [values-dev.yaml](app/chart/values-dev.yaml) to run the
+  prod shape on the lab.
+
+### Logging
+
+~~~text
+logger ──► async queue ──► app.log ──► fluent-bit sidecar ──► Elasticsearch
+  │                          │
+  │                          └── new file every day · 100 MB per file · 1 GB archive cap
+  │
+  └──► stdout: WARN and ERROR only
+~~~
+
+Request threads never wait on disk. Only warnings and errors reach stdout:
+enough for `kubectl logs`, without the cost of every request line.
+Source: [logback-spring.xml](app/src/main/resources/logback-spring.xml).
+
+### Zero downtime
+
+A rollout never removes capacity (`maxUnavailable: 0`). A new pod gets
+traffic only after its readiness probe passes, and old pods drain
+gracefully for 30 s. The deploy waits for the rollout, runs a smoke test
+and rolls back on failure. A PodDisruptionBudget keeps two pods up during
+node maintenance.
+
+### Priority under load
+
+[priority-preemption.yaml](docs/examples/priority-preemption.yaml):
+a latency-critical service scales on CPU with a high PriorityClass; a batch
+worker runs at low priority. When nodes are full, the scheduler evicts
+batch pods to make room, and they return when the load drops.
+
+### Production canary
+
+~~~text
+                   app.lab.test
+                         │
+                   ingress-nginx
+              ┌──────────┴──────────┐
+             90 %                  10 %
+              ▼                     ▼
+     stable · 4 pods         canary · 1 pod · new version
+                                    │
+                      5xx rate from Prometheus
+                      checked every minute for 5 minutes
+                                    │
+                    ┌───────────────┴───────────────┐
+                 ≤ 1 %                            > 1 %
+                    ▼                               ▼
+     roll stable to the new version          delete canary
+     then delete canary                      stable untouched
+~~~
+
+A metric makes the call, not a person. Settings live in
+[environments.yaml](environments.yaml); the logic is in
+[deploy.sh](delivery/pipeline/resources/lab/delivery/deploy.sh).
 
 ## Host requirements
 

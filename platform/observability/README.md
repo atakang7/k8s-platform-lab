@@ -170,8 +170,8 @@ Grafana
 ~~~
 
 This is deliberately separate from cluster-wide container collection.
-The sidecar exists because the requirements require the application log file to
-be shipped explicitly.
+The sidecar ships the application's own log file, which `kubectl logs`
+never sees: stdout carries only WARN and above.
 
 ## 6. Workload placement
 
@@ -243,12 +243,13 @@ observability.lab.test
 Elasticsearch
       │
       ▼
-ClusterIP only
-no public ingress
+/elasticsearch/
+no authentication
 ~~~
 
-Elasticsearch intentionally stays cluster-internal. Operators and
-validation reach it through the Kubernetes API when required.
+Elasticsearch runs with security disabled and is served at
+`/elasticsearch/` on the same host. That is only acceptable on a lab edge
+network; see [weaknesses](../../docs/weaknesses.md).
 
 ## 9. Reconciliation
 

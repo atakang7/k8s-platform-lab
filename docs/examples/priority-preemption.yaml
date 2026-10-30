@@ -1,0 +1,103 @@
+# Scheduling example, not wired into platform reconciliation.
+# critical-api scales on CPU and may preempt batch-worker when nodes are full.
+# The HPA reads CPU from metrics-server (platform/observability).
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: latency-critical
+value: 100000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "critical-api: latency-sensitive workload that may preempt batch-worker."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: batch
+value: 1000
+globalDefault: false
+description: "batch-worker: lower-priority workload that may be preempted by critical-api."
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: critical-api
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: critical-api
+  template:
+    metadata:
+      labels:
+        app: critical-api
+    spec:
+      priorityClassName: latency-critical
+      containers:
+        - name: critical-api
+          image: busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+          command: ["sh", "-c", "while true; do sleep 3600; done"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: critical-api
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: critical-api
+  minReplicas: 2
+  maxReplicas: 8
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: batch-worker
+  namespace: default
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: batch-worker
+  template:
+    metadata:
+      labels:
+        app: batch-worker
+    spec:
+      priorityClassName: batch
+      containers:
+        - name: batch-worker
+          image: busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+          command: ["sh", "-c", "while true; do sleep 3600; done"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

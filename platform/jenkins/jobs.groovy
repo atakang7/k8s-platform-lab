@@ -6,7 +6,7 @@ def services = [
   [name: 'resource-requests-webhook', jenkinsfile: 'policies/resource-requests-webhook/Jenkinsfile'],
 ]
 def githubOwner = 'atakang7'
-def githubRepository = 'lab'
+def githubRepository = 'k8s-platform-lab'
 
 def githubMultibranch = { String name, String jenkinsfile ->
   multibranchPipelineJob(name) {

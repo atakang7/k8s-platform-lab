@@ -18,7 +18,7 @@ Service / Ingress
          ▼
 ┌──────────────────┐
 │ host BIND9       │
-│ lab.test  │
+│ lab.test         │
 └──────────────────┘
 
 

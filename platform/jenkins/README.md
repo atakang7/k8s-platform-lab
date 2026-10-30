@@ -36,7 +36,7 @@ orchestration. It does not execute Pipeline stages itself.
                   EXECUTION PLANE
 
              ┌──────────────────┐
-             │ lab-ci-runner  │
+             │ lab-ci-runner    │
              │ heavy CI         │
              ├──────────────────┤
              │ BuildKit         │
@@ -46,7 +46,7 @@ orchestration. It does not execute Pipeline stages itself.
              └──────────────────┘
 
              ┌──────────────────┐
-             │ lab-ci-light   │
+             │ lab-ci-light     │
              │ light checks     │
              ├──────────────────┤
              │ lint             │

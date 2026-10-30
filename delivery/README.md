@@ -13,7 +13,7 @@ service Jenkinsfile
         │
         ▼
 ┌──────────────────────┐
-│ lab-delivery       │
+│ lab-delivery         │
 │ shared library       │
 └──────────┬───────────┘
            │

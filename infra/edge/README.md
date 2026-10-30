@@ -131,7 +131,7 @@ Service / Ingress
           ▼
 ┌────────────────────┐
 │ BIND9              │
-│ lab.test    │
+│ lab.test           │
 │ authoritative only │
 └─────────┬──────────┘
           │

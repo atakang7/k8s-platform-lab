@@ -48,7 +48,7 @@ metadata:
   labels:
     {{- include "resource-requests-webhook.labels" . | nindent 4 }}
 webhooks:
-  - name: validate-resource-requests.lab.com
+  - name: validate-resource-requests.lab.test
     admissionReviewVersions: ["v1"]
     sideEffects: None
     failurePolicy: Fail

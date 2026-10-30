@@ -17,7 +17,7 @@
         </encoder>
     </appender>
 
-    <!-- Explicit file log retained for the Fluent Bit sidecar requirement. -->
+    <!-- Explicit file log, shipped to Elasticsearch by the Fluent Bit sidecar. -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>/var/log/app/app.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">

@@ -60,7 +60,7 @@ Found by 17 full runs of the runbook in a fresh test VM and subsequent snapshot-
 - Cause: with no startup probe, liveness restarts it mid-start, and `--rollback-on-failure` uninstalls the release.
 - Fix planned: a Grafana `startupProbe`.
 
-**13. Jenkins controller and agents fail after VM snapshot restore (open)** · [#130](https://github.com/atakang7/k8s-platform-lab/issues/130)
+**13. Jenkins controller and agents fail after VM snapshot restore (open)**
 
 Restoring the test VM can leave Jenkins unable to recover: the controller init container exits while copying existing plugins, and after controller recovery the Kubernetes provisioner can still count three agents even though no agents exist. CI/CD warm-up jobs remain queued indefinitely.
 

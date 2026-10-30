@@ -40,10 +40,10 @@ trust_lab_ca() {
   phase 'trusting the lab CA in this profile only'
 
   "${SSH[@]}" "${VM}" cat /usr/local/share/ca-certificates/lab.crt > "${PROFILE}/lab-ca.crt"
-  if certutil -L -d "sql:${PROFILE}" -n lab-lab >/dev/null 2>&1; then
-    certutil -D -d "sql:${PROFILE}" -n lab-lab
+  if certutil -L -d "sql:${PROFILE}" -n k8s-lab >/dev/null 2>&1; then
+    certutil -D -d "sql:${PROFILE}" -n k8s-lab
   fi
-  certutil -A -d "sql:${PROFILE}" -n lab-lab -t 'C,,' -i "${PROFILE}/lab-ca.crt"
+  certutil -A -d "sql:${PROFILE}" -n k8s-lab -t 'C,,' -i "${PROFILE}/lab-ca.crt"
 }
 
 open_proxy() {

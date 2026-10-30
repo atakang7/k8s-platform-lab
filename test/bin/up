@@ -106,15 +106,15 @@ copy_repository() {
   step "copying the repository"
   # .vagrant describes this host's cluster, not the VM's.
   rsync -a --exclude .vagrant --exclude app/target --exclude .dirac-cache \
-    -e "${SSH[*]}" "${ROOT}/" "${VM}:lab/"
+    -e "${SSH[*]}" "${ROOT}/" "${VM}:k8s-platform-lab/"
 }
 
 # Every step reconciles, so a second run continues where the first failed.
 run_runbook() {
   step "running the runbook"
-  if ! "${SSH[@]}" "${VM}" ./lab/test/bin/runbook; then
+  if ! "${SSH[@]}" "${VM}" ./k8s-platform-lab/test/bin/runbook; then
     step "the runbook failed; running it once more"
-    "${SSH[@]}" "${VM}" ./lab/test/bin/runbook
+    "${SSH[@]}" "${VM}" ./k8s-platform-lab/test/bin/runbook
   fi
 }
 
