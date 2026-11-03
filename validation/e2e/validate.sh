@@ -97,7 +97,7 @@ check_request_reaches_logs() {
   request_id="e2e-$(date +%s)-$$"
   phase "sending request ${request_id} to https://${APPLICATION_HOST}"
 
-  response="$(curl --noproxy '*' --silent --show-error --fail --connect-timeout 5 --max-time 15 --get \
+  response="$(curl --noproxy '*' --silent --show-error --fail --get \
     --data-urlencode "val=${request_id}" \
     "https://${APPLICATION_HOST}/api/foos")"
   if [[ "${response}" != "QueryStringValue: ${request_id}" ]]; then
@@ -125,7 +125,7 @@ check_application_metrics() {
 
   phase 'checking the application metrics in Prometheus'
 
-  answer="$(curl --noproxy '*' --silent --show-error --fail --connect-timeout 5 --max-time 15 --get \
+  answer="$(curl --noproxy '*' --silent --show-error --fail --get \
     --data-urlencode 'query=up{service="sample-java-app"}' \
     "https://${OBSERVABILITY_HOST}/prometheus/api/v1/query")"
   up="$(jq -r '.data.result[0].value[1] // "none"' <<< "${answer}")"
