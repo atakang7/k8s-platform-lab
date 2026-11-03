@@ -2,7 +2,7 @@ apiVersion: v2
 name: sample-java-app
 description: Sample Java application
 type: application
-version: 1.2.22
+version: 1.2.23
 dependencies:
   # Platform base chart (charts/service), published by the platform job.
   - name: service
