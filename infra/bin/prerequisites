@@ -36,17 +36,17 @@ add_apt_repositories() {
   codename="$(lsb_release -cs)"
 
   # Vagrant
-  sudo curl -fsSL --connect-timeout 10 --max-time 60 -o /etc/apt/keyrings/hashicorp.asc https://apt.releases.hashicorp.com/gpg
+  sudo curl -fsSL -o /etc/apt/keyrings/hashicorp.asc https://apt.releases.hashicorp.com/gpg
   echo "deb [signed-by=/etc/apt/keyrings/hashicorp.asc] https://apt.releases.hashicorp.com ${codename} main" |
     sudo tee /etc/apt/sources.list.d/hashicorp.list >/dev/null
 
   # kubectl. Keep v1.34 equal to kubernetes_version in infra/ansible/group_vars/all.yml.
-  sudo curl -fsSL --connect-timeout 10 --max-time 60 -o /etc/apt/keyrings/kubernetes.asc https://pkgs.k8s.io/core:/stable:/v1.34/deb/Release.key
+  sudo curl -fsSL -o /etc/apt/keyrings/kubernetes.asc https://pkgs.k8s.io/core:/stable:/v1.34/deb/Release.key
   echo "deb [signed-by=/etc/apt/keyrings/kubernetes.asc] https://pkgs.k8s.io/core:/stable:/v1.34/deb/ /" |
     sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
 
   # Helm
-  sudo curl -fsSL --connect-timeout 10 --max-time 60 -o /etc/apt/keyrings/helm.asc https://packages.buildkite.com/helm-linux/helm-debian/gpgkey
+  sudo curl -fsSL -o /etc/apt/keyrings/helm.asc https://packages.buildkite.com/helm-linux/helm-debian/gpgkey
   echo "deb [signed-by=/etc/apt/keyrings/helm.asc] https://packages.buildkite.com/helm-linux/helm-debian/any/ any main" |
     sudo tee /etc/apt/sources.list.d/helm.list >/dev/null
 }
