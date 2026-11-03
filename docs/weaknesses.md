@@ -1,21 +1,16 @@
-# Weaknesses
+# Known limits
 
-Known gaps we accept in the lab.
+- Control plane: one `node-1` VM; there is no failover.
+- Vault and BIND9: host services are not scraped by Prometheus; a sealed Vault stops secret refresh without an alert.
+- Elasticsearch: `/elasticsearch/` is reachable on the lab edge with `xpack.security.enabled=false`, allowing log reads and deletion.
+- Production canary: a zero-traffic sample warns and continues instead of blocking promotion.
+- Environments: `stage` and `prod` are promotion state in Git, not separate clusters provisioned here.
 
-## Vault and BIND are not monitored
+## Verify
 
-Both run on the host, outside the cluster, and Prometheus doesn't scrape them.
-They are only checked when `make edge-smoke` or `make edge-validate` runs. If
-Vault seals itself, Secrets stop syncing and nobody is alerted.
+```bash
+make edge-smoke
+make observability-smoke
+```
 
-Next step: scrape Vault's metrics and a BIND exporter, and alert on "Vault
-sealed" and "BIND down".
-
-## Elasticsearch has no authentication
-
-It runs with `xpack.security.enabled=false` and is served at
-`/elasticsearch/` on the edge network. Anyone who can reach the ingress can
-read and delete every log index.
-
-Next step: keep ECK's built-in security on, give Grafana and Fluent Bit
-their own users, and drop the ingress path.
+Check [DELIVERY.md](../DELIVERY.md) for canary settings and [environments.yaml](../environments.yaml) for the selected cluster environment.
