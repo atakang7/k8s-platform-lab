@@ -55,7 +55,7 @@ check_policies() {
 check_jenkins() {
   phase "checking https://${JENKINS_HOST}"
 
-  if ! curl --noproxy '*' --silent --show-error --fail --connect-timeout 5 --max-time 15 --max-time 15 \
+  if ! curl --noproxy '*' --silent --show-error --fail --connect-timeout 5 --max-time 15 \
     --output /dev/null "https://${JENKINS_HOST}/login"; then
     fail "https://${JENKINS_HOST}/login does not answer"
   fi
