@@ -2,17 +2,17 @@
 
 Found by 17 full runs of the runbook in a fresh test VM and subsequent snapshot-recovery debugging ([test/README.md](../test/README.md)).
 
-**1. `| grep -q` and `| head` report false failures** · `d3f2e84`, `4bfc4fb`
+**1. `| grep -q` and `| head` report false failures** · [`dc29f7c`](https://github.com/atakang7/k8s-platform-lab/commit/dc29f7c462c1379da48cfe13b16273e34fdb1130), [`b877336`](https://github.com/atakang7/k8s-platform-lab/commit/b877336e58a6d5c78fbdc699d3f94224db32be97)
 - Found: `DNS read policy is absent`, but `vault policy read dns-read` showed the policy.
 - Cause: `grep -q` exits early, the writer is killed by SIGPIPE (exit 141), and `pipefail` fails the line.
 - Fix: save the output first, then match. A scan fixed three more scripts with the same bug.
 
-**2. node-2 drops SSH during edge validation** · `493c958`, `5f37264`
+**2. node-2 drops SSH during edge validation** · [`7eed860`](https://github.com/atakang7/k8s-platform-lab/commit/7eed86004c1dee2583fb9ede94c6b4ba69f21048), [`8c2df16`](https://github.com/atakang7/k8s-platform-lab/commit/8c2df16fa410a2c303bdbbab294d9f3a41dcb3f3)
 - Found: `node-2 SSH is unavailable` in 6 of 16 runs, always right after `make edge-up`.
 - Cause: a busy node-2 drops the session; `ConnectionAttempts` only retries the TCP connect, and Vagrant's `LogLevel FATAL` hid the error.
 - Fix: retry the whole SSH command for a minute with `LogLevel=ERROR`; Ansible `timeout = 60`, `retries = 3`. The node SSH check was later dropped when validation was shortened.
 
-**3. node-2 runs out of memory** · `a73cc9a`
+**3. node-2 runs out of memory** · [`42fe6f4`](https://github.com/atakang7/k8s-platform-lab/commit/42fe6f4ccb6c37762c453d8f84ab7ffadde73d6b)
 - Found: 47 MB free of 2 GiB, load average 31 on 2 CPUs.
 - Cause: ingress, MetalLB, Prometheus and Fluent Bit don't fit in 2 GiB.
 - Fix: node-2 gets 4 GiB in the `Vagrantfile`; the test VM gets 13 GiB.
@@ -22,32 +22,32 @@ Found by 17 full runs of the runbook in a fresh test VM and subsequent snapshot-
 - Cause: at 3 GiB, Jenkins and three CI agents reserved node-3's memory (requests).
 - Fix: node-3 stays at 4 GiB.
 
-**5. Ansible picks a Python that doesn't exist** · `edb30d7`
+**5. Ansible picks a Python that doesn't exist** · [`e3e1bfe`](https://github.com/atakang7/k8s-platform-lab/commit/e3e1bfe4aaee4fc46447dabcadc5fbab85ea7c4e)
 - Found: `/usr/bin/python: not found` on node-2 at `Gathering Facts`.
 - Cause: discovery timed out on the busy node and `auto_silent` fell back to `/usr/bin/python`.
 - Fix: `interpreter_python = /usr/bin/python3`.
 
-**6. Ansible won't start over SSH** · `14d7811`
+**6. Ansible won't start over SSH** · [`fad5a62`](https://github.com/atakang7/k8s-platform-lab/commit/fad5a622102a5339e11afb1c6c2d5ded1ceec8a0)
 - Found: `could not initialize the preferred locale`.
 - Cause: SSH forwards the host's `tr_TR` locale, which the VM doesn't have.
 - Fix: `test/bin/runbook` sets `LC_ALL=C.UTF-8`.
 
-**7. A rerun skips Ansible on existing VMs** · `23d3ac4`
+**7. A rerun skips Ansible on existing VMs** · [`2510823`](https://github.com/atakang7/k8s-platform-lab/commit/25108237d21f150cb1cc4864c81fcb932b5177c3)
 - Found: `Machine already provisioned`, then the same failure again.
 - Cause: plain `vagrant up` only provisions new VMs.
 - Fix: `make cluster-up` runs `vagrant up --provision`.
 
-**8. Snapshot restore looks for a deleted CD** · `14d7811`
+**8. Snapshot restore looks for a deleted CD** · [`fad5a62`](https://github.com/atakang7/k8s-platform-lab/commit/fad5a622102a5339e11afb1c6c2d5ded1ceec8a0)
 - Found: `Cannot access storage file …/virtinst-…-cloudinit.iso`.
 - Cause: virt-install deletes its cloud-init CD, but the running VM, and so the snapshot, keeps it attached.
 - Fix: `test/bin/up` ejects it with `virsh change-media … --eject --live`.
 
-**9. A rerun breaks the running test VM's disk** · `14d7811`
+**9. A rerun breaks the running test VM's disk** · [`fad5a62`](https://github.com/atakang7/k8s-platform-lab/commit/fad5a622102a5339e11afb1c6c2d5ded1ceec8a0)
 - Found: `Input/output error` in the VM; the Ubuntu image was 318 MB of 596 MB.
 - Cause: a rerun downloaded over the image the running VM's disk reads from.
 - Fix: `test/bin/up` is idempotent and never replaces an existing image.
 
-**10. A full host disk freezes the test VM** · `14d7811`
+**10. A full host disk freezes the test VM** · [`fad5a62`](https://github.com/atakang7/k8s-platform-lab/commit/fad5a622102a5339e11afb1c6c2d5ded1ceec8a0)
 - Found: `No route to host`; `virsh domstate --reason` showed `paused (I/O error)`.
 - Cause: the thin VM disk grew until the host disk was full.
 - Fix: a 70 GiB disk cap, the host space in the README, and `test/bin/up` resumes a paused VM.
